@@ -1,3 +1,14 @@
+//===- IRBuilder.cpp - Captured-loop to MLIR module builder -------------===//
+//
+// Part of OPS-MLIR Project
+// Author: Prakanth Thilakaraj
+// Date: June 2026
+//
+// This file is distributed under the MIT License.
+// See LICENSE.txt for details.
+//
+//===----------------------------------------------------------------------===//
+
 #include "runtime/IRBuilder.h"
 #include "Dialect/OPS/OPSDialect.h"
 #include "Dialect/OPS/OPSOps.h"
@@ -14,7 +25,6 @@
 namespace ops_mlir {
 
 IRBuilder::IRBuilder(mlir::MLIRContext *ctx) : ctx_(ctx) {
-  // Register OPS dialect
   ctx_->getOrLoadDialect<ops_mlir::ops::OPSDialect>();
 }
 
@@ -51,7 +61,6 @@ mlir::Operation *IRBuilder::buildParLoopOp(const LoopDesc &loop) {
   auto loc = mlir::UnknownLoc::get(ctx_);
   mlir::OpBuilder builder(ctx_);
 
-  // Infer block dims from dat arguments
   int ndim = loop.dims;
   for (const auto &arg : loop.args) {
     if (arg.argtype == OPS_ARG_DAT && !arg.dat.size.empty()) {
@@ -59,21 +68,16 @@ mlir::Operation *IRBuilder::buildParLoopOp(const LoopDesc &loop) {
     }
   }
 
-  // Build range attribute
   std::vector<int64_t> rangeVec(loop.range.begin(), loop.range.end());
   auto rangeAttr = mlir::DenseI64ArrayAttr::get(ctx_, rangeVec);
 
-  // Build kernel ptr attribute
   auto kernelPtrAttr =
       builder.getI64IntegerAttr(static_cast<int64_t>(loop.kernel_token));
 
-  // Build kernel name attribute
   auto kernelNameAttr = builder.getStringAttr(loop.kernel_name);
 
-  // Build dims attribute
   auto dimsAttr = builder.getI32IntegerAttr(loop.dims);
 
-  // Build argument descriptors
   mlir::SmallVector<mlir::Attribute> argAttrs;
   argAttrs.reserve(loop.args.size());
   for (const auto &arg : loop.args) {
@@ -86,8 +90,7 @@ mlir::Operation *IRBuilder::buildParLoopOp(const LoopDesc &loop) {
   }
   auto argsAttr = builder.getArrayAttr(argAttrs);
 
-  // Build the ops.par_loop operation
-  mlir::SmallVector<mlir::Value> operands; // No operands in Phase 1
+  mlir::SmallVector<mlir::Value> operands; 
   auto opState =
       mlir::OperationState(loc, ops_mlir::ops::ParLoopOp::getOperationName());
   opState.attributes.push_back(

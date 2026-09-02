@@ -1,5 +1,13 @@
-"""Lower ops.par_loop -> func.func + stencil.* using xDSL, mirroring
+"""
+Lower ops.par_loop -> func.func + stencil.* using xDSL, mirroring
 lib/passes/OPSToStencil.cpp's C++ design.
+
+Part of OPS-MLIR Project
+Author: Prakanth Thilakaraj
+Date: June 2026
+
+This file is distributed under the MIT License.
+See LICENSE.txt for details.
 """
 
 import ctypes

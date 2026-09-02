@@ -1,3 +1,14 @@
+//===- UseMonoCuStream.cpp - Force kernels onto a single CUDA stream ----===//
+//
+// Part of OPS-MLIR Project
+// Author: Prakanth Thilakaraj
+// Date: August 2026
+//
+// This file is distributed under the MIT License.
+// See LICENSE.txt for details.
+//
+//===----------------------------------------------------------------------===//
+
 #include "passes/UseMonoCuStream.h"
 
 #include "llvm/ADT/SmallVector.h"

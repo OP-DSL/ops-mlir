@@ -1,6 +1,13 @@
 //===- OPSWrapper.h - OPS JIT capture wrapper ----------------------*- C++
 //-*-===//
 //
+// Part of OPS-MLIR Project
+// Author: Prakanth Thilakaraj
+// Date: June 2026
+//
+// This file is distributed under the MIT License.
+// See LICENSE.txt for details.
+//
 // Intercepts OPS API calls to capture program structure for JIT compilation.
 // Forwards to the real OPS library for correctness during development.
 //
@@ -51,6 +58,10 @@ void ops_register_kernel_constant(const char *name, T *data) {
 
 void set_kernel_source_file(const std::string &filePath) {
   ops_mlir::JITEngine::instance().setKernelSourceFile(filePath);
+}
+
+void sync_all_host_buffers() {
+  ops_mlir::JITEngine::instance().syncAllHostBuffers();
 }
 
 // TODO: Use dat.data_d instead of deviceBuffers_. or improve the logic re copy only affected dats.
