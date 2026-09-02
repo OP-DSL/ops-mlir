@@ -1,20 +1,5 @@
-"""xDSL mirror of the `ops` MLIR dialect (see include/Dialect/OPS/OPSOps.td).
-
-Models the *struct* attribute encoding emitted by the current
-lib/runtime/IRBuilder.cpp / OPSOps.td (DatAttr/StencilAttr/ArgAttr), not the
-older positional-array encoding. Each nested attribute (`dat`, `stencil`
-inside `arg`) is parsed/printed "stripped" (just `<...>`, no `#ops.xxx`
-mnemonic) to match MLIR's `printStrippedAttrOrType` behaviour for
-statically-typed AttrDef parameters -- see the real captured IR in
-xdsl_impl/laplace_sample.mlir, e.g.:
-
-  #ops.arg<<0, 32167744, 1, 8, 8, [4096, 4096], [0, 0], [-1, -1], [1, 1],
-            [1, 1], "A", "double", 139883542736960, 0>,
-           <5, 2, 1, "0,0", 32330752, 32330816, 0, 0>,
-           1, 0, 139883542736960, 0, 1, 1, 1>
-
-OPS access codes (ops_access):   0=READ 1=WRITE 2=RW 3=INC 4=MIN 5=MAX
-OPS arg-type codes (ops_arg_type): 0=GBL 1=DAT 2=IDX
+"""
+Mirror of OPS_DatAttr, OPS_StencilAttr, and OPS_ArgAttr from OPS @include/Dialect/OPS/OPSOps.td
 """
 
 from enum import IntEnum

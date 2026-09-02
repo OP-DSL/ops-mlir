@@ -55,9 +55,7 @@ JITEngine::JITEngine() {
   std::string setup = "import sys\nsys.path.insert(0, '" OPS_XDSL_DIR "')\n";
   PyRun_SimpleString(setup.c_str());
 
-  // Register needed dialects - will need to add more later
   mlir::registerAllPasses();
-  // TODO: add all required dialects
   ctx.getOrLoadDialect<mlir::func::FuncDialect>();
   ctx.getOrLoadDialect<mlir::arith::ArithDialect>();
   ctx.getOrLoadDialect<mlir::memref::MemRefDialect>();
@@ -322,8 +320,7 @@ void JITEngine::runBackendLowering(mlir::ModuleOp module, Backend backend) {
     return;
   }
 
-  // Kept alive for compile_and_execute() -- see currentPipeline_'s
-  // comment (JITEngine.h).
+  // Store the pipeline for later use.
   currentPipeline_ = std::move(pipeline);
 
 #ifdef OPS_ENABLE_DEBUG
@@ -422,11 +419,6 @@ static std::size_t datByteSize(const DatDesc &dat) {
 }
 
 static double computeDataTransfer(const LoopDesc &loop, const ArgDesc &arg) {
-  // stencil->stride is a per-dimension array (size loop.dims), not per-point:
-  // stride[i] == 0 means the stencil doesn't move along dimension i (e.g. a
-  // boundary condition applied on a single edge), so that axis shouldn't
-  // contribute its full iteration extent -- mirrors OPS's own
-  // ops_compute_transfer().
   const int *stencilStride =
       reinterpret_cast<const int *>(arg.stencil.stride);
 
@@ -456,9 +448,6 @@ std::uintptr_t JITEngine::ensureDeviceBuffer(std::uintptr_t hostPtr,
 #ifdef OPS_ENABLE_CUDA
   auto it = deviceBuffers_.find(hostPtr);
   if (it != deviceBuffers_.end()) {
-    // A host-side mutation we don't observe as an ops_par_loop (e.g. an
-    // intervening ops_halo_transfer) may have changed the host buffer
-    // since this device copy was made -- see invalidateDeviceBuffers().
     if (it->second.dirty) {
       cuMemcpyHtoD(static_cast<CUdeviceptr>(it->second.devPtr),
                   reinterpret_cast<const void *>(hostPtr), bytes);
@@ -515,10 +504,7 @@ std::uintptr_t JITEngine::ensurePersistentCudaStream() {
 #endif
 }
 
-// Free function so it has a stable, unmangled name to declare/call from
-// generated LLVM IR and to hand to registerSymbols -- matches how
-// KernelProfiler etc. get exposed, just at the raw-address level instead of
-// a mlir_ciface wrapper.
+
 extern "C" void *ops_mlir_get_persistent_cuda_stream() {
   return reinterpret_cast<void *>(JITEngine::instance().ensurePersistentCudaStream());
 }
@@ -563,15 +549,12 @@ static std::size_t opsDatByteSize(ops_dat dat) {
 }
 #endif
 
+// TODO: [Remove] Replace with OPS implementation of device halo transfer
 bool JITEngine::haloTransferDevice(ops_halo_group group) {
 #ifdef OPS_ENABLE_CUDA
   if (backend_ != Backend::CUDA)
     return false;
 
-  // Only handle the plain periodic-shift case every halo in this app uses:
-  // identity from_dir/to_dir (no axis permutation, no reversal). Anything
-  // else (mirror/transpose halos) needs the general strided-copy logic the
-  // host path already has -- bail out so the caller falls back to it.
   for (int h = 0; h < group->nhalos; ++h) {
     ops_halo halo = group->halos[h];
     int dims = halo->from->block->dims;
@@ -599,9 +582,6 @@ bool JITEngine::haloTransferDevice(ops_halo_group group) {
     if (!fromDev || !toDev)
       return false;
 
-    // Same local-index-origin arithmetic the sequential ops_halo_transfer
-    // uses for its positive-direction branch (ops_host_singlenode.cpp) --
-    // valid here because we've just confirmed from_dir/to_dir are identity.
     long long fromStart[3] = {0, 0, 0}, toStart[3] = {0, 0, 0};
     long long extent[3] = {1, 1, 1};
     for (int i = 0; i < dims; ++i) {
@@ -640,8 +620,8 @@ bool JITEngine::haloTransferDevice(ops_halo_group group) {
 
     auto it = deviceBuffers_.find(reinterpret_cast<std::uintptr_t>(to->data));
     if (it != deviceBuffers_.end()) {
-      it->second.dirty = false;    // device copy is authoritative now
-      it->second.hostDirty = true; // ...and the host copy no longer is
+      it->second.dirty = false;
+      it->second.hostDirty = true;
     }
   }
   return true;
@@ -660,10 +640,6 @@ void haloTransferIntercepted(ops_halo_group group) {
 
   ::ops_halo_transfer(group);
 
-  // Only the dats this group actually writes (`to`) need invalidating --
-  // `from` isn't mutated by the copy, and every other cached dat is
-  // untouched by this call. See invalidateDeviceBuffer's comment for why
-  // that distinction matters.
   for (int i = 0; i < group->nhalos; ++i) {
     ops_dat to = group->halos[i]->to;
     JITEngine::instance().invalidateDeviceBuffer(
@@ -694,18 +670,13 @@ void JITEngine::synchronizeBackend(Backend backend) {
   }
 }
 
+
+
+/**
+ * Execute the queued loops using the provided execution engine.
+ * Cache execution engines for previously compiled modules to avoid recompilation.
+*/
 void JITEngine::execute(mlir::ExecutionEngine &engine) {
-  // Each ops.par_loop was lowered to a standalone function named
-  // "ops_par_loop_<kernel_name>_<queue_index>" taking one bare pointer per
-  // ops_dat argument, in the order the loops were enqueued. We invoke them
-  // one by one with the live data pointers.
-  //
-  // For the CUDA backend, the compiled kernel operates on device memory,
-  // not the host `ops_dat` buffer: each dat arg is mirrored into a device
-  // buffer (allocated/cached by ensureDeviceBuffer), copied host->device
-  // before the launch, and copied back device->host afterwards for any
-  // dat the kernel writes, so host code and later CPU-side loops always
-  // see up-to-date contents.
   for (std::size_t i = 0; i < queue_.size(); ++i) {
     const LoopDesc &loop = queue_[i];
     std::string funcName =
@@ -777,7 +748,6 @@ void JITEngine::execute(mlir::ExecutionEngine &engine) {
     }
 #endif
   }
-  // Clear the queue
   this->flush();
 }
 
@@ -830,11 +800,6 @@ void JITEngine::compile_and_execute() {
   };
   engineOptions.transformer = transformer;
 
-  // gpu.launch_func lowers to calls into MLIR's CUDA driver-API wrappers
-  // (mgpuLaunchKernel, mgpuStreamCreate, ...); the JIT needs
-  // libmlir_cuda_runtime.so loaded to resolve them. Path is
-  // environment/build-specific (this LLVM tree's MLIR_ENABLE_CUDA_RUNNER
-  // build), so it's read from an env var rather than hardcoded.
   std::string cudaRuntimePath;
   if (backend_ == Backend::CUDA) {
     if (const char *path = std::getenv("OPS_MLIR_CUDA_RUNTIME")) {
@@ -938,7 +903,6 @@ std::optional<Backend> parseBackendName(const std::string &name) {
 
 
 Backend JITEngine::resolveBackend(int argc, char **argv) {
-  // Explicit CLI flag takes precendence
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
     if (arg.rfind(kBackendFlagPrefix, 0) == 0) {
@@ -954,7 +918,6 @@ Backend JITEngine::resolveBackend(int argc, char **argv) {
     throw std::runtime_error("Unknown " + std::string(kBackendEnvVar) + " value: '" + env + "' (expected seq|openmp|cuda)");
   }
 
-  // Default to sequential if neither cli flag or env var set
   return kDefaultBackend;
 }
 

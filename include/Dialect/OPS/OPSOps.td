@@ -90,9 +90,6 @@ def OPS_StencilAttr : AttrDef<OPS_Dialect, "Stencil"> {
 }
 
 
-// Structured descriptor for a single ops.par_loop argument, mirroring
-// ops_mlir::ArgDesc (runtime/Core.h). Replaces the previous positional
-// ArrayAttr encoding produced by IRBuilder::buildArgAttr.
 def OPS_ArgAttr : AttrDef<OPS_Dialect, "Arg"> {
   let mnemonic = "arg";
   let summary = "OPS dataset argument descriptor";

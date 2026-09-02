@@ -1,4 +1,5 @@
-"""Lower ops.par_loop -> func.func + stencil.* using xDSL, mirroring
+"""
+Lower ops.par_loop -> func.func + stencil.* using xDSL, mirroring
 lib/passes/OPSToStencil.cpp's C++ design.
 """
 
