@@ -1,3 +1,14 @@
+//===- IRBuilder.cpp - Captured-loop to MLIR module builder -------------===//
+//
+// Part of OPS-MLIR Project
+// Author: Prakanth Thilakaraj
+// Date: June 2026
+//
+// This file is distributed under the MIT License.
+// See LICENSE.txt for details.
+//
+//===----------------------------------------------------------------------===//
+
 #include "runtime/IRBuilder.h"
 #include "Dialect/OPS/OPSDialect.h"
 #include "Dialect/OPS/OPSOps.h"

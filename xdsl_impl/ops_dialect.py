@@ -1,5 +1,12 @@
 """
 Mirror of OPS_DatAttr, OPS_StencilAttr, and OPS_ArgAttr from OPS @include/Dialect/OPS/OPSOps.td
+
+Part of OPS-MLIR Project
+Author: Prakanth Thilakaraj
+Date: June 2026
+
+This file is distributed under the MIT License.
+See LICENSE.txt for details.
 """
 
 from enum import IntEnum

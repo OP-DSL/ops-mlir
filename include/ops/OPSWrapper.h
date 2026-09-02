@@ -1,7 +1,12 @@
 //===- OPSWrapper.h - OPS JIT capture wrapper ----------------------*- C++
 //-*-===//
 //
+// Part of OPS-MLIR Project
 // Author: Prakanth Thilakaraj
+// Date: June 2026
+//
+// This file is distributed under the MIT License.
+// See LICENSE.txt for details.
 //
 // Intercepts OPS API calls to capture program structure for JIT compilation.
 // Forwards to the real OPS library for correctness during development.

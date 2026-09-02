@@ -1,4 +1,12 @@
 //===- KernelIRBuilder.cpp - C++ kernel body -> MLIR ------------*- C++ -*-===//
+//
+// Part of OPS-MLIR Project
+// Author: Prakanth Thilakaraj
+// Date: July 2026
+//
+// This file is distributed under the MIT License.
+// See LICENSE.txt for details.
+//
 // Tree walks a kernel's C++ AST to translate it into MLIR for the GPU backend, where
 // the kernel body must become actual device code rather than a symbol resolved
 // against a compiled host binary.
