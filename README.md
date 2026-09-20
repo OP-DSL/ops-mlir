@@ -100,3 +100,11 @@ Run the 2D Laplace example:
 ```bash
 ./build/apps/c/laplace_2d/laplace_2d
 ```
+
+## Citing
+
+```
+A. Dascombe, P. Thilakaraj, and G. R. Mudalige, “Code Generation with MLIR for the OPS Structured-Mesh DSL,”
+in Proceedings of the 2026 IEEE/ACM 12th Workshop on the LLVM Compiler Infrastructure in HPC (LLVM-HPC 2026),
+Chicago, IL, USA, Nov. 16, 2026, to be published.
+```
