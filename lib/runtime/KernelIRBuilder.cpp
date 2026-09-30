@@ -26,8 +26,10 @@
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/Builders.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 
+#include <cstdlib>
 #include <map>
 
 namespace ops_mlir {
@@ -73,6 +75,51 @@ static mlir::Type mlirFloatType(mlir::Builder &b, clang::QualType type) {
   if (type->isSpecificBuiltinType(clang::BuiltinType::Double))
     return b.getF64Type();
   return {};
+}
+
+static bool involvesF64(mlir::Type type) {
+  if (auto memref = mlir::dyn_cast<mlir::MemRefType>(type))
+    type = memref.getElementType();
+  return type.isF64();
+}
+
+/// A kernel whose interface is single precision must not compute in double:
+/// an unsuffixed literal (`0.5`), a double constant, or a math call that only
+/// has a double overload (`cos(float)` without <cmath>) silently promotes the
+/// expression, costs GPU throughput and changes results. Reports the first
+/// offending op. Returns false (reject the kernel) only when
+/// OPS_MLIR_STRICT_FP is set; otherwise it is a warning.
+static bool checkNoImplicitUpcast(mlir::func::FuncOp fn,
+                                  llvm::StringRef kernelName,
+                                  llvm::raw_ostream &errs) {
+  for (mlir::Type t : fn.getFunctionType().getInputs())
+    if (involvesF64(t))
+      return true;
+  for (mlir::Type t : fn.getFunctionType().getResults())
+    if (involvesF64(t))
+      return true;
+
+  mlir::Operation *offender = nullptr;
+  fn.walk([&](mlir::Operation *op) {
+    if (offender || op == fn.getOperation())
+      return;
+    for (mlir::Type t : llvm::concat<const mlir::Type>(
+             llvm::to_vector(op->getOperandTypes()),
+             llvm::to_vector(op->getResultTypes())))
+      if (involvesF64(t))
+        offender = op;
+  });
+  if (!offender)
+    return true;
+
+  errs << "KernelIRBuilder: " << (std::getenv("OPS_MLIR_STRICT_FP") ? "error" : "warning")
+       << ": kernel '" << kernelName
+       << "' has only single-precision parameters but computes in double ('"
+       << offender->getName().getStringRef()
+       << "'): an unsuffixed literal, a double constant or a double-only math "
+          "call promoted the expression (write 1.0f, declare the constant "
+          "float, call sinf)\n";
+  return !std::getenv("OPS_MLIR_STRICT_FP");
 }
 
 /// Maps a <math.h> function name to the math dialect op that computes it.
@@ -647,6 +694,10 @@ mlir::func::FuncOp KernelIRBuilder::generate(
     }
 
     builder.create<mlir::func::ReturnOp>(loc, result);
+    if (!checkNoImplicitUpcast(funcOp, kernelName, errs)) {
+      funcOp.erase();
+      return nullptr;
+    }
     return funcOp;
   }
 
@@ -659,6 +710,10 @@ mlir::func::FuncOp KernelIRBuilder::generate(
   }
 
   builder.create<mlir::func::ReturnOp>(loc);
+  if (!checkNoImplicitUpcast(funcOp, kernelName, errs)) {
+    funcOp.erase();
+    return nullptr;
+  }
   return funcOp;
 }
 

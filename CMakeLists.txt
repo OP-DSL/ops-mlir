@@ -94,10 +94,12 @@ include_directories(${LLVM_BUILD_DIR}/include)
 include_directories(${MLIR_SOURCE_DIR}/include)
 include_directories(${LLVM_SOURCE_DIR}/include)
 
+# Before any add_subdirectory that registers tests (apps/ does too).
+enable_testing()
+
 add_subdirectory(lib)
 add_subdirectory(apps)
 
-enable_testing()
 add_subdirectory(tools)
 add_subdirectory(unittests)
 add_subdirectory(tests)
