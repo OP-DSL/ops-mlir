@@ -44,6 +44,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -84,6 +85,14 @@ struct FusedGroup {
 struct FusionPlan {
   std::vector<FusedGroup> groups; // in execution order
 
+  /// DAG planner diagnostics: for every loop that had to start a new kernel,
+  /// why each candidate kernel was rejected (a loop can count under several
+  /// reasons). Keys: "first" (nothing to join), "dependence" (a non-point-
+  /// local RAW/WAR/WAW edge to a member), "order" (joining would put it before
+  /// a kernel it depends on), "range" (bounding-box / guard rule),
+  /// "size" (group size cap), "block" (different block or dimension).
+  std::map<std::string, std::size_t> blockedBy;
+
   /// Number of loops that execute in a different position relative to the
   /// others than program order (0 for the consecutive planner).
   std::size_t numReordered() const;
@@ -91,6 +100,17 @@ struct FusionPlan {
   /// Compact text form ("0,1,2|3|4,5"), part of the compiled-module cache key.
   std::string digest() const;
 };
+
+/// Memory traffic model in the style of OPS (extent x element size, read and
+/// write counted separately, stencil neighbours assumed cached).
+struct TrafficEstimate {
+  double unfusedBytes = 0; // every loop on its own
+  double fusedBytes = 0;   // per kernel: each distinct dat loaded at most once
+                           // (not at all if a member writes it first) and
+                           // stored at most once
+};
+TrafficEstimate estimateTraffic(const std::vector<LoopDesc> &queue,
+                                const FusionPlan &plan);
 
 /// Groups the queue. Every loop lands in exactly one group. With reordering
 /// off the groups are runs of adjacent loops; with it on they may interleave

@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 
@@ -156,8 +157,16 @@ public:
     std::size_t numFlushes = 0;  // non-empty queue flushes
     std::size_t numLoops = 0;    // par_loops executed
     std::size_t numLaunches = 0; // generated functions invoked (one per group)
+    // Wall-clock seconds spent in the runtime (for profiling).
+    double compileSeconds = 0;   // planning is cheap; this is IR build + lowering + JIT
+    double executeSeconds = 0;   // launches, including the kernels themselves
+    double kernelSeconds = 0;    // just invokePacked + device sync, summed over launches
+    double haloSeconds = 0;      // ops_halo_transfer, excluding any flush it triggers
+    double enqueueSeconds = 0;   // ops_par_loop: describing the loop (dats, stencils, globals)
+    double planSeconds = 0;      // per flush: fusion plan + module-cache key + lookup
   };
   const Stats &stats() const { return stats_; }
+  Stats &mutableStats() { return stats_; }
   void setQueueMax(std::size_t n) { queueMax_ = n; }
 
   // Loop fusion (see runtime/FusionPlanner.h). Defaults come from the
@@ -216,6 +225,7 @@ private:
   void runBackendLowering(mlir::ModuleOp module, Backend backend);
   std::string detectNVGpuSm();
 
+  void reportPlan(const ModuleKey &key, const FusionPlan &plan);
   void compile(const FusionPlan &plan);
   void execute(mlir::ExecutionEngine &engine, const FusionPlan &plan);
 
@@ -273,6 +283,7 @@ private:
   Stats stats_;
   FusionOptions fusionOptions_ = FusionOptions::fromEnv();
   FusionPlan lastPlan_;
+  std::set<std::string> reportedPlans_;
   std::mutex mutex_;
   std::vector<LoopDesc> queue_;
   FlushCallback flushCallback_;

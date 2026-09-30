@@ -39,7 +39,9 @@ int main(int argc, char **argv) {
   niter = getenv("TGV_NITER") ? atoi(getenv("TGV_NITER")) : 5000;
   double rkB[] = {(1.0 / 3.0), (15.0 / 16.0), (8.0 / 15.0)};
   double rkA[] = {0, (-5.0 / 9.0), (-153.0 / 128.0)};
-  dt = 0.003385;
+  // The time step is tuned for 128^3; scale it with the grid spacing so other
+  // TGV_N values stay inside the CFL limit (exactly 0.003385 at the default).
+  dt = 0.003385 * (128.0 / grid_n);
   write_output_file = 10000;
   HDF5_timing = 0;
   filter_frequency = 25;
@@ -182,6 +184,7 @@ int main(int argc, char **argv) {
                  iter + 1, dt, simulation_time,
                  (elapsed_inner_end - elapsed_inner_start) / 100);
       ops_NaNcheck(rho_B0);
+      ops_mlir::reportWindow(iter + 1);
       ops_timers(&inner_start, &elapsed_inner_start);
     }
 

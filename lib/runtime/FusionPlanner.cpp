@@ -429,6 +429,7 @@ FusionPlan planDag(const std::vector<LoopDesc> &queue,
   }
 
   // --- placement -----------------------------------------------------------
+  std::map<std::string, std::size_t> blockedBy;
   std::vector<DagGroup> groups;
   std::vector<int> groupOf(n, -1);
   int lastBarrier = -1;
@@ -492,22 +493,32 @@ FusionPlan planDag(const std::vector<LoopDesc> &queue,
     int chosen = -1;
     std::vector<int64_t> chosenBox;
     bool chosenGuarded = false;
+    std::set<std::string> whyNot; // reasons for this loop, for diagnostics
     for (std::size_t g = firstJoinable; g < groups.size(); ++g) {
       const DagGroup &grp = groups[g];
       const LoopDesc &first = queue[grp.loops.front()];
-      if (grp.barrier || grp.loops.size() >= options.maxGroupSize ||
-          loop.block != first.block || loop.dims != first.dims)
+      if (grp.barrier)
         continue;
+      if (grp.loops.size() >= options.maxGroupSize) {
+        whyNot.insert("size");
+        continue;
+      }
+      if (loop.block != first.block || loop.dims != first.dims) {
+        whyNot.insert("block");
+        continue;
+      }
       bool ok = true;
       for (const Pred &p : preds[j]) {
         int h = groupOf[p.from];
         if (h == static_cast<int>(g)) {
           if (!p.fusable) {
             ok = false;
+            whyNot.insert("dependence");
             break;
           }
         } else if (reaches(static_cast<int>(g), h)) {
           ok = false; // would put j before something that must run before it
+          whyNot.insert("order");
           break;
         }
       }
@@ -515,8 +526,10 @@ FusionPlan planDag(const std::vector<LoopDesc> &queue,
         continue;
       std::vector<int64_t> box;
       bool guarded = false;
-      if (!rangeJoin(grp.state, loop.range, nonLocalRead, options, box, guarded))
+      if (!rangeJoin(grp.state, loop.range, nonLocalRead, options, box, guarded)) {
+        whyNot.insert("range");
         continue;
+      }
       chosen = static_cast<int>(g);
       chosenBox = std::move(box);
       chosenGuarded = guarded;
@@ -530,6 +543,10 @@ FusionPlan planDag(const std::vector<LoopDesc> &queue,
       addMember(g.state, loop.range, nonLocalRead, chosenBox, chosenGuarded);
     } else {
       chosen = newGroup(j);
+      if (whyNot.empty())
+        ++blockedBy["first"];
+      for (const std::string &r : whyNot)
+        ++blockedBy[r];
     }
     groupOf[j] = chosen;
     for (const Pred &p : preds[j])
@@ -549,6 +566,7 @@ FusionPlan planDag(const std::vector<LoopDesc> &queue,
       ready.insert({groups[g].loops.front(), static_cast<int>(g)});
 
   FusionPlan plan;
+  plan.blockedBy = blockedBy;
   while (!ready.empty()) {
     int g = ready.begin()->second;
     ready.erase(ready.begin());
@@ -570,6 +588,35 @@ FusionPlan planDag(const std::vector<LoopDesc> &queue,
 }
 
 } // namespace
+
+TrafficEstimate estimateTraffic(const std::vector<LoopDesc> &queue,
+                                const FusionPlan &plan) {
+  TrafficEstimate t;
+  for (const FusedGroup &g : plan.groups) {
+    // Per dat: loaded if its first access in the kernel is a read; stored if
+    // any member writes it.
+    struct Use { bool firstIsRead; bool written; double bytes; };
+    std::map<int, Use> uses;
+    for (std::size_t l : g.loops) {
+      const LoopDesc &loop = queue[l];
+      for (const ArgDesc &arg : loop.args) {
+        if (arg.argtype != OPS_ARG_DAT)
+          continue;
+        double loopBytes = volume(loop.range) * arg.dat.elem_size;
+        // OPS convention: read or write-only = 1 pass, read-write = 2.
+        t.unfusedBytes += loopBytes * ((arg.acc == OPS_READ || arg.acc == OPS_WRITE) ? 1 : 2);
+        auto it = uses.find(arg.dat.index);
+        if (it == uses.end())
+          it = uses.emplace(arg.dat.index, Use{isRead(arg.acc), false, 0}).first;
+        it->second.written |= isWrite(arg.acc);
+        it->second.bytes = volume(g.range) * arg.dat.elem_size;
+      }
+    }
+    for (const auto &[dat, u] : uses)
+      t.fusedBytes += u.bytes * ((u.firstIsRead ? 1 : 0) + (u.written ? 1 : 0));
+  }
+  return t;
+}
 
 FusionPlan planFusion(const std::vector<LoopDesc> &queue,
                       const FusionOptions &options) {

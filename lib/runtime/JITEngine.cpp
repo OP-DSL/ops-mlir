@@ -35,6 +35,7 @@
 #include "mlir/Target/LLVM/NVVM/Target.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/MC/TargetRegistry.h"
@@ -42,6 +43,7 @@
 #include "llvm/TargetParser/Host.h"
 
 #include <algorithm>
+#include <chrono>
 #include <array>
 #include <cstring>
 #include <memory>
@@ -50,6 +52,19 @@
 #ifdef OPS_ENABLE_CUDA
 #include <cuda.h>
 #endif
+
+namespace {
+// Adds the wall-clock time of its scope to a counter.
+struct ScopedSeconds {
+  explicit ScopedSeconds(double &sink)
+      : sink_(sink), start_(std::chrono::steady_clock::now()) {}
+  ~ScopedSeconds() {
+    sink_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - start_).count();
+  }
+  double &sink_;
+  std::chrono::steady_clock::time_point start_;
+};
+} // namespace
 
 namespace ops_mlir {
 
@@ -107,7 +122,12 @@ JITEngine::~JITEngine() {
     llvm::errs() << "ops-mlir stats: " << stats_.numLoops << " loops, "
                  << stats_.numLaunches << " kernel launches, "
                  << stats_.numFlushes << " flushes, " << stats_.numCompiles
-                 << " module compiles\n";
+                 << " module compiles; seconds: compile "
+                 << llvm::format("%.4f", stats_.compileSeconds) << " execute "
+                 << llvm::format("%.4f", stats_.executeSeconds) << " halo "
+                 << llvm::format("%.4f", stats_.haloSeconds) << " enqueue "
+                 << llvm::format("%.4f", stats_.enqueueSeconds) << " plan "
+                 << llvm::format("%.4f", stats_.planSeconds) << "\n";
 
   if (Py_IsInitialized()) {
     Py_FinalizeEx();
@@ -125,6 +145,7 @@ void JITEngine::enqueueParLoop(std::uintptr_t kernelToken,
                                     const ops_arg *args, std::size_t nargs) {
   bool full;
   {
+    ScopedSeconds timer(stats_.enqueueSeconds);
     std::lock_guard<std::mutex> lock(mutex_);
     queue_.push_back(
         buildLoopDesc(kernelToken, kernelName, block, dims, range, args, nargs));
@@ -474,6 +495,7 @@ bool JITEngine::materializeKernelBody(const std::string &kernelName,
   return true;
 }
 
+
 static std::size_t datByteSize(const DatDesc &dat) {
   std::size_t total = static_cast<std::size_t>(dat.elem_size);
   for (int64_t dim : dat.size)
@@ -697,6 +719,7 @@ bool JITEngine::haloTransferDevice(ops_halo_group group) {
 void haloTransferIntercepted(ops_halo_group group) {
   // Halo exchange reads dats that queued loops may still have to produce.
   JITEngine::instance().flushPending();
+  ScopedSeconds timer(JITEngine::instance().mutableStats().haloSeconds);
   if (JITEngine::instance().haloTransferDevice(group))
     return;
 
@@ -736,6 +759,35 @@ void JITEngine::synchronizeBackend(Backend backend) {
 }
 
 
+
+// OPS_MLIR_PLAN=1: describe the kernels chosen for each distinct queue (once).
+void JITEngine::reportPlan(const ModuleKey &key, const FusionPlan &plan) {
+  if (!reportedPlans_.insert(key.digest()).second)
+    return;
+  TrafficEstimate traffic = estimateTraffic(queue_, plan);
+  llvm::errs() << "[plan] " << queue_.size() << " loops -> "
+               << plan.groups.size() << " kernels, " << plan.numReordered()
+               << " loops moved, est. traffic "
+               << llvm::format("%.3g", traffic.unfusedBytes) << " -> "
+               << llvm::format("%.3g", traffic.fusedBytes) << " bytes ("
+               << llvm::format("%.2f", traffic.fusedBytes
+                                           ? traffic.unfusedBytes / traffic.fusedBytes
+                                           : 1.0)
+               << "x)\n";
+  if (!plan.blockedBy.empty()) {
+    llvm::errs() << "[plan]   new kernel started because:";
+    for (const auto &[why, count] : plan.blockedBy)
+      llvm::errs() << " " << why << "=" << count;
+    llvm::errs() << "\n";
+  }
+  for (std::size_t g = 0; g < plan.groups.size(); ++g) {
+    const FusedGroup &grp = plan.groups[g];
+    llvm::errs() << "[plan]   K" << g << (grp.guarded ? " guarded" : "") << ":";
+    for (std::size_t l : grp.loops)
+      llvm::errs() << " " << queue_[l].kernel_name << "#" << l;
+    llvm::errs() << "\n";
+  }
+}
 
 std::string JITEngine::groupFunctionName(const FusedGroup &group,
                                          std::size_t gid) const {
@@ -839,6 +891,7 @@ void JITEngine::execute(mlir::ExecutionEngine &engine, const FusionPlan &plan) {
     llvm::outs().flush();
 #endif
     auto kernelStart = profiler_.start();
+    auto launchStart = std::chrono::steady_clock::now();
     ++stats_.numLaunches;
     stats_.numLoops += group.loops.size();
     if (auto err = engine.invokePacked(funcName, packedArgs)) {
@@ -848,6 +901,8 @@ void JITEngine::execute(mlir::ExecutionEngine &engine, const FusionPlan &plan) {
       return;
     }
     synchronizeBackend(backend_);
+    stats_.kernelSeconds += std::chrono::duration<double>(
+                                std::chrono::steady_clock::now() - launchStart).count();
     profiler_.end(profileName, kernelStart, bytesMoved);
 #ifdef OPS_ENABLE_CUDA
     for (const auto &[hostPtr, bytes] : writebacks) {
@@ -866,17 +921,24 @@ void JITEngine::compile_and_execute() {
   if (queue_.empty())
     return;
 
+  auto planStart = std::chrono::steady_clock::now();
   FusionPlan plan = planFusion(queue_, fusionOptions_);
   ModuleKey key(queue_, plan.digest());
   ++stats_.numFlushes;
+  if (std::getenv("OPS_MLIR_PLAN"))
+    reportPlan(key, plan);
 
   auto cached = engineCache_.find(key);
+  stats_.planSeconds += std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - planStart).count();
   if (cached != engineCache_.end()) {
+    ScopedSeconds timer(stats_.executeSeconds);
     execute(*cached->second, plan);
     return;
   }
 
   ++stats_.numCompiles;
+  auto compileStart = std::chrono::steady_clock::now();
   compile(plan);
 
   llvm::Triple targetTriple(llvm::sys::getDefaultTargetTriple());
@@ -962,6 +1024,10 @@ void JITEngine::compile_and_execute() {
 
   mlir::ExecutionEngine &engineRef = *engine;
   engineCache_.emplace(std::move(key), std::move(engine));
+  stats_.compileSeconds += std::chrono::duration<double>(
+                               std::chrono::steady_clock::now() - compileStart)
+                               .count();
+  ScopedSeconds timer(stats_.executeSeconds);
   execute(engineRef, plan);
 }
 
