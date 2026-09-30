@@ -37,3 +37,20 @@ add_test(NAME KernelIRDump_UnknownKernelFails
     ${CMAKE_SOURCE_DIR}/apps/c/laplace_2d/laplace_kernels.h
     does_not_exist 2)
 set_tests_properties(KernelIRDump_UnknownKernelFails PROPERTIES WILL_FAIL TRUE)
+
+# Single-precision kernels translate to f32, with no f64 anywhere.
+add_test(NAME KernelIRDump_Float
+  COMMAND kernel-ir-dump
+    ${CMAKE_SOURCE_DIR}/tests/kernels/kernels_f32.h
+    k_lap5 2)
+set_tests_properties(KernelIRDump_Float PROPERTIES
+  PASS_REGULAR_EXPRESSION "func.func private @k_lap5.*-> f32"
+  FAIL_REGULAR_EXPRESSION "f64")
+
+add_test(NAME KernelIRDump_FloatOutPointer
+  COMMAND kernel-ir-dump
+    ${CMAKE_SOURCE_DIR}/tests/kernels/kernels_f32.h
+    k_two 2)
+set_tests_properties(KernelIRDump_FloatOutPointer PROPERTIES
+  PASS_REGULAR_EXPRESSION "memref<2xf32>"
+  FAIL_REGULAR_EXPRESSION "f64")

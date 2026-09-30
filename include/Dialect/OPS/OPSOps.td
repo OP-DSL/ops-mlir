@@ -106,10 +106,12 @@ def OPS_ArgAttr : AttrDef<OPS_Dialect, "Arg"> {
     "int64_t":$data_d,
     "int32_t":$acc,
     "int32_t":$argtype,
-    "int32_t":$opt
+    "int32_t":$opt,
+    "int32_t":$elem_kind
   );
   let assemblyFormat = "`<` $dat `,` $stencil `,` $dim `,` $elem_size `,`"
-                       " $data `,` $data_d `,` $acc `,` $argtype `,` $opt `>`";
+                       " $data `,` $data_d `,` $acc `,` $argtype `,` $opt `,`"
+                       " $elem_kind `>`";
 }
 
 
@@ -136,7 +138,10 @@ def OPS_ParLoopOp : OPS_Op<"par_loop", []> {
     I32Attr:$dims,
     DenseI64ArrayAttr:$range,
     TypedArrayAttrBase<OPS_ArgAttr, "array of OPS dataset argument descriptors">:$args,
-    OptionalAttr<I32Attr>:$block_dims
+    OptionalAttr<I32Attr>:$block_dims,
+    // Loops sharing a fuse_group id are lowered into one generated kernel
+    // (see runtime/FusionPlanner.h). Absent means "its own group".
+    OptionalAttr<I64Attr>:$fuse_group
   );
 
   let results = (outs);

@@ -22,7 +22,13 @@
 #include "ops_lib_core.h"
 
 #include <array>
+#include <cstdio>
+#include <cstdlib>
+#include <functional>
+#include <memory>
+#include <string>
 #include <type_traits>
+#include <vector>
 
 //===----------------------------------------------------------------------===//
 // ops_par_loop interception
@@ -30,6 +36,73 @@
 // This template overrides the ops_par_loop to capture loop metadata.
 // The captured loops are queued for JIT compilation.
 //===----------------------------------------------------------------------===//
+
+namespace ops_mlir {
+// Element kind of a kernel parameter, from its declared type. ops_arg_gbl records only
+// sizeof(T), so this is the only place an int global is told apart from a float one.
+template <typename T> constexpr int elemKindOf() {
+  using U = std::remove_cv_t<T>;
+  if constexpr (std::is_same_v<U, float>) return EK_F32;
+  else if constexpr (std::is_same_v<U, double>) return EK_F64;
+  else if constexpr (std::is_same_v<U, int>) return EK_I32;
+  else if constexpr (std::is_same_v<U, long> || std::is_same_v<U, long long>) return EK_I64;
+  else return EK_Unknown;
+}
+template <typename P> struct ParamKind { static constexpr int value = EK_Unknown; };
+template <typename T> struct ParamKind<T *> { static constexpr int value = elemKindOf<T>(); };
+
+template <typename... P, std::size_t N>
+void fillElemKinds(void (*)(P...), int (&out)[N]) {
+  if constexpr (sizeof...(P) > 0 && sizeof...(P) <= N) {
+    const int k[sizeof...(P)] = {ParamKind<std::remove_reference_t<P>>::value...};
+    for (std::size_t i = 0; i < sizeof...(P); ++i)
+      out[i] = k[i];
+  }
+}
+template <typename F, std::size_t N> void fillElemKinds(F, int (&)[N]) {}
+} // namespace ops_mlir
+
+#ifdef OPS_MLIR_STOCK_FALLBACK
+// Built via the shim ops_seq_v2.h (apps/c/cloverleaf_*/shim), which has renamed the
+// stock OPS implementation to ops_par_loop_stock. Each queued loop carries a closure
+// that runs it with that implementation, for loops the JIT cannot compile.
+namespace ops_mlir {
+
+template <typename KernelFn, std::size_t N, std::size_t... I>
+void callStock(KernelFn kernel, const char *name, ops_block block, int dims,
+               int *range, std::array<ops_arg, N> &args, std::index_sequence<I...>) {
+  ops_par_loop_stock(kernel, name, block, dims, range, args[I]...);
+}
+
+template <typename KernelFn, typename... Args>
+std::function<void()> makeStockFallback(KernelFn kernel, const char *name,
+                                        ops_block block, int dims, const int *range,
+                                        const Args &...opsArgs) {
+  // The loop runs later, so read-only globals are copied now: eager execution
+  // would have seen their current values.
+  auto snapshots = std::make_shared<std::vector<std::vector<char>>>();
+  std::array<ops_arg, sizeof...(Args)> args{opsArgs...};
+  snapshots->reserve(args.size());
+  for (ops_arg &a : args) {
+    if (a.argtype == OPS_ARG_GBL && a.acc == OPS_READ && a.data) {
+      snapshots->emplace_back(a.data, a.data + a.elem_size * a.dim);
+      a.data = snapshots->back().data();
+    }
+  }
+  std::array<int, 2 * OPS_MAX_DIM> r{};
+  for (int i = 0; i < 2 * dims; ++i)
+    r[i] = range[i];
+  std::string kname = name;
+  // `snapshots` owns the bytes the copied ops_args point at, so the closure must
+  // keep it alive: a plain [=] would not capture it (the body never names it).
+  return [=, snapshots = snapshots]() mutable {
+    callStock(kernel, kname.c_str(), block, dims, r.data(), args,
+              std::make_index_sequence<sizeof...(Args)>{});
+  };
+}
+
+} // namespace ops_mlir
+#endif
 
 template <typename KernelFn, typename... Args>
 void ops_par_loop(KernelFn kernel, const char *name, ops_block block, int dims,
@@ -42,11 +115,21 @@ void ops_par_loop(KernelFn kernel, const char *name, ops_block block, int dims,
   auto token =
       static_cast<std::uintptr_t>(reinterpret_cast<std::uintptr_t>(kernel));
 
+  std::function<void()> fallback;
+#ifdef OPS_MLIR_STOCK_FALLBACK
+  fallback = ops_mlir::makeStockFallback(kernel, name, block, dims, range,
+                                         opsArgs...);
+#endif
+
+  int elemKinds[sizeof...(Args) ? sizeof...(Args) : 1] = {};
+  ops_mlir::fillElemKinds(kernel, elemKinds);
+
   ops_mlir::JITEngine::instance().enqueueParLoop(
-      token, name, block, dims, range, packedArgs.data(), packedArgs.size());
+      token, name, block, dims, range, packedArgs.data(), packedArgs.size(),
+      std::move(fallback), elemKinds);
 }
 
-void compile_and_execute() {
+inline void compile_and_execute() {
   ops_mlir::JITEngine::instance().compile_and_execute();
 }
 
@@ -56,13 +139,50 @@ void ops_register_kernel_constant(const char *name, T *data) {
   ops_mlir::JITEngine::instance().registerKernelConstant(name, data);
 }
 
-void set_kernel_source_file(const std::string &filePath) {
+inline void set_kernel_preamble(const std::string &text) {
+  ops_mlir::JITEngine::instance().setKernelPreamble(text);
+}
+
+inline void set_kernel_source_file(const std::string &filePath) {
   ops_mlir::JITEngine::instance().setKernelSourceFile(filePath);
 }
 
-void sync_all_host_buffers() {
-  ops_mlir::JITEngine::instance().syncAllHostBuffers();
+// Runs any queued loops and brings every device-resident dat back to the host.
+// Call before reading `dat->data` directly; the OPS accessors below (fetch,
+// raw pointer, ...) do this on their own.
+inline void sync_all_host_buffers() {
+  ops_mlir::JITEngine::instance().hostAccessAll();
 }
+
+namespace ops_mlir {
+// Lazy execution: loops only run when something needs their results.
+// These are the host-visible entry points that force that.
+inline void hostRead(ops_dat dat) { JITEngine::instance().hostAccess(dat); }
+inline void hostWrote(ops_dat dat) {
+  JITEngine::instance().invalidateDeviceBuffer(
+      reinterpret_cast<std::uintptr_t>(dat->data));
+}
+inline void hostReleased(ops_dat dat, ops_access acc) {
+  if (acc != OPS_READ)
+    hostWrote(dat);
+}
+inline void hostFlush() { JITEngine::instance().flushPending(); }
+
+// With OPS_MLIR_STATS set, prints the runtime's cumulative counters on one
+// line. Call it at fixed points of a time loop: the difference between two
+// consecutive lines is an exact steady-state breakdown (no JIT noise).
+inline void reportWindow(int iteration) {
+  if (!std::getenv("OPS_MLIR_STATS"))
+    return;
+  const JITEngine::Stats &s = JITEngine::instance().stats();
+  std::printf("[window] iter=%d loops=%zu launches=%zu compile=%.6f execute=%.6f "
+              "kernel=%.6f halo=%.6f enqueue=%.6f plan=%.6f\n",
+              iteration, s.numLoops, s.numLaunches, s.compileSeconds,
+              s.executeSeconds, s.kernelSeconds, s.haloSeconds, s.enqueueSeconds,
+              s.planSeconds);
+  std::fflush(stdout);
+}
+} // namespace ops_mlir
 
 // TODO: Use dat.data_d instead of deviceBuffers_. or improve the logic re copy only affected dats.
 // Invalidate cached device buffers, forcing a host->device re-copy on next use.
@@ -73,6 +193,47 @@ void sync_all_host_buffers() {
 #define ops_fetch_dat_hdf5_file(dat, file)                                   \
   (ops_mlir::JITEngine::instance().syncHostBuffer(dat),                      \
    ::ops_fetch_dat_hdf5_file(dat, file))
+
+// Host-visible accessors: run the queued loops (and copy the dat back from the
+// GPU) first; host writes invalidate the cached device copy.
+#define ops_dat_get_raw_pointer(dat, part, stencil, memspace)                \
+  (ops_mlir::hostRead(dat),                                                  \
+   ::ops_dat_get_raw_pointer(dat, part, stencil, memspace))
+#define ops_dat_release_raw_data(dat, part, acc)                             \
+  (::ops_dat_release_raw_data(dat, part, acc),                               \
+   ops_mlir::hostReleased(dat, acc))
+#define ops_dat_fetch_data(dat, part, data)                                  \
+  (ops_mlir::hostRead(dat), ::ops_dat_fetch_data(dat, part, data))
+#define ops_dat_fetch_data_memspace(dat, part, data, memspace)               \
+  (ops_mlir::hostRead(dat),                                                  \
+   ::ops_dat_fetch_data_memspace(dat, part, data, memspace))
+#define ops_dat_fetch_data_slab_memspace(dat, part, data, range, memspace)   \
+  (ops_mlir::hostRead(dat),                                                  \
+   ::ops_dat_fetch_data_slab_memspace(dat, part, data, range, memspace))
+#define ops_dat_set_data(dat, part, data)                                    \
+  (ops_mlir::hostRead(dat), ::ops_dat_set_data(dat, part, data),             \
+   ops_mlir::hostWrote(dat))
+#define ops_dat_set_data_memspace(dat, part, data, memspace)                 \
+  (ops_mlir::hostRead(dat),                                                  \
+   ::ops_dat_set_data_memspace(dat, part, data, memspace),                   \
+   ops_mlir::hostWrote(dat))
+#define ops_dat_set_data_slab_memspace(dat, part, data, range, memspace)     \
+  (ops_mlir::hostRead(dat),                                                  \
+   ::ops_dat_set_data_slab_memspace(dat, part, data, range, memspace),       \
+   ops_mlir::hostWrote(dat))
+#define ops_get_data(dat) (ops_mlir::hostRead(dat), ::ops_get_data(dat))
+#define ops_print_dat_to_txtfile(dat, file)                                  \
+  (ops_mlir::hostRead(dat), ::ops_print_dat_to_txtfile(dat, file))
+#define ops_dat_copy(orig) (ops_mlir::hostRead(orig), ::ops_dat_copy(orig))
+#define ops_dat_deep_copy(target, orig)                                      \
+  (ops_mlir::hostRead(orig), ops_mlir::hostRead(target),                     \
+   ::ops_dat_deep_copy(target, orig), ops_mlir::hostWrote(target))
+#define ops_reduction_result(handle, ptr)                                    \
+  (ops_mlir::hostFlush(), ::ops_reduction_result(handle, ptr))
+#define ops_timing_output(stream)                                            \
+  (ops_mlir::hostFlush(), ::ops_timing_output(stream))
+#define ops_timing_output_stdout()                                           \
+  (ops_mlir::hostFlush(), ::ops_timing_output_stdout())
 
 // Tear down JITEngine's cached ExecutionEngines deterministically before
 // the real ops_exit runs -- see JITEngine::shutdown's comment for why.

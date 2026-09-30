@@ -6,8 +6,11 @@ add_library(
 	OPSRuntime
 	IRBuilder.cpp
 	JITEngine.cpp
+	Reduction.cpp
 	KernelIRBuilder.cpp
+	AccessorKernel.cpp
 	KernelProfiler.cpp
+	FusionPlanner.cpp
 )
 
 target_include_directories(

@@ -1,0 +1,39 @@
+[
+ {
+  "backend": "cuda",
+  "variant": "dag",
+  "rep": 0,
+  "wall_s": 111.6727180480957,
+  "rc": 0,
+  "qa": 2.273736754432321e-13,
+  "passed": true,
+  "loops": 52383,
+  "launches": 28852,
+  "flushes": 185,
+  "compiles": 7,
+  "compile_s": 71.7713,
+  "execute_s": 12.7053,
+  "kernel_s": 12.1347,
+  "enqueue_s": 5.2766,
+  "jit_loops": 52383,
+  "host_loops": 194,
+  "host_kernels": {
+   "calc_dt_kernel_get": 0.0,
+   "calc_dt_kernel_min": 4.575,
+   "field_summary_kernel": 4.94,
+   "generate_chunk_kernel": 0.55,
+   "initialise_chunk_kernel_cellx": 0.12,
+   "initialise_chunk_kernel_celly": 0.121,
+   "initialise_chunk_kernel_cellz": 0.122,
+   "initialise_chunk_kernel_x": 0.118,
+   "initialise_chunk_kernel_xx": 0.08,
+   "initialise_chunk_kernel_y": 0.119,
+   "initialise_chunk_kernel_yy": 0.085,
+   "initialise_chunk_kernel_z": 0.118,
+   "initialise_chunk_kernel_zz": 0.084
+  },
+  "host_s": 11.031,
+  "host_copy_s": 1.901,
+  "steady_s": 25.6373
+ }
+]

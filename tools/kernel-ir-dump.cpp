@@ -41,6 +41,11 @@ static cl::list<std::string> DoubleConsts(
     cl::desc("Register an extern double the kernel references, as "
             "name=value (repeatable)"),
     cl::value_desc("name=value"));
+static cl::list<std::string> FloatConsts(
+    "float",
+    cl::desc("Register an extern float the kernel references, as "
+            "name=value (repeatable)"),
+    cl::value_desc("name=value"));
 static cl::list<std::string> IntConsts(
     "int",
     cl::desc("Register an extern int the kernel references, as name=value "
@@ -82,6 +87,7 @@ int main(int argc, char **argv) {
   // KernelIRBuilder only stores addresses (mirroring how JITEngine bakes in
   // live app-side constants), so these must outlive the generate() call.
   std::vector<std::unique_ptr<double>> doubleStorage;
+  std::vector<std::unique_ptr<float>> floatStorage;
   std::vector<std::unique_ptr<int32_t>> intStorage;
   std::map<std::string, const void *> constants;
 
@@ -94,6 +100,16 @@ int main(int argc, char **argv) {
     }
     doubleStorage.push_back(std::make_unique<double>(std::stod(value)));
     constants[name] = doubleStorage.back().get();
+  }
+  for (const std::string &arg : FloatConsts) {
+    std::string name, value;
+    if (!splitNameValue(arg, name, value)) {
+      errs() << "kernel-ir-dump: -float expects name=value, got '" << arg
+            << "'\n";
+      return 1;
+    }
+    floatStorage.push_back(std::make_unique<float>(std::stof(value)));
+    constants[name] = floatStorage.back().get();
   }
   for (const std::string &arg : IntConsts) {
     std::string name, value;

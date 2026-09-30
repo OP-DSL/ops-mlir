@@ -3,6 +3,8 @@
 
 #include "IRBuilder.h"
 #include "Core.h"
+#include "runtime/FusionPlanner.h"
+#include "runtime/KernelIRBuilder.h"
 #include "runtime/KernelProfiler.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
@@ -13,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 
@@ -35,7 +38,16 @@ struct XdslResult {
 
 class ModuleKey {
 public:
-  explicit ModuleKey(const std::vector<LoopDesc> &queue) {
+  // `planDigest` (FusionPlan::digest) keeps modules compiled for different
+  // groupings of the same loops apart.
+  explicit ModuleKey(const std::vector<LoopDesc> &queue,
+                     const std::string &planDigest = "", const std::string &specialization = "") {
+    digest_ += "plan:" + planDigest + "\n";
+    digest_ += "spec:" + specialization + "\n";
+    // Which arguments are the same dat decides the fusion plan and the generated function's
+    // parameters, so the key carries each dat's slot (order of first appearance in the queue):
+    // two queues that differ only in which dat is which must not share a module.
+    std::map<int, int> slotOf;
     for (const LoopDesc &loop : queue) {
       digest_ += loop.kernel_name;
       digest_ += '|';
@@ -56,8 +68,14 @@ public:
         digest_ += std::to_string(arg.elem_size);
         digest_ += ';';
         digest_ += std::to_string(arg.opt);
+        digest_ += ';';
+        digest_ += std::to_string(arg.elem_kind);
 
         const DatDesc &dat = arg.dat;
+        if (arg.argtype == OPS_ARG_DAT) {
+          int slot = slotOf.emplace(dat.index, static_cast<int>(slotOf.size())).first->second;
+          digest_ += ";slot:" + std::to_string(slot);
+        }
         digest_ += ";dat:";
         digest_ += std::to_string(dat.dim);
         digest_ += ',';
@@ -130,19 +148,72 @@ public:
 
   void enqueueParLoop(std::uintptr_t kernelToken, const char *kernelName,
                       ops_block block, int dims, const int *range,
-                      const ops_arg *args, std::size_t nargs);
+                      const ops_arg *args, std::size_t nargs,
+                      std::function<void()> fallback = {},
+                      const int *elemKinds = nullptr);
 
   void flush();
 
   void compile_and_execute();
 
+  // Runs any queued loops. Cheap no-op when the queue is empty. Everything
+  // that lets the host observe or modify OPS data goes through this first
+  // (see the interception macros in ops/OPSWrapper.h).
+  void flushPending();
+
+  // flushPending() plus a device->host copy of `dat` when it lives on the GPU.
+  void hostAccess(ops_dat dat);
+  void hostAccessAll();
+
+  // Counters for tests and profiling.
+  struct Stats {
+    std::size_t numCompiles = 0; // module cache misses
+    std::size_t numFlushes = 0;  // non-empty queue flushes
+    std::size_t numLoops = 0;    // par_loops executed
+    std::size_t numLaunches = 0; // generated functions invoked (one per group)
+    std::size_t numHostLoops = 0; // loops run through the stock OPS fallback
+    // Wall-clock seconds spent in the runtime (for profiling).
+    double compileSeconds = 0;   // planning is cheap; this is IR build + lowering + JIT
+    double xdslSeconds = 0;      //   of which: the Python (xDSL) lowering
+    double kernelIRSeconds = 0;  //   of which: translating kernel bodies
+    double backendSeconds = 0;   //   of which: the MLIR backend pipeline
+    double engineSeconds = 0;    //   of which: LLVM translation and code generation
+    double executeSeconds = 0;   // launches, including the kernels themselves
+    double kernelSeconds = 0;    // just invokePacked + device sync, summed over launches
+    double haloSeconds = 0;      // ops_halo_transfer, excluding any flush it triggers
+    double enqueueSeconds = 0;   // ops_par_loop: describing the loop (dats, stencils, globals)
+    double planSeconds = 0;      // per flush: fusion plan + module-cache key + lookup
+  };
+  const Stats &stats() const { return stats_; }
+  Stats &mutableStats() { return stats_; }
+  void setQueueMax(std::size_t n) { queueMax_ = n; }
+
+  // Loop fusion (see runtime/FusionPlanner.h). Defaults come from the
+  // environment; tests override them.
+  void setFusionOptions(const FusionOptions &o) {
+    fusionOptions_ = o;
+    planCache_.clear(); // plans and modules are keyed by the queue alone
+    engineCache_.clear();
+  }
+  const FusionOptions &fusionOptions() const { return fusionOptions_; }
+  // Grouping used by the most recent flush.
+  const FusionPlan &lastPlan() const { return lastPlan_; }
+  void resetStats() { stats_ = Stats(); }
+
   void setBackend(Backend backend) { backend_ = backend; }
   Backend backend() const { return backend_; }
 
   // Needed for GPU backend kernel translation (via KernelIRBuilder) to materialize real MLIR
+  // May be called once per kernel header; a kernel is looked up in all of them.
   void setKernelSourceFile(std::string path) {
-    kernelSourceFile_ = std::move(path);
+    for (const std::string &f : kernelSourceFiles_)
+      if (f == path)
+        return;
+    kernelSourceFiles_.push_back(std::move(path));
   }
+
+  // Source text parsed in front of every kernel file by the accessor translator.
+  void setKernelPreamble(std::string text) { kernelPreamble_ = std::move(text); }
 
   // Register extern global kernel constants (e.g. pi, jmax) for translation into MLIR 
   void registerKernelConstant(const std::string &name, const void *ptr) {
@@ -172,9 +243,14 @@ private:
 
   LoopDesc buildLoopDesc(std::uintptr_t kernelToken, const char *kernelName,
                          ops_block block, int dims, const int *range,
-                         const ops_arg *args, std::size_t nargs);
+                         const ops_arg *args, std::size_t nargs,
+                         const int *elemKinds);
 
-  ArgDesc buildArgDesc(const ops_arg &arg);
+  ArgDesc buildArgDesc(const ops_arg &arg, int elemKind);
+
+  // Appends the current value of every registered constant the loop's kernel reads
+  // as a synthetic read-only global, so it reaches the compiled code as an argument.
+  void attachConstantArgs(LoopDesc &loop);
 
   DatDesc describeDat(ops_dat dat);
   StencilDesc describeStencil(ops_stencil stencil);
@@ -184,8 +260,58 @@ private:
   void runBackendLowering(mlir::ModuleOp module, Backend backend);
   std::string detectNVGpuSm();
 
-  void compile();
-  void execute(mlir::ExecutionEngine &engine);
+  void reportPlan(const ModuleKey &key, const FusionPlan &plan);
+  void compile(const FusionPlan &plan);
+  std::unique_ptr<mlir::ExecutionEngine> createEngine(mlir::ModuleOp module, std::string &error);
+
+  // Reductions: each reduction element of a launch writes its per-point contribution into a
+  // scratch buffer over the launch's box; a small generated function folds that buffer to one
+  // value on the device, which is then combined into the application's OPS reduction handle.
+  std::map<std::pair<std::size_t, int>, std::uintptr_t> reduceScratch_; // (bytes, slot) -> buffer
+  std::uintptr_t reducePartials_ = 0; // device scratch of the GPU fold
+  std::uintptr_t allocScratch(std::size_t bytes);       // device memory on CUDA, host otherwise
+  std::uintptr_t scratchBuffer(std::size_t bytes, int slot);
+  bool fillReduction(std::uintptr_t buffer, std::size_t n, int elemKind, int access);
+  /// Folds `n` contributions at `buffer` and combines the result into `handle[element]`.
+  bool foldReduction(std::uintptr_t buffer, std::size_t n, int elemKind, int access,
+                     std::uintptr_t handle, int element, int elemSize);
+
+  // Runs the queue's JIT-compilable stretch (see compile_and_execute).
+  void compileAndExecuteSegment();
+  // Loops with a stock-OPS fallback run on the host when the JIT can't compile
+  // them (OPS_MLIR_HOST=all forces it for every such loop, =none never uses it).
+  bool runsOnHost(const LoopDesc &loop);
+  void runHostLoop(const LoopDesc &loop);
+  // OPS_MLIR_VERIFY=1: run one JIT-compiled loop, then redo it with the stock
+  // implementation from the same starting data and report any difference.
+  void verifyLoop(LoopDesc &loop);
+  bool verify_ = false;
+  std::map<std::string, std::size_t> verifyBad_, verifyRuns_;
+  bool kernelTranslatable(const LoopDesc &loop);
+  // What each argument of an accessor-style kernel means (see KernelArgInfo).
+  std::vector<KernelArgInfo> kernelArgInfos(const LoopDesc &loop);
+  static std::string argInfoDigest(const std::vector<KernelArgInfo> &infos);
+  void syncHostBufferPtr(std::uintptr_t hostPtr);
+  enum class HostMode { Auto, All, None };
+  HostMode hostMode_ = HostMode::Auto;
+  struct Probe {
+    bool ok;
+    std::string signature;
+    std::vector<KernelConstRef> constRefs;
+    bool assignStyleReduction = false; // see KernelTraits
+    unsigned idxAxesRead = 0;          // see KernelTraits
+    // registered constants folded into the code, with the value each had; the probe is stale
+    // (the constant list may differ) once one of them changes
+    std::vector<std::pair<std::string, int64_t>> specialized;
+  };
+  std::map<std::string, Probe> translatable_; // by kernel name; first signature wins
+  bool explain_ = false;                       // OPS_MLIR_EXPLAIN
+  std::map<std::string, double> hostSeconds_; // fallback time per kernel
+  void execute(mlir::ExecutionEngine &engine, const FusionPlan &plan);
+
+  // Name of the generated function for group `gid`; must match
+  // group_func_name in xdsl_impl/ops_to_stencil.py.
+  std::string groupFunctionName(const FusedGroup &group, std::size_t gid) const;
   void registerCpuKernelSymbols(mlir::ExecutionEngine &engine);
 
   // Translates a kernel body from C++ source into MLIR via KernelIRBuilder,
@@ -197,7 +323,7 @@ private:
   // registerCpuKernelSymbols. Returns false (leaving the declaration in
   // place) if the kernel isn't already materialized and translation fails
   // or is unsupported, so callers can fall back to symbol binding.
-  bool materializeKernelBody(const std::string &kernelName, int indexRank);
+  bool materializeKernelBody(const LoopDesc &loop);
 
   // Returns the device buffer mirroring the given host `ops_dat` buffer,
   // allocating it (via cuMemAlloc) on first use. Kernels compiled for the
@@ -233,14 +359,25 @@ public:
 
 private:
   Backend backend_ = kDefaultBackend;
+  std::size_t queueMax_ = 512; // OPS_MLIR_QUEUE_MAX; auto-flush at this length
+  Stats stats_;
+  FusionOptions fusionOptions_ = FusionOptions::fromEnv();
+  FusionPlan lastPlan_;
+  std::set<std::string> reportedPlans_;
   std::mutex mutex_;
   std::vector<LoopDesc> queue_;
   FlushCallback flushCallback_;
-  std::string kernelSourceFile_;
+  std::vector<std::string> kernelSourceFiles_;
+  std::string kernelPreamble_;
+  double hostCopySeconds_ = 0; // device-to-host copies ahead of fallback loops
+  std::unordered_map<std::uintptr_t, std::string> kernelSymbols_; // by kernel address
   std::map<std::string, const void *> kernelConstants_;
 
   std::unordered_map<ModuleKey, std::unique_ptr<mlir::ExecutionEngine>>
       engineCache_;
+  // The plan is a function of the queue and the (fixed) options, so a queue seen
+  // before needs no planning: CloverLeaf flushes the same few hundred loops every step.
+  std::unordered_map<ModuleKey, FusionPlan> planCache_;
 
   std::unique_ptr<BackendPipeline> currentPipeline_;
 

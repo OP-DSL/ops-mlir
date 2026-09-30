@@ -1,0 +1,11 @@
+[
+ {
+  "backend": "stock",
+  "variant": "stock",
+  "wall_s": 1940.6777670383453,
+  "rc": 0,
+  "qa": 2.273736754432321e-13,
+  "passed": true,
+  "host_s": 0.0
+ }
+]

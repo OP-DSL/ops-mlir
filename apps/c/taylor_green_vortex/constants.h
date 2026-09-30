@@ -1,4 +1,7 @@
 // Declaration of global constants
+// Precision of the solver state. The single-precision variant is generated from
+// this file (see to_single_precision.py), which turns `double` into `float`.
+typedef double real_t;
 int restart;
 int iter;
 int stage;

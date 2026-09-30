@@ -1,0 +1,3428 @@
+{
+ "meta": {
+  "date": "2026-10-01 09:37:50",
+  "window": 100,
+  "timing_iters": 400,
+  "host": "renyi.cl.itk.ppke.hu",
+  "main_n": 256,
+  "cpu_n": 64,
+  "omp_threads": 24,
+  "peak_gbs": 1555.0,
+  "sizes": [
+   32,
+   64,
+   96,
+   128,
+   192,
+   256,
+   320,
+   384
+  ],
+  "sizes_f64": [
+   64,
+   128,
+   192,
+   256
+  ],
+  "gpu": "NVIDIA A100-PCIE-40GB, 40960 MiB, 580.95.05",
+  "cpus": 48,
+  "runs": 310
+ },
+ "plan": {
+  "unfused": {
+   "stage": {
+    "loops": 17,
+    "kernels": 17,
+    "moved": 0,
+    "bytes_unfused": 4110000.0,
+    "bytes_fused": 4110000.0,
+    "why": {}
+   },
+   "all": [
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 703000.0,
+     "bytes_fused": 703000.0,
+     "why": {}
+    },
+    {
+     "loops": 17,
+     "kernels": 17,
+     "moved": 0,
+     "bytes_unfused": 4110000.0,
+     "bytes_fused": 4110000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 164000.0,
+     "bytes_fused": 164000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {}
+    }
+   ],
+   "n_shapes": 9
+  },
+  "adjacent, same-range": {
+   "stage": {
+    "loops": 17,
+    "kernels": 8,
+    "moved": 0,
+    "bytes_unfused": 4110000.0,
+    "bytes_fused": 2740000.0,
+    "why": {}
+   },
+   "all": [
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 703000.0,
+     "bytes_fused": 703000.0,
+     "why": {}
+    },
+    {
+     "loops": 17,
+     "kernels": 8,
+     "moved": 0,
+     "bytes_unfused": 4110000.0,
+     "bytes_fused": 2740000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 164000.0,
+     "bytes_fused": 164000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {}
+    }
+   ],
+   "n_shapes": 9
+  },
+  "adjacent, guarded": {
+   "stage": {
+    "loops": 17,
+    "kernels": 8,
+    "moved": 0,
+    "bytes_unfused": 4110000.0,
+    "bytes_fused": 2740000.0,
+    "why": {}
+   },
+   "all": [
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 703000.0,
+     "bytes_fused": 703000.0,
+     "why": {}
+    },
+    {
+     "loops": 17,
+     "kernels": 8,
+     "moved": 0,
+     "bytes_unfused": 4110000.0,
+     "bytes_fused": 2740000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 164000.0,
+     "bytes_fused": 164000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {}
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {}
+    }
+   ],
+   "n_shapes": 9
+  },
+  "DAG, same-range": {
+   "stage": {
+    "loops": 17,
+    "kernels": 6,
+    "moved": 3,
+    "bytes_unfused": 4110000.0,
+    "bytes_fused": 2630000.0,
+    "why": {
+     "dependence": 5,
+     "first": 1,
+     "order": 1,
+     "range": 3
+    }
+   },
+   "all": [
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 703000.0,
+     "bytes_fused": 703000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 17,
+     "kernels": 6,
+     "moved": 3,
+     "bytes_unfused": 4110000.0,
+     "bytes_fused": 2630000.0,
+     "why": {
+      "dependence": 5,
+      "first": 1,
+      "order": 1,
+      "range": 3
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 164000.0,
+     "bytes_fused": 164000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {
+      "first": 1
+     }
+    }
+   ],
+   "n_shapes": 9
+  },
+  "DAG, guarded": {
+   "stage": {
+    "loops": 17,
+    "kernels": 6,
+    "moved": 3,
+    "bytes_unfused": 4110000.0,
+    "bytes_fused": 2630000.0,
+    "why": {
+     "dependence": 5,
+     "first": 1,
+     "order": 1,
+     "range": 3
+    }
+   },
+   "all": [
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 703000.0,
+     "bytes_fused": 703000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 17,
+     "kernels": 6,
+     "moved": 3,
+     "bytes_unfused": 4110000.0,
+     "bytes_fused": 2630000.0,
+     "why": {
+      "dependence": 5,
+      "first": 1,
+      "order": 1,
+      "range": 3
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 164000.0,
+     "bytes_fused": 164000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {
+      "first": 1
+     }
+    }
+   ],
+   "n_shapes": 9
+  },
+  "DAG, guarded, latest": {
+   "stage": {
+    "loops": 17,
+    "kernels": 6,
+    "moved": 3,
+    "bytes_unfused": 4110000.0,
+    "bytes_fused": 2630000.0,
+    "why": {
+     "dependence": 5,
+     "first": 1,
+     "order": 1,
+     "range": 3
+    }
+   },
+   "all": [
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 703000.0,
+     "bytes_fused": 703000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 17,
+     "kernels": 6,
+     "moved": 3,
+     "bytes_unfused": 4110000.0,
+     "bytes_fused": 2630000.0,
+     "why": {
+      "dependence": 5,
+      "first": 1,
+      "order": 1,
+      "range": 3
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 164000.0,
+     "bytes_fused": 164000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 328000.0,
+     "bytes_fused": 328000.0,
+     "why": {
+      "first": 1
+     }
+    },
+    {
+     "loops": 1,
+     "kernels": 1,
+     "moved": 0,
+     "bytes_unfused": 492000.0,
+     "bytes_fused": 492000.0,
+     "why": {
+      "first": 1
+     }
+    }
+   ],
+   "n_shapes": 9
+  }
+ },
+ "accuracy": {
+  "opensbli/seq": {
+   "adjacent, same-range": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "adjacent, guarded": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "DAG, same-range": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "DAG, guarded": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "DAG, guarded, latest": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   }
+  },
+  "opensbli_f32/seq": {
+   "adjacent, same-range": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "adjacent, guarded": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "DAG, same-range": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "DAG, guarded": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "DAG, guarded, latest": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   }
+  },
+  "opensbli_f32/cuda": {
+   "adjacent, same-range": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "adjacent, guarded": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "DAG, same-range": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "DAG, guarded": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "DAG, guarded, latest": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   }
+  },
+  "opensbli/cuda": {
+   "adjacent, same-range": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "adjacent, guarded": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "DAG, same-range": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "DAG, guarded": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "DAG, guarded, latest": {
+    "bitwise": true,
+    "differing": 0,
+    "total": 163840,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   }
+  },
+  "f32_vs_f64": {
+   "rho": 2.79019155670026e-07,
+   "rhou0": 1.9108844681400245e-06,
+   "rhou1": 1.916174609983433e-06,
+   "rhou2": 1.8904965124352422e-06,
+   "rhoE": 1.4687401303309778e-07
+  }
+ },
+ "timing": {
+  "opensbli_f32/cuda/N256": {
+   "unfused": {
+    "per_iter": 0.024192,
+    "per_iter_spread": 0.007853835978835945,
+    "per_iter_all": [
+     0.024096,
+     0.024124,
+     0.024156,
+     0.024161,
+     0.024192,
+     0.024214,
+     0.024219,
+     0.024249,
+     0.024286
+    ],
+    "warmup_extra": 10.1592,
+    "compile_total": 11.375018,
+    "breakdown": {
+     "execute": 0.023524949999999992,
+     "kernel": 0.02344101,
+     "halo": 0.00038897999999999987,
+     "enqueue": 0.00014274000000000003,
+     "plan": 0.00012491999999999996
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.020495,
+    "per_iter_spread": 0.005806294218101858,
+    "per_iter_all": [
+     0.020453,
+     0.020508,
+     0.020506,
+     0.020475,
+     0.020424,
+     0.020495,
+     0.020518,
+     0.020474,
+     0.020543
+    ],
+    "warmup_extra": 9.176400000000001,
+    "compile_total": 10.388856,
+    "breakdown": {
+     "execute": 0.019788459999999997,
+     "kernel": 0.01971973,
+     "halo": 0.00039152999999999996,
+     "enqueue": 0.00014290999999999997,
+     "plan": 0.00016806000000000001
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "adjacent, guarded": {
+    "per_iter": 0.02054,
+    "per_iter_spread": 0.00360272638753657,
+    "per_iter_all": [
+     0.020513,
+     0.02054,
+     0.020561,
+     0.020509,
+     0.020575,
+     0.020581,
+     0.020534,
+     0.020529,
+     0.020583
+    ],
+    "warmup_extra": 9.188600000000001,
+    "compile_total": 10.400329,
+    "breakdown": {
+     "execute": 0.0198329,
+     "kernel": 0.019764559999999997,
+     "halo": 0.00039079,
+     "enqueue": 0.00014340999999999998,
+     "plan": 0.00016804
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "DAG, same-range": {
+    "per_iter": 0.019941,
+    "per_iter_spread": 0.003961686976580874,
+    "per_iter_all": [
+     0.0199,
+     0.019931,
+     0.019964,
+     0.019904,
+     0.019941,
+     0.01997,
+     0.019929,
+     0.019948,
+     0.019979
+    ],
+    "warmup_extra": 9.0107,
+    "compile_total": 10.290671,
+    "breakdown": {
+     "execute": 0.01913838,
+     "kernel": 0.019070349999999996,
+     "halo": 0.0003934399999999999,
+     "enqueue": 0.00015364999999999997,
+     "plan": 0.00025386
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "DAG, guarded": {
+    "per_iter": 0.019964,
+    "per_iter_spread": 0.002604688439190541,
+    "per_iter_all": [
+     0.019926,
+     0.019978,
+     0.019968,
+     0.019928,
+     0.019964,
+     0.019978,
+     0.019931,
+     0.019953,
+     0.019975
+    ],
+    "warmup_extra": 8.9962,
+    "compile_total": 10.259591,
+    "breakdown": {
+     "execute": 0.019161870000000008,
+     "kernel": 0.01909289,
+     "halo": 0.0003911000000000001,
+     "enqueue": 0.00015482999999999998,
+     "plan": 0.00025836000000000007
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "DAG, guarded, latest": {
+    "per_iter": 0.01997,
+    "per_iter_spread": 0.0029544316474712077,
+    "per_iter_all": [
+     0.019956,
+     0.019989,
+     0.019994,
+     0.019963,
+     0.019958,
+     0.01997,
+     0.019935,
+     0.019977,
+     0.019993
+    ],
+    "warmup_extra": 9.004000000000001,
+    "compile_total": 10.279746,
+    "breakdown": {
+     "execute": 0.01917033,
+     "kernel": 0.01910195,
+     "halo": 0.00039024000000000003,
+     "enqueue": 0.00015199999999999998,
+     "plan": 0.00025558
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   }
+  },
+  "opensbli/cuda/N256": {
+   "unfused": {
+    "per_iter": 0.054429,
+    "per_iter_spread": 0.0019842363445956566,
+    "per_iter_all": [
+     0.054368,
+     0.054392,
+     0.054419,
+     0.054412,
+     0.054448,
+     0.054462,
+     0.054429,
+     0.054458,
+     0.054476
+    ],
+    "warmup_extra": 10.5485,
+    "compile_total": 11.299588,
+    "breakdown": {
+     "execute": 0.05377294000000001,
+     "kernel": 0.05369078,
+     "halo": 0.00038785000000000013,
+     "enqueue": 0.00013818,
+     "plan": 0.00012670000000000002
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.051906,
+    "per_iter_spread": 0.0012715293029706895,
+    "per_iter_all": [
+     0.051866,
+     0.05189,
+     0.051906,
+     0.0519,
+     0.051911,
+     0.051931,
+     0.051895,
+     0.051912,
+     0.051932
+    ],
+    "warmup_extra": 9.555499999999999,
+    "compile_total": 10.345863,
+    "breakdown": {
+     "execute": 0.05119624999999999,
+     "kernel": 0.05112556999999999,
+     "halo": 0.00038921000000000013,
+     "enqueue": 0.00014163999999999995,
+     "plan": 0.00017170000000000005
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   },
+   "adjacent, guarded": {
+    "per_iter": 0.051928,
+    "per_iter_spread": 0.0010784162686797198,
+    "per_iter_all": [
+     0.051912,
+     0.051928,
+     0.051937,
+     0.051899,
+     0.051915,
+     0.051935,
+     0.051912,
+     0.051937,
+     0.051955
+    ],
+    "warmup_extra": 9.5381,
+    "compile_total": 10.322298,
+    "breakdown": {
+     "execute": 0.051221209999999996,
+     "kernel": 0.05115132000000001,
+     "halo": 0.00038907,
+     "enqueue": 0.00014187000000000002,
+     "plan": 0.0001714000000000001
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   },
+   "DAG, same-range": {
+    "per_iter": 0.051867,
+    "per_iter_spread": 0.0008868837603872282,
+    "per_iter_all": [
+     0.051841,
+     0.051857,
+     0.051875,
+     0.051852,
+     0.051869,
+     0.051887,
+     0.051847,
+     0.051867,
+     0.051883
+    ],
+    "warmup_extra": 9.395600000000002,
+    "compile_total": 10.186343,
+    "breakdown": {
+     "execute": 0.05105682999999999,
+     "kernel": 0.05098698000000001,
+     "halo": 0.00039363999999999995,
+     "enqueue": 0.00015193999999999999,
+     "plan": 0.00025827
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   },
+   "DAG, guarded": {
+    "per_iter": 0.05186,
+    "per_iter_spread": 0.0007520246818356607,
+    "per_iter_all": [
+     0.051842,
+     0.05186,
+     0.051881,
+     0.051847,
+     0.05186,
+     0.051881,
+     0.051842,
+     0.051858,
+     0.051879
+    ],
+    "warmup_extra": 9.4088,
+    "compile_total": 10.201024,
+    "breakdown": {
+     "execute": 0.05105459999999999,
+     "kernel": 0.050984879999999996,
+     "halo": 0.00039282,
+     "enqueue": 0.0001518,
+     "plan": 0.00025668999999999996
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   },
+   "DAG, guarded, latest": {
+    "per_iter": 0.051862,
+    "per_iter_spread": 0.0009062512051212532,
+    "per_iter_all": [
+     0.051836,
+     0.051862,
+     0.051868,
+     0.051843,
+     0.051859,
+     0.051883,
+     0.051838,
+     0.051862,
+     0.051878
+    ],
+    "warmup_extra": 9.3731,
+    "compile_total": 10.172116,
+    "breakdown": {
+     "execute": 0.05105672,
+     "kernel": 0.050989070000000004,
+     "halo": 0.0003903799999999999,
+     "enqueue": 0.00014699999999999997,
+     "plan": 0.00025768000000000004
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   }
+  },
+  "opensbli_f32/openmp/N64": {
+   "unfused": {
+    "per_iter": 0.040021,
+    "per_iter_spread": 0.03842982434222045,
+    "per_iter_all": [
+     0.040106,
+     0.039735,
+     0.041174,
+     0.039911,
+     0.040915,
+     0.040792,
+     0.04045,
+     0.039936,
+     0.039837,
+     0.039636
+    ],
+    "warmup_extra": 8.879450000000002,
+    "compile_total": 9.322806,
+    "breakdown": {
+     "execute": 0.030370919999999996,
+     "kernel": 0.03021133,
+     "halo": 0.009319829999999998,
+     "enqueue": 0.00021320999999999997,
+     "plan": 0.000173425
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli_f32",
+    "niter": 300
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.035053,
+    "per_iter_spread": 0.03577439876758047,
+    "per_iter_all": [
+     0.034937,
+     0.034927,
+     0.035467,
+     0.035292,
+     0.034362,
+     0.035267,
+     0.035169,
+     0.035197,
+     0.034213,
+     0.034925
+    ],
+    "warmup_extra": 8.13515,
+    "compile_total": 8.634248,
+    "breakdown": {
+     "execute": 0.025317645,
+     "kernel": 0.025195835,
+     "halo": 0.009252624999999999,
+     "enqueue": 0.000211745,
+     "plan": 0.00023236
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli_f32",
+    "niter": 300
+   },
+   "adjacent, guarded": {
+    "per_iter": 0.03533,
+    "per_iter_spread": 0.049108406453439016,
+    "per_iter_all": [
+     0.035633,
+     0.035866,
+     0.035862,
+     0.036516,
+     0.035371,
+     0.034835,
+     0.035289,
+     0.034781,
+     0.035098,
+     0.035116
+    ],
+    "warmup_extra": 8.1759,
+    "compile_total": 8.638935,
+    "breakdown": {
+     "execute": 0.025508995000000003,
+     "kernel": 0.025392125,
+     "halo": 0.009283950000000001,
+     "enqueue": 0.00021203499999999996,
+     "plan": 0.00023452
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli_f32",
+    "niter": 300
+   },
+   "DAG, same-range": {
+    "per_iter": 0.035026,
+    "per_iter_spread": 0.07385941871752409,
+    "per_iter_all": [
+     0.035037,
+     0.034521,
+     0.035015,
+     0.034745,
+     0.035447,
+     0.035562,
+     0.034489,
+     0.034803,
+     0.036977,
+     0.037076
+    ],
+    "warmup_extra": 8.086950000000002,
+    "compile_total": 8.609855,
+    "breakdown": {
+     "execute": 0.025252035,
+     "kernel": 0.025140465,
+     "halo": 0.009221475,
+     "enqueue": 0.00023408,
+     "plan": 0.000358935
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli_f32",
+    "niter": 300
+   },
+   "DAG, guarded": {
+    "per_iter": 0.0355245,
+    "per_iter_spread": 0.048726934932229966,
+    "per_iter_all": [
+     0.034798,
+     0.03571,
+     0.035379,
+     0.03567,
+     0.035328,
+     0.035908,
+     0.034698,
+     0.03491,
+     0.035927,
+     0.036429
+    ],
+    "warmup_extra": 8.0318,
+    "compile_total": 8.530151,
+    "breakdown": {
+     "execute": 0.025529984999999998,
+     "kernel": 0.025421475,
+     "halo": 0.00938197,
+     "enqueue": 0.000233115,
+     "plan": 0.00036285
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli_f32",
+    "niter": 300
+   },
+   "DAG, guarded, latest": {
+    "per_iter": 0.035258,
+    "per_iter_spread": 0.03579329513869191,
+    "per_iter_all": [
+     0.035435,
+     0.035541,
+     0.035094,
+     0.035117,
+     0.035268,
+     0.034663,
+     0.035248,
+     0.035925,
+     0.035513,
+     0.03486
+    ],
+    "warmup_extra": 8.1033,
+    "compile_total": 8.554502,
+    "breakdown": {
+     "execute": 0.02529671,
+     "kernel": 0.02517235,
+     "halo": 0.009326250000000001,
+     "enqueue": 0.00024240000000000004,
+     "plan": 0.000370185
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli_f32",
+    "niter": 300
+   }
+  },
+  "opensbli/openmp/N64": {
+   "unfused": {
+    "per_iter": 0.040662500000000004,
+    "per_iter_spread": 0.058407623731939626,
+    "per_iter_all": [
+     0.042051,
+     0.041366,
+     0.039965,
+     0.039676,
+     0.040252,
+     0.040322,
+     0.041221,
+     0.040749,
+     0.040576,
+     0.041036
+    ],
+    "warmup_extra": 8.867600000000001,
+    "compile_total": 9.383439,
+    "breakdown": {
+     "execute": 0.03049503,
+     "kernel": 0.030132944999999998,
+     "halo": 0.009667175,
+     "enqueue": 0.00025310999999999997,
+     "plan": 0.00020512999999999998
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli",
+    "niter": 300
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.037396,
+    "per_iter_spread": 0.07819018076799647,
+    "per_iter_all": [
+     0.037755,
+     0.037584,
+     0.037246,
+     0.037546,
+     0.039046,
+     0.036969,
+     0.036488,
+     0.03808,
+     0.036122,
+     0.037159
+    ],
+    "warmup_extra": 8.02185,
+    "compile_total": 8.547328,
+    "breakdown": {
+     "execute": 0.027075915000000002,
+     "kernel": 0.026751075,
+     "halo": 0.009801065,
+     "enqueue": 0.0002614,
+     "plan": 0.00026649
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli",
+    "niter": 300
+   },
+   "adjacent, guarded": {
+    "per_iter": 0.036658,
+    "per_iter_spread": 0.03540836925091386,
+    "per_iter_all": [
+     0.035928,
+     0.037073,
+     0.037226,
+     0.036787,
+     0.036153,
+     0.037055,
+     0.036616,
+     0.0367,
+     0.036608,
+     0.036462
+    ],
+    "warmup_extra": 8.1229,
+    "compile_total": 8.596873,
+    "breakdown": {
+     "execute": 0.026432695,
+     "kernel": 0.026124175,
+     "halo": 0.00966386,
+     "enqueue": 0.0002568,
+     "plan": 0.00026461
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli",
+    "niter": 300
+   },
+   "DAG, same-range": {
+    "per_iter": 0.037162,
+    "per_iter_spread": 0.030999407997416722,
+    "per_iter_all": [
+     0.037253,
+     0.037765,
+     0.036986,
+     0.037728,
+     0.037396,
+     0.037063,
+     0.037918,
+     0.037071,
+     0.036766,
+     0.03691
+    ],
+    "warmup_extra": 8.028250000000002,
+    "compile_total": 8.52094,
+    "breakdown": {
+     "execute": 0.026768015000000003,
+     "kernel": 0.02645772,
+     "halo": 0.00968273,
+     "enqueue": 0.00028486,
+     "plan": 0.00044409499999999993
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli",
+    "niter": 300
+   },
+   "DAG, guarded": {
+    "per_iter": 0.037552,
+    "per_iter_spread": 0.03312739667660831,
+    "per_iter_all": [
+     0.037276,
+     0.037883,
+     0.037648,
+     0.038043,
+     0.038518,
+     0.037365,
+     0.037274,
+     0.037456,
+     0.037926,
+     0.03735
+    ],
+    "warmup_extra": 7.967650000000001,
+    "compile_total": 8.48787,
+    "breakdown": {
+     "execute": 0.027022625,
+     "kernel": 0.026708114999999998,
+     "halo": 0.009785380000000002,
+     "enqueue": 0.0002892,
+     "plan": 0.000446935
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli",
+    "niter": 300
+   },
+   "DAG, guarded, latest": {
+    "per_iter": 0.037375500000000006,
+    "per_iter_spread": 0.060039330577517425,
+    "per_iter_all": [
+     0.038071,
+     0.037881,
+     0.03724,
+     0.037027,
+     0.036301,
+     0.037064,
+     0.038545,
+     0.037208,
+     0.037511,
+     0.037715
+    ],
+    "warmup_extra": 7.95625,
+    "compile_total": 8.419461,
+    "breakdown": {
+     "execute": 0.027079375000000003,
+     "kernel": 0.02679423,
+     "halo": 0.009598685000000001,
+     "enqueue": 0.0002840900000000001,
+     "plan": 0.00044344999999999996
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli",
+    "niter": 300
+   }
+  }
+ },
+ "sizes": {
+  "32": {
+   "unfused": {
+    "per_iter": 0.001386,
+    "per_iter_spread": 0.2150072150072149,
+    "per_iter_all": [
+     0.00156,
+     0.001398,
+     0.001381,
+     0.001548,
+     0.001383,
+     0.001368,
+     0.001666,
+     0.001386,
+     0.001375
+    ],
+    "warmup_extra": 9.5075,
+    "compile_total": 11.367887,
+    "breakdown": {
+     "execute": 0.0007134799999999996,
+     "kernel": 0.00063367,
+     "halo": 0.0003965800000000001,
+     "enqueue": 0.00014197000000000002,
+     "plan": 0.0001283
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 32,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.00111,
+    "per_iter_spread": 0.1702702702702702,
+    "per_iter_all": [
+     0.001284,
+     0.001101,
+     0.001095,
+     0.001273,
+     0.00111,
+     0.001095,
+     0.001276,
+     0.001128,
+     0.001095
+    ],
+    "warmup_extra": 8.491999999999999,
+    "compile_total": 10.391575,
+    "breakdown": {
+     "execute": 0.0003902899999999998,
+     "kernel": 0.00032328999999999995,
+     "halo": 0.00039626000000000006,
+     "enqueue": 0.00014287000000000002,
+     "plan": 0.00016993000000000002
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 32,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "DAG, guarded": {
+    "per_iter": 0.001157,
+    "per_iter_spread": 0.09334485738980122,
+    "per_iter_all": [
+     0.001231,
+     0.001196,
+     0.001131,
+     0.001224,
+     0.001148,
+     0.00113,
+     0.001238,
+     0.001157,
+     0.001134
+    ],
+    "warmup_extra": 8.347299999999999,
+    "compile_total": 10.258645,
+    "breakdown": {
+     "execute": 0.0003449399999999997,
+     "kernel": 0.00027895000000000003,
+     "halo": 0.00039678000000000006,
+     "enqueue": 0.00015252,
+     "plan": 0.00025668
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 32,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   }
+  },
+  "64": {
+   "unfused": {
+    "per_iter": 0.001636,
+    "per_iter_spread": 0.07518337408312963,
+    "per_iter_all": [
+     0.001756,
+     0.001635,
+     0.001633,
+     0.001718,
+     0.001649,
+     0.001635,
+     0.001746,
+     0.001633,
+     0.001636
+    ],
+    "warmup_extra": 9.545399999999999,
+    "compile_total": 11.355458,
+    "breakdown": {
+     "execute": 0.0009604100000000004,
+     "kernel": 0.0008774199999999998,
+     "halo": 0.0003964200000000001,
+     "enqueue": 0.00014402,
+     "plan": 0.00013007
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 64,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.001302,
+    "per_iter_spread": 0.1666666666666668,
+    "per_iter_all": [
+     0.001459,
+     0.001362,
+     0.001301,
+     0.001449,
+     0.001298,
+     0.001299,
+     0.001515,
+     0.001299,
+     0.001302
+    ],
+    "warmup_extra": 8.550500000000001,
+    "compile_total": 10.416922,
+    "breakdown": {
+     "execute": 0.0005887699999999995,
+     "kernel": 0.0005215900000000002,
+     "halo": 0.00039684999999999997,
+     "enqueue": 0.00014245999999999996,
+     "plan": 0.00016731000000000002
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 64,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "DAG, guarded": {
+    "per_iter": 0.001362,
+    "per_iter_spread": 0.2026431718061674,
+    "per_iter_all": [
+     0.001488,
+     0.00133,
+     0.001325,
+     0.001596,
+     0.001362,
+     0.001336,
+     0.001439,
+     0.001372,
+     0.00132
+    ],
+    "warmup_extra": 8.932199999999998,
+    "compile_total": 13.390868,
+    "breakdown": {
+     "execute": 0.0005249100000000006,
+     "kernel": 0.0004548600000000003,
+     "halo": 0.00039780999999999996,
+     "enqueue": 0.00015498000000000004,
+     "plan": 0.00025821
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 64,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   }
+  },
+  "96": {
+   "unfused": {
+    "per_iter": 0.002497,
+    "per_iter_spread": 0.056467761313576316,
+    "per_iter_all": [
+     0.002502,
+     0.002497,
+     0.002504,
+     0.002534,
+     0.002483,
+     0.00249,
+     0.002621,
+     0.002481,
+     0.00248
+    ],
+    "warmup_extra": 9.552499999999998,
+    "compile_total": 11.351971,
+    "breakdown": {
+     "execute": 0.0018261899999999997,
+     "kernel": 0.0017442599999999996,
+     "halo": 0.00039605,
+     "enqueue": 0.00014214999999999999,
+     "plan": 0.00012735999999999997
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 96,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.001925,
+    "per_iter_spread": 0.13818181818181804,
+    "per_iter_all": [
+     0.002147,
+     0.001925,
+     0.001925,
+     0.001925,
+     0.001923,
+     0.001922,
+     0.002188,
+     0.00193,
+     0.001929
+    ],
+    "warmup_extra": 8.5649,
+    "compile_total": 10.417777,
+    "breakdown": {
+     "execute": 0.0012203000000000008,
+     "kernel": 0.0011536900000000006,
+     "halo": 0.00039375999999999994,
+     "enqueue": 0.00014261000000000002,
+     "plan": 0.00016605999999999997
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 96,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "DAG, guarded": {
+    "per_iter": 0.001904,
+    "per_iter_spread": 0.13235294117647062,
+    "per_iter_all": [
+     0.002059,
+     0.00191,
+     0.001903,
+     0.002047,
+     0.001904,
+     0.001899,
+     0.002147,
+     0.001902,
+     0.001895
+    ],
+    "warmup_extra": 8.4328,
+    "compile_total": 10.28431,
+    "breakdown": {
+     "execute": 0.00109931,
+     "kernel": 0.0010330299999999992,
+     "halo": 0.00039106000000000015,
+     "enqueue": 0.00015382,
+     "plan": 0.00025657
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 96,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   }
+  },
+  "128": {
+   "unfused": {
+    "per_iter": 0.00415,
+    "per_iter_spread": 0.006024096385542342,
+    "per_iter_all": [
+     0.004165,
+     0.004162,
+     0.004162,
+     0.004143,
+     0.00414,
+     0.00414,
+     0.00415,
+     0.004148,
+     0.004151
+    ],
+    "warmup_extra": 9.644800000000002,
+    "compile_total": 11.396546,
+    "breakdown": {
+     "execute": 0.00348441,
+     "kernel": 0.0034029100000000003,
+     "halo": 0.00039075000000000004,
+     "enqueue": 0.00014028999999999997,
+     "plan": 0.00012609000000000003
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 128,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.003219,
+    "per_iter_spread": 0.005902454178316223,
+    "per_iter_all": [
+     0.003212,
+     0.003207,
+     0.003205,
+     0.003224,
+     0.00322,
+     0.003219,
+     0.00322,
+     0.003217,
+     0.003221
+    ],
+    "warmup_extra": 8.6076,
+    "compile_total": 10.343331,
+    "breakdown": {
+     "execute": 0.002511319999999999,
+     "kernel": 0.002443400000000001,
+     "halo": 0.00039033000000000004,
+     "enqueue": 0.00014237,
+     "plan": 0.00016742
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 128,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "DAG, guarded": {
+    "per_iter": 0.003086,
+    "per_iter_spread": 0.023007128969539818,
+    "per_iter_all": [
+     0.003153,
+     0.003091,
+     0.003131,
+     0.003086,
+     0.003087,
+     0.003086,
+     0.003084,
+     0.003083,
+     0.003082
+    ],
+    "warmup_extra": 8.4916,
+    "compile_total": 10.276841,
+    "breakdown": {
+     "execute": 0.0022723500000000007,
+     "kernel": 0.0022049200000000004,
+     "halo": 0.00039594000000000006,
+     "enqueue": 0.0001573,
+     "plan": 0.0002596
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 128,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   }
+  },
+  "192": {
+   "unfused": {
+    "per_iter": 0.011115,
+    "per_iter_spread": 0.0032388663967612514,
+    "per_iter_all": [
+     0.011105,
+     0.011113,
+     0.011118,
+     0.011115,
+     0.011118,
+     0.011123,
+     0.011099,
+     0.011135,
+     0.011109
+    ],
+    "warmup_extra": 9.8153,
+    "compile_total": 11.35621,
+    "breakdown": {
+     "execute": 0.010451599999999998,
+     "kernel": 0.010370820000000001,
+     "halo": 0.0003895,
+     "enqueue": 0.00014202000000000003,
+     "plan": 0.00012533999999999996
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 192,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.008698,
+    "per_iter_spread": 0.0031041618762933146,
+    "per_iter_all": [
+     0.008697,
+     0.008698,
+     0.008701,
+     0.00869,
+     0.008684,
+     0.008696,
+     0.008698,
+     0.00871,
+     0.008711
+    ],
+    "warmup_extra": 8.7937,
+    "compile_total": 10.382083,
+    "breakdown": {
+     "execute": 0.007987500000000002,
+     "kernel": 0.00791909,
+     "halo": 0.00039245,
+     "enqueue": 0.00014226000000000004,
+     "plan": 0.00016987
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 192,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "DAG, guarded": {
+    "per_iter": 0.008391,
+    "per_iter_spread": 0.0015492789893932933,
+    "per_iter_all": [
+     0.008389,
+     0.008391,
+     0.0084,
+     0.008388,
+     0.008398,
+     0.008398,
+     0.008387,
+     0.008389,
+     0.008398
+    ],
+    "warmup_extra": 8.666699999999999,
+    "compile_total": 10.256388,
+    "breakdown": {
+     "execute": 0.007583639999999998,
+     "kernel": 0.007515980000000002,
+     "halo": 0.00039174,
+     "enqueue": 0.00015466,
+     "plan": 0.00025798999999999993
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 192,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   }
+  },
+  "256": {
+   "unfused": {
+    "per_iter": 0.024279,
+    "per_iter_spread": 0.006837184398039437,
+    "per_iter_all": [
+     0.024194,
+     0.024262,
+     0.02427,
+     0.024255,
+     0.024279,
+     0.02432,
+     0.024302,
+     0.024344,
+     0.02436
+    ],
+    "warmup_extra": 10.1076,
+    "compile_total": 11.434953,
+    "breakdown": {
+     "execute": 0.023617239999999998,
+     "kernel": 0.02353497,
+     "halo": 0.00039236000000000007,
+     "enqueue": 0.00014459,
+     "plan": 0.00012665
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.020537,
+    "per_iter_spread": 0.004479719530603389,
+    "per_iter_all": [
+     0.020505,
+     0.020537,
+     0.020487,
+     0.020527,
+     0.020539,
+     0.020579,
+     0.020499,
+     0.020547,
+     0.020553
+    ],
+    "warmup_extra": 9.138300000000001,
+    "compile_total": 10.453487,
+    "breakdown": {
+     "execute": 0.019830509999999996,
+     "kernel": 0.019762120000000005,
+     "halo": 0.00038949000000000004,
+     "enqueue": 0.00014188,
+     "plan": 0.00017004
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "DAG, guarded": {
+    "per_iter": 0.019956,
+    "per_iter_spread": 0.002705953096812913,
+    "per_iter_all": [
+     0.019924,
+     0.019948,
+     0.01997,
+     0.019928,
+     0.019964,
+     0.019975,
+     0.019935,
+     0.019956,
+     0.019978
+    ],
+    "warmup_extra": 8.947500000000002,
+    "compile_total": 10.269296,
+    "breakdown": {
+     "execute": 0.019146540000000004,
+     "kernel": 0.019076970000000006,
+     "halo": 0.0003900300000000001,
+     "enqueue": 0.00015549,
+     "plan": 0.00025608000000000006
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   }
+  },
+  "320": {
+   "unfused": {
+    "per_iter": 0.048606,
+    "per_iter_spread": 0.006583549356046595,
+    "per_iter_all": [
+     0.048437,
+     0.048521,
+     0.048588,
+     0.048556,
+     0.048625,
+     0.048682,
+     0.048606,
+     0.048674,
+     0.048757
+    ],
+    "warmup_extra": 10.5659,
+    "compile_total": 11.391615,
+    "breakdown": {
+     "execute": 0.047938449999999994,
+     "kernel": 0.04785426,
+     "halo": 0.00039276000000000003,
+     "enqueue": 0.00014362999999999998,
+     "plan": 0.00012609999999999998
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 320,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.04657,
+    "per_iter_spread": 0.0020828859780974845,
+    "per_iter_all": [
+     0.046537,
+     0.04657,
+     0.046612,
+     0.04652,
+     0.046566,
+     0.046611,
+     0.046544,
+     0.046581,
+     0.046617
+    ],
+    "warmup_extra": 9.5484,
+    "compile_total": 10.413431,
+    "breakdown": {
+     "execute": 0.04586185,
+     "kernel": 0.045791500000000006,
+     "halo": 0.0003897199999999999,
+     "enqueue": 0.00014165,
+     "plan": 0.00017042999999999995
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 320,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "DAG, guarded": {
+    "per_iter": 0.045311,
+    "per_iter_spread": 0.001875924168524238,
+    "per_iter_all": [
+     0.045256,
+     0.045297,
+     0.045336,
+     0.04527,
+     0.045311,
+     0.045334,
+     0.045285,
+     0.045312,
+     0.045341
+    ],
+    "warmup_extra": 9.3673,
+    "compile_total": 10.238234,
+    "breakdown": {
+     "execute": 0.04449869999999999,
+     "kernel": 0.04442960999999999,
+     "halo": 0.00038973999999999996,
+     "enqueue": 0.00015293,
+     "plan": 0.00025859000000000006
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 320,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   }
+  },
+  "384": {
+   "unfused": {
+    "per_iter": 0.094634,
+    "per_iter_spread": 0.004818564152418772,
+    "per_iter_all": [
+     0.094365,
+     0.094533,
+     0.094666,
+     0.094491,
+     0.094634,
+     0.094767,
+     0.094543,
+     0.094696,
+     0.094821
+    ],
+    "warmup_extra": 11.216999999999999,
+    "compile_total": 11.413501,
+    "breakdown": {
+     "execute": 0.09396547000000002,
+     "kernel": 0.09388024000000002,
+     "halo": 0.00039064000000000004,
+     "enqueue": 0.00014383000000000004,
+     "plan": 0.00012566
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 384,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.080685,
+    "per_iter_spread": 0.002392018342938572,
+    "per_iter_all": [
+     0.080594,
+     0.080689,
+     0.080768,
+     0.080602,
+     0.080685,
+     0.080775,
+     0.080582,
+     0.080676,
+     0.080761
+    ],
+    "warmup_extra": 10.256600000000002,
+    "compile_total": 10.366829,
+    "breakdown": {
+     "execute": 0.07997530000000001,
+     "kernel": 0.07990364,
+     "halo": 0.00039275,
+     "enqueue": 0.00014301,
+     "plan": 0.00016902
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 384,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   },
+   "DAG, guarded": {
+    "per_iter": 0.078622,
+    "per_iter_spread": 0.002162244664343358,
+    "per_iter_all": [
+     0.078545,
+     0.078622,
+     0.078692,
+     0.078547,
+     0.078622,
+     0.078697,
+     0.078527,
+     0.078602,
+     0.078696
+    ],
+    "warmup_extra": 10.1824,
+    "compile_total": 10.283981,
+    "breakdown": {
+     "execute": 0.07780612000000002,
+     "kernel": 0.07773391,
+     "halo": 0.00039422,
+     "enqueue": 0.00015467,
+     "plan": 0.00025803999999999996
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 384,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400
+   }
+  }
+ },
+ "sizes_f64": {
+  "64": {
+   "unfused": {
+    "per_iter": 0.001939,
+    "per_iter_spread": 0.15214027849406916,
+    "per_iter_all": [
+     0.002001,
+     0.001928,
+     0.001929,
+     0.002003,
+     0.001937,
+     0.001941,
+     0.002223,
+     0.001937,
+     0.001939
+    ],
+    "warmup_extra": 9.4931,
+    "compile_total": 11.3429,
+    "breakdown": {
+     "execute": 0.001267029999999999,
+     "kernel": 0.0011856800000000002,
+     "halo": 0.00039319999999999996,
+     "enqueue": 0.0001394,
+     "plan": 0.00012634000000000004
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 64,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.001586,
+    "per_iter_spread": 0.1229508196721312,
+    "per_iter_all": [
+     0.001723,
+     0.001589,
+     0.001586,
+     0.001776,
+     0.001581,
+     0.001583,
+     0.001666,
+     0.001585,
+     0.001585
+    ],
+    "warmup_extra": 8.476999999999999,
+    "compile_total": 10.355123,
+    "breakdown": {
+     "execute": 0.0008751799999999998,
+     "kernel": 0.0008079400000000004,
+     "halo": 0.00039308999999999997,
+     "enqueue": 0.00014014000000000002,
+     "plan": 0.00017084
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 64,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   },
+   "DAG, guarded": {
+    "per_iter": 0.001636,
+    "per_iter_spread": 0.12408312958435211,
+    "per_iter_all": [
+     0.001728,
+     0.001646,
+     0.001627,
+     0.001679,
+     0.001635,
+     0.001617,
+     0.00182,
+     0.001636,
+     0.001622
+    ],
+    "warmup_extra": 8.3377,
+    "compile_total": 10.216449,
+    "breakdown": {
+     "execute": 0.0008261699999999994,
+     "kernel": 0.0007600099999999999,
+     "halo": 0.00039467999999999995,
+     "enqueue": 0.00015168,
+     "plan": 0.00026046000000000006
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 64,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   }
+  },
+  "128": {
+   "unfused": {
+    "per_iter": 0.007044,
+    "per_iter_spread": 0.003833049403747887,
+    "per_iter_all": [
+     0.007051,
+     0.007044,
+     0.00705,
+     0.007041,
+     0.007051,
+     0.007052,
+     0.007028,
+     0.007025,
+     0.007039
+    ],
+    "warmup_extra": 9.578,
+    "compile_total": 11.251813,
+    "breakdown": {
+     "execute": 0.006377440000000001,
+     "kernel": 0.006296350000000001,
+     "halo": 0.0003895900000000001,
+     "enqueue": 0.00014125,
+     "plan": 0.00012754000000000002
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 128,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.005814,
+    "per_iter_spread": 0.003783969728242229,
+    "per_iter_all": [
+     0.005798,
+     0.005818,
+     0.005819,
+     0.005812,
+     0.005813,
+     0.005819,
+     0.005797,
+     0.005819,
+     0.005814
+    ],
+    "warmup_extra": 8.645999999999999,
+    "compile_total": 10.336774,
+    "breakdown": {
+     "execute": 0.005107910000000002,
+     "kernel": 0.005039579999999999,
+     "halo": 0.00039021000000000005,
+     "enqueue": 0.00014001999999999998,
+     "plan": 0.00017107000000000005
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 128,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   },
+   "DAG, guarded": {
+    "per_iter": 0.005748,
+    "per_iter_spread": 0.004871259568545624,
+    "per_iter_all": [
+     0.005755,
+     0.005761,
+     0.005764,
+     0.005741,
+     0.005748,
+     0.00574,
+     0.005736,
+     0.005747,
+     0.005748
+    ],
+    "warmup_extra": 8.526200000000001,
+    "compile_total": 10.170383,
+    "breakdown": {
+     "execute": 0.004936059999999997,
+     "kernel": 0.004869210000000001,
+     "halo": 0.0003927,
+     "enqueue": 0.00015258,
+     "plan": 0.00026056
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 128,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   }
+  },
+  "192": {
+   "unfused": {
+    "per_iter": 0.020759,
+    "per_iter_spread": 0.002986656389999497,
+    "per_iter_all": [
+     0.020721,
+     0.020727,
+     0.020749,
+     0.020731,
+     0.020759,
+     0.020768,
+     0.020776,
+     0.020769,
+     0.020783
+    ],
+    "warmup_extra": 9.9364,
+    "compile_total": 11.276797,
+    "breakdown": {
+     "execute": 0.020093189999999997,
+     "kernel": 0.020010779999999995,
+     "halo": 0.0003905,
+     "enqueue": 0.00014151,
+     "plan": 0.0001281
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 192,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.020335,
+    "per_iter_spread": 0.001376936316695365,
+    "per_iter_all": [
+     0.020326,
+     0.020322,
+     0.020334,
+     0.020335,
+     0.020345,
+     0.02035,
+     0.020335,
+     0.020338,
+     0.020343
+    ],
+    "warmup_extra": 8.9526,
+    "compile_total": 10.33534,
+    "breakdown": {
+     "execute": 0.01962547,
+     "kernel": 0.01955393,
+     "halo": 0.00038989000000000005,
+     "enqueue": 0.00014059,
+     "plan": 0.00017216999999999997
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 192,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   },
+   "DAG, guarded": {
+    "per_iter": 0.020556,
+    "per_iter_spread": 0.0018486086787312627,
+    "per_iter_all": [
+     0.020549,
+     0.020556,
+     0.020559,
+     0.02055,
+     0.020568,
+     0.020569,
+     0.020531,
+     0.020546,
+     0.020561
+    ],
+    "warmup_extra": 8.8323,
+    "compile_total": 10.24417,
+    "breakdown": {
+     "execute": 0.019749080000000002,
+     "kernel": 0.019682719999999997,
+     "halo": 0.00039058999999999996,
+     "enqueue": 0.00015188,
+     "plan": 0.0002609600000000001
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 192,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   }
+  },
+  "256": {
+   "unfused": {
+    "per_iter": 0.05442,
+    "per_iter_spread": 0.0019294377067254854,
+    "per_iter_all": [
+     0.054359,
+     0.054387,
+     0.05441,
+     0.054389,
+     0.05442,
+     0.054447,
+     0.05442,
+     0.05445,
+     0.054464
+    ],
+    "warmup_extra": 10.446,
+    "compile_total": 11.255246,
+    "breakdown": {
+     "execute": 0.05375361,
+     "kernel": 0.053669839999999996,
+     "halo": 0.0003909800000000001,
+     "enqueue": 0.00014162999999999996,
+     "plan": 0.00012749000000000001
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.051916,
+    "per_iter_spread": 0.001097927421218921,
+    "per_iter_all": [
+     0.051878,
+     0.051896,
+     0.051917,
+     0.051894,
+     0.05192,
+     0.051935,
+     0.051886,
+     0.051916,
+     0.05192
+    ],
+    "warmup_extra": 9.4755,
+    "compile_total": 10.324902,
+    "breakdown": {
+     "execute": 0.05120286,
+     "kernel": 0.05113187999999999,
+     "halo": 0.00038848,
+     "enqueue": 0.00014088000000000002,
+     "plan": 0.00017082
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   },
+   "DAG, guarded": {
+    "per_iter": 0.051846,
+    "per_iter_spread": 0.001137985572657419,
+    "per_iter_all": [
+     0.051818,
+     0.051833,
+     0.051853,
+     0.051824,
+     0.051839,
+     0.051851,
+     0.051846,
+     0.051859,
+     0.051877
+    ],
+    "warmup_extra": 9.3807,
+    "compile_total": 10.171335,
+    "breakdown": {
+     "execute": 0.05103289999999999,
+     "kernel": 0.0509634,
+     "halo": 0.0003913899999999999,
+     "enqueue": 0.00015079,
+     "plan": 0.00026088
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 3,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli",
+    "niter": 400
+   }
+  }
+ },
+ "caps": {
+  "max": {
+   "1": {
+    "per_iter": 0.024543000000000002,
+    "per_iter_spread": 0.0037892678156704286,
+    "per_iter_all": [
+     0.024534,
+     0.024556,
+     0.024583,
+     0.02449,
+     0.024503,
+     0.024552
+    ],
+    "warmup_extra": 10.09675,
+    "compile_total": 11.32181,
+    "breakdown": {
+     "execute": 0.023728494999999995,
+     "kernel": 0.023638544999999997,
+     "halo": 0.0003912649999999999,
+     "enqueue": 0.00014530500000000003,
+     "plan": 0.00027063
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 2,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400,
+    "stage_kernels": 17
+   },
+   "2": {
+    "per_iter": 0.0226835,
+    "per_iter_spread": 0.0031300284347654294,
+    "per_iter_all": [
+     0.022672,
+     0.022697,
+     0.022714,
+     0.022643,
+     0.022677,
+     0.02269
+    ],
+    "warmup_extra": 9.4396,
+    "compile_total": 10.7326005,
+    "breakdown": {
+     "execute": 0.021868150000000006,
+     "kernel": 0.021789005,
+     "halo": 0.00039217999999999995,
+     "enqueue": 0.000144515,
+     "plan": 0.00027242
+    },
+    "launches_per_iter": 33.28,
+    "loops_per_iter": 51.28,
+    "reps": 2,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400,
+    "stage_kernels": 11
+   },
+   "4": {
+    "per_iter": 0.021848,
+    "per_iter_spread": 0.002654705236177339,
+    "per_iter_all": [
+     0.021815,
+     0.021845,
+     0.021864,
+     0.021806,
+     0.02186,
+     0.021851
+    ],
+    "warmup_extra": 9.29875,
+    "compile_total": 10.5689195,
+    "breakdown": {
+     "execute": 0.021038309999999998,
+     "kernel": 0.020965309999999997,
+     "halo": 0.00039175500000000003,
+     "enqueue": 0.000146325,
+     "plan": 0.00026454
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 2,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400,
+    "stage_kernels": 8
+   },
+   "8": {
+    "per_iter": 0.019978000000000003,
+    "per_iter_spread": 0.004504955450996085,
+    "per_iter_all": [
+     0.019937,
+     0.019973,
+     0.019983,
+     0.019947,
+     0.019999,
+     0.020027
+    ],
+    "warmup_extra": 9.00685,
+    "compile_total": 10.282509000000001,
+    "breakdown": {
+     "execute": 0.01917702,
+     "kernel": 0.019109235,
+     "halo": 0.00038911999999999996,
+     "enqueue": 0.00015314499999999998,
+     "plan": 0.00025638
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 2,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400,
+    "stage_kernels": 6
+   },
+   "16": {
+    "per_iter": 0.019947,
+    "per_iter_spread": 0.002155712638491899,
+    "per_iter_all": [
+     0.019931,
+     0.019938,
+     0.019956,
+     0.019936,
+     0.019968,
+     0.019974
+    ],
+    "warmup_extra": 8.962599999999998,
+    "compile_total": 10.227649,
+    "breakdown": {
+     "execute": 0.019151209999999995,
+     "kernel": 0.019083655000000005,
+     "halo": 0.00039108000000000003,
+     "enqueue": 0.00015126,
+     "plan": 0.00025303999999999995
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 2,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400,
+    "stage_kernels": 6
+   },
+   "32": {
+    "per_iter": 0.0199715,
+    "per_iter_spread": 0.004356207595824063,
+    "per_iter_all": [
+     0.019946,
+     0.019981,
+     0.019962,
+     0.019909,
+     0.019996,
+     0.019993
+    ],
+    "warmup_extra": 8.98455,
+    "compile_total": 10.2737985,
+    "breakdown": {
+     "execute": 0.019169105,
+     "kernel": 0.019093965000000004,
+     "halo": 0.00039043499999999996,
+     "enqueue": 0.0001574,
+     "plan": 0.000257635
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 2,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400,
+    "stage_kernels": 6
+   }
+  },
+  "ratio": {
+   "0.5": {
+    "per_iter": 0.019959499999999998,
+    "per_iter_spread": 0.0028056815050475727,
+    "per_iter_all": [
+     0.019928,
+     0.019969,
+     0.019962,
+     0.019933,
+     0.019957,
+     0.019984
+    ],
+    "warmup_extra": 9.0217,
+    "compile_total": 10.298535000000001,
+    "breakdown": {
+     "execute": 0.019152150000000003,
+     "kernel": 0.019083305000000002,
+     "halo": 0.00039252000000000004,
+     "enqueue": 0.00015432,
+     "plan": 0.00025734499999999997
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 2,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400,
+    "stage_kernels": 6
+   },
+   "1.0": {
+    "per_iter": 0.019944,
+    "per_iter_spread": 0.002507019655034167,
+    "per_iter_all": [
+     0.019916,
+     0.019939,
+     0.019957,
+     0.019915,
+     0.019949,
+     0.019965
+    ],
+    "warmup_extra": 9.004999999999999,
+    "compile_total": 10.2751005,
+    "breakdown": {
+     "execute": 0.01913369,
+     "kernel": 0.019064205,
+     "halo": 0.00039250000000000005,
+     "enqueue": 0.00015578,
+     "plan": 0.00025608999999999994
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 2,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400,
+    "stage_kernels": 6
+   },
+   "2.0": {
+    "per_iter": 0.0199505,
+    "per_iter_spread": 0.002205458509811903,
+    "per_iter_all": [
+     0.019927,
+     0.019958,
+     0.01997,
+     0.019926,
+     0.019943,
+     0.019964
+    ],
+    "warmup_extra": 9.04475,
+    "compile_total": 10.3318665,
+    "breakdown": {
+     "execute": 0.019139295,
+     "kernel": 0.019070265000000003,
+     "halo": 0.00039212500000000006,
+     "enqueue": 0.00015586500000000004,
+     "plan": 0.000257995
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 2,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400,
+    "stage_kernels": 6
+   },
+   "4.0": {
+    "per_iter": 0.019944,
+    "per_iter_spread": 0.0018551945447251724,
+    "per_iter_all": [
+     0.019927,
+     0.019943,
+     0.019958,
+     0.019927,
+     0.019945,
+     0.019964
+    ],
+    "warmup_extra": 9.03295,
+    "compile_total": 10.3173075,
+    "breakdown": {
+     "execute": 0.019130030000000003,
+     "kernel": 0.0190609,
+     "halo": 0.00039361499999999994,
+     "enqueue": 0.00015524,
+     "plan": 0.0002585
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 2,
+    "n": 256,
+    "backend": "cuda",
+    "exe": "opensbli_f32",
+    "niter": 400,
+    "stage_kernels": 6
+   }
+  }
+ },
+ "openmp_8t": {
+  "opensbli_f32/openmp/N64/24threads": {
+   "unfused": {
+    "per_iter": 0.040329500000000004,
+    "per_iter_spread": 0.04626886026357876,
+    "per_iter_all": [
+     0.040296,
+     0.040773,
+     0.039375,
+     0.038907,
+     0.040461,
+     0.040193,
+     0.040363,
+     0.039944,
+     0.040621,
+     0.040723
+    ],
+    "warmup_extra": 8.8385,
+    "compile_total": 9.375035,
+    "breakdown": {
+     "execute": 0.030503940000000004,
+     "kernel": 0.030342955,
+     "halo": 0.009420574999999999,
+     "enqueue": 0.00021882500000000002,
+     "plan": 0.00017324
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli_f32",
+    "niter": 300
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.034685,
+    "per_iter_spread": 0.0203834510595358,
+    "per_iter_all": [
+     0.0345,
+     0.034473,
+     0.034472,
+     0.034569,
+     0.034452,
+     0.034801,
+     0.03502,
+     0.035015,
+     0.034914,
+     0.035159
+    ],
+    "warmup_extra": 8.14815,
+    "compile_total": 8.634287,
+    "breakdown": {
+     "execute": 0.02505907,
+     "kernel": 0.024944595,
+     "halo": 0.009173030000000002,
+     "enqueue": 0.000213445,
+     "plan": 0.00023039500000000002
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli_f32",
+    "niter": 300
+   },
+   "adjacent, guarded": {
+    "per_iter": 0.0357595,
+    "per_iter_spread": 0.036158223688809846,
+    "per_iter_all": [
+     0.035748,
+     0.035076,
+     0.036369,
+     0.035913,
+     0.035548,
+     0.035536,
+     0.036025,
+     0.035771,
+     0.036041,
+     0.035537
+    ],
+    "warmup_extra": 8.2271,
+    "compile_total": 8.73457,
+    "breakdown": {
+     "execute": 0.025790940000000005,
+     "kernel": 0.025667380000000004,
+     "halo": 0.009570835,
+     "enqueue": 0.00021936000000000001,
+     "plan": 0.00023388000000000003
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli_f32",
+    "niter": 300
+   },
+   "DAG, guarded": {
+    "per_iter": 0.035662,
+    "per_iter_spread": 0.04797824014357011,
+    "per_iter_all": [
+     0.03544,
+     0.035865,
+     0.035712,
+     0.034965,
+     0.035612,
+     0.035891,
+     0.035084,
+     0.035133,
+     0.036355,
+     0.036676
+    ],
+    "warmup_extra": 7.99825,
+    "compile_total": 8.497728,
+    "breakdown": {
+     "execute": 0.025546565,
+     "kernel": 0.025418314999999997,
+     "halo": 0.009455395000000002,
+     "enqueue": 0.00024117000000000002,
+     "plan": 0.00036593499999999996
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli_f32",
+    "niter": 300
+   }
+  },
+  "opensbli/openmp/N64/24threads": {
+   "unfused": {
+    "per_iter": 0.040804499999999994,
+    "per_iter_spread": 0.04840152434167812,
+    "per_iter_all": [
+     0.040053,
+     0.040537,
+     0.040216,
+     0.040285,
+     0.04148,
+     0.041263,
+     0.042002,
+     0.042028,
+     0.040072,
+     0.041072
+    ],
+    "warmup_extra": 8.819199999999999,
+    "compile_total": 9.237346,
+    "breakdown": {
+     "execute": 0.030675279999999992,
+     "kernel": 0.030336954999999992,
+     "halo": 0.009604575,
+     "enqueue": 0.00025251500000000003,
+     "plan": 0.00020592500000000003
+    },
+    "launches_per_iter": 51.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli",
+    "niter": 300
+   },
+   "adjacent, same-range": {
+    "per_iter": 0.0374455,
+    "per_iter_spread": 0.039951396028895254,
+    "per_iter_all": [
+     0.036315,
+     0.036973,
+     0.037769,
+     0.037529,
+     0.03778,
+     0.037132,
+     0.037549,
+     0.037811,
+     0.037362,
+     0.037217
+    ],
+    "warmup_extra": 8.0714,
+    "compile_total": 8.546119,
+    "breakdown": {
+     "execute": 0.026974625000000002,
+     "kernel": 0.02670297,
+     "halo": 0.009712930000000002,
+     "enqueue": 0.000254235,
+     "plan": 0.00026698499999999997
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli",
+    "niter": 300
+   },
+   "adjacent, guarded": {
+    "per_iter": 0.037288,
+    "per_iter_spread": 0.03151147822355706,
+    "per_iter_all": [
+     0.036879,
+     0.037043,
+     0.037433,
+     0.037374,
+     0.037298,
+     0.037623,
+     0.037278,
+     0.037009,
+     0.038054,
+     0.036986
+    ],
+    "warmup_extra": 8.112300000000001,
+    "compile_total": 8.625702,
+    "breakdown": {
+     "execute": 0.026992969999999998,
+     "kernel": 0.0267118,
+     "halo": 0.009732825,
+     "enqueue": 0.00025713499999999997,
+     "plan": 0.00026969499999999997
+    },
+    "launches_per_iter": 24.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli",
+    "niter": 300
+   },
+   "DAG, guarded": {
+    "per_iter": 0.037754499999999996,
+    "per_iter_spread": 0.07403091022262244,
+    "per_iter_all": [
+     0.038859,
+     0.038508,
+     0.038763,
+     0.038286,
+     0.036807,
+     0.03785,
+     0.037505,
+     0.037161,
+     0.037659,
+     0.036064
+    ],
+    "warmup_extra": 7.947100000000001,
+    "compile_total": 8.43872,
+    "breakdown": {
+     "execute": 0.027257600000000003,
+     "kernel": 0.026969104999999997,
+     "halo": 0.009734895,
+     "enqueue": 0.00028637,
+     "plan": 0.0004421400000000001
+    },
+    "launches_per_iter": 18.28,
+    "loops_per_iter": 51.28,
+    "reps": 5,
+    "n": 64,
+    "backend": "openmp",
+    "exe": "opensbli",
+    "niter": 300
+   }
+  }
+ },
+ "profile": {
+  "unfused": {
+   "kernels": {
+    "opensbliblock00Kernel006": {
+     "calls": 10,
+     "time": 0.0122903
+    },
+    "opensbliblock00Kernel005": {
+     "calls": 10,
+     "time": 0.0167575
+    },
+    "opensbliblock00Kernel004": {
+     "calls": 10,
+     "time": 0.0123036
+    },
+    "opensbliblock00Kernel002": {
+     "calls": 10,
+     "time": 0.0122373
+    },
+    "opensbliblock00Kernel001": {
+     "calls": 10,
+     "time": 0.0165
+    },
+    "opensbliblock00Kernel000": {
+     "calls": 10,
+     "time": 0.00962677
+    },
+    "opensbliblock00Kernel008": {
+     "calls": 750,
+     "time": 0.307774
+    },
+    "opensbliblock00Kernel012": {
+     "calls": 750,
+     "time": 0.0265757
+    },
+    "opensbliblock00Kernel040": {
+     "calls": 750,
+     "time": 0.151437
+    },
+    "opensbliblock00Kernel019": {
+     "calls": 750,
+     "time": 0.0430419
+    },
+    "opensbliblock00Kernel039": {
+     "calls": 1,
+     "time": 0.0117388
+    },
+    "opensbliblock00Kernel014": {
+     "calls": 750,
+     "time": 0.0218243
+    },
+    "opensbliblock00Kernel007": {
+     "calls": 750,
+     "time": 0.0213382
+    },
+    "opensbliblock00Kernel031": {
+     "calls": 750,
+     "time": 0.16826
+    },
+    "opensbliblock00Kernel009": {
+     "calls": 750,
+     "time": 0.0212407
+    },
+    "opensbliblock00Kernel025": {
+     "calls": 750,
+     "time": 0.0252346
+    },
+    "opensbliblock00Kernel011": {
+     "calls": 750,
+     "time": 0.0213143
+    },
+    "opensbliblock00Kernel018": {
+     "calls": 750,
+     "time": 0.0230222
+    },
+    "opensbliblock00Kernel010": {
+     "calls": 750,
+     "time": 0.0276138
+    },
+    "opensbliblock00Kernel013": {
+     "calls": 750,
+     "time": 0.0213858
+    },
+    "opensbliblock00Kernel015": {
+     "calls": 750,
+     "time": 0.0215817
+    },
+    "opensbliblock00Kernel003": {
+     "calls": 10,
+     "time": 0.0165062
+    },
+    "opensbliblock00Kernel016": {
+     "calls": 750,
+     "time": 0.023038
+    },
+    "opensbliblock00Kernel032": {
+     "calls": 750,
+     "time": 0.18355
+    },
+    "opensbliblock00Kernel017": {
+     "calls": 750,
+     "time": 0.0229762
+    }
+   },
+   "kernel_time": 1.23917,
+   "n": 128,
+   "niter": 250
+  },
+  "DAG, guarded": {
+   "kernels": {
+    "opensbliblock00Kernel003": {
+     "calls": 10,
+     "time": 0.016379
+    },
+    "opensbliblock00Kernel001": {
+     "calls": 10,
+     "time": 0.016211
+    },
+    "opensbliblock00Kernel040": {
+     "calls": 750,
+     "time": 0.153922
+    },
+    "opensbliblock00Kernel004": {
+     "calls": 10,
+     "time": 0.01228
+    },
+    "opensbliblock00Kernel000": {
+     "calls": 10,
+     "time": 0.00985569
+    },
+    "fused(opensbliblock00Kernel008+opensbliblock00Kernel010+opensbliblock00Kernel012+opensbliblock00Kernel019+opensbliblock00Kernel025)": {
+     "calls": 750,
+     "time": 0.288369
+    },
+    "opensbliblock00Kernel005": {
+     "calls": 10,
+     "time": 0.0168026
+    },
+    "opensbliblock00Kernel039": {
+     "calls": 1,
+     "time": 0.0117422
+    },
+    "opensbliblock00Kernel007": {
+     "calls": 750,
+     "time": 0.0225213
+    },
+    "opensbliblock00Kernel006": {
+     "calls": 10,
+     "time": 0.0121987
+    },
+    "opensbliblock00Kernel009": {
+     "calls": 750,
+     "time": 0.0221171
+    },
+    "fused(opensbliblock00Kernel011+opensbliblock00Kernel014+opensbliblock00Kernel015)": {
+     "calls": 750,
+     "time": 0.0367202
+    },
+    "opensbliblock00Kernel002": {
+     "calls": 10,
+     "time": 0.0122046
+    },
+    "fused(opensbliblock00Kernel013+opensbliblock00Kernel016+opensbliblock00Kernel017+opensbliblock00Kernel018+opensbliblock00Kernel031+opensbliblock00Kernel032)": {
+     "calls": 750,
+     "time": 0.264951
+    }
+   },
+   "kernel_time": 0.896275,
+   "n": 128,
+   "niter": 250
+  }
+ },
+ "bandwidth": {
+  "unfused": {
+   "stage_bytes": 7120000000.0,
+   "stage_bytes_unfused": 7120000000.0
+  },
+  "DAG, guarded": {
+   "stage_bytes": 4610000000.0,
+   "stage_bytes_unfused": 7120000000.0
+  }
+ }
+}
