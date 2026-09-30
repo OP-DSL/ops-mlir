@@ -116,24 +116,34 @@ results, as one compiled module (cached by the shape of the queue):
 
 Read-only `ops_arg_gbl` values are captured when the loop is enqueued.
 
-At flush time the queue is split into groups of consecutive loops that each
-become one generated kernel (`include/runtime/FusionPlanner.h`). Loop *j* joins
-a group unless it would move a value between different points: a non-zero
-offset read of a dat an earlier member wrote (RAW), or a write to a dat an
+At flush time a planner (`include/runtime/FusionPlanner.h`) splits the queue
+into groups that each become one generated kernel. It builds a dependence DAG
+over the whole queue (RAW / WAR / WAW between overlapping footprints), so a loop
+may be moved ahead of independent loops to join an earlier kernel. Loops fuse
+only where no value has to travel between different points: a non-zero-offset
+read of something an earlier member wrote (RAW), or a write to something an
 earlier member reads at a non-zero offset (WAR, e.g. the Jacobi
-`apply_stencil` / `copy` pair). Loops with reductions never fuse. Loops with
-different ranges fuse into one launch over the bounding box; each member then
-only runs where the point is inside its own range ("guarded"), provided the
-box is not larger than the members' summed volumes and any member smaller than
-the box reads point-locally.
+`apply_stencil` / `copy` pair), keeps two loops in separate kernels. Loops with
+reductions never fuse or move. Loops with different ranges fuse into one launch
+over the bounding box; each member then only runs where the point is inside its
+own range ("guarded"), provided the box is not larger than the members' summed
+volumes and any member smaller than the box reads point-locally.
+
+Design, diagrams and the lowering are described in
+[`docs/loop_fusion.md`](docs/loop_fusion.md); measurements on the Taylor-Green
+vortex are in [`docs/tgv_evaluation.md`](docs/tgv_evaluation.md).
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `OPS_MLIR_FUSION` | `1` | `0` disables fusion (one kernel per loop) |
+| `OPS_MLIR_FUSION_REORDER` | `1` | `0` only fuses adjacent loops (no dependence DAG) |
+| `OPS_MLIR_FUSION_PLACEMENT` | `earliest` | `latest` joins the last legal kernel instead of the first |
 | `OPS_MLIR_FUSION_GUARDED` | `1` | `0` only fuses loops with identical ranges |
 | `OPS_MLIR_FUSION_MAX` | `8` | maximum loops per fused kernel |
 | `OPS_MLIR_FUSION_BOX_RATIO` | `1.0` | bounding box volume / summed member volumes limit |
 | `OPS_MLIR_QUEUE_MAX` | `512` | auto-flush at this queue length |
+| `OPS_MLIR_PLAN` | unset | print each distinct plan: kernels, traffic estimate, why loops started new kernels |
+| `OPS_MLIR_STRICT_FP` | unset | reject single-precision kernels whose body computes in double |
 | `OPS_MLIR_DUMP_LOWERED` | unset | print the `ops.par_loop` IR and the per-group lowered IR |
 | `OPS_MLIR_STATS` | unset | print loops / launches / flushes / compiles at exit |
 
@@ -145,6 +155,13 @@ from the type string given to `ops_decl_dat`, and read-only scalar globals are
 `extern` kernel constants registered with `ops_register_kernel_constant` are
 read through the pointer type the kernel header declares. The GPU used in
 development is fast in single precision only, so the GPU tests run `float`.
+
+A single-precision Taylor-Green vortex (`opensbli_f32`) is generated from the
+double-precision sources at build time by
+`apps/c/taylor_green_vortex/to_single_precision.py`: types, type-name strings,
+every floating literal, `M_PI` and math calls are converted. Setting
+`OPS_MLIR_STRICT_FP=1` makes the kernel translator reject any single-precision
+kernel that would silently compute in double.
 
 ## Tests
 
