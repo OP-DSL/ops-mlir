@@ -136,7 +136,10 @@ def OPS_ParLoopOp : OPS_Op<"par_loop", []> {
     I32Attr:$dims,
     DenseI64ArrayAttr:$range,
     TypedArrayAttrBase<OPS_ArgAttr, "array of OPS dataset argument descriptors">:$args,
-    OptionalAttr<I32Attr>:$block_dims
+    OptionalAttr<I32Attr>:$block_dims,
+    // Loops sharing a fuse_group id are lowered into one generated kernel
+    // (see runtime/FusionPlanner.h). Absent means "its own group".
+    OptionalAttr<I64Attr>:$fuse_group
   );
 
   let results = (outs);

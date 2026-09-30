@@ -3,6 +3,7 @@
 
 #include "IRBuilder.h"
 #include "Core.h"
+#include "runtime/FusionPlanner.h"
 #include "runtime/KernelProfiler.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
@@ -35,7 +36,11 @@ struct XdslResult {
 
 class ModuleKey {
 public:
-  explicit ModuleKey(const std::vector<LoopDesc> &queue) {
+  // `planDigest` (FusionPlan::digest) keeps modules compiled for different
+  // groupings of the same loops apart.
+  explicit ModuleKey(const std::vector<LoopDesc> &queue,
+                     const std::string &planDigest = "") {
+    digest_ += "plan:" + planDigest + "\n";
     for (const LoopDesc &loop : queue) {
       digest_ += loop.kernel_name;
       digest_ += '|';
@@ -136,6 +141,33 @@ public:
 
   void compile_and_execute();
 
+  // Runs any queued loops. Cheap no-op when the queue is empty. Everything
+  // that lets the host observe or modify OPS data goes through this first
+  // (see the interception macros in ops/OPSWrapper.h).
+  void flushPending();
+
+  // flushPending() plus a device->host copy of `dat` when it lives on the GPU.
+  void hostAccess(ops_dat dat);
+  void hostAccessAll();
+
+  // Counters for tests and profiling.
+  struct Stats {
+    std::size_t numCompiles = 0; // module cache misses
+    std::size_t numFlushes = 0;  // non-empty queue flushes
+    std::size_t numLoops = 0;    // par_loops executed
+    std::size_t numLaunches = 0; // generated functions invoked (one per group)
+  };
+  const Stats &stats() const { return stats_; }
+  void setQueueMax(std::size_t n) { queueMax_ = n; }
+
+  // Loop fusion (see runtime/FusionPlanner.h). Defaults come from the
+  // environment; tests override them.
+  void setFusionOptions(const FusionOptions &o) { fusionOptions_ = o; }
+  const FusionOptions &fusionOptions() const { return fusionOptions_; }
+  // Grouping used by the most recent flush.
+  const FusionPlan &lastPlan() const { return lastPlan_; }
+  void resetStats() { stats_ = Stats(); }
+
   void setBackend(Backend backend) { backend_ = backend; }
   Backend backend() const { return backend_; }
 
@@ -184,8 +216,12 @@ private:
   void runBackendLowering(mlir::ModuleOp module, Backend backend);
   std::string detectNVGpuSm();
 
-  void compile();
-  void execute(mlir::ExecutionEngine &engine);
+  void compile(const FusionPlan &plan);
+  void execute(mlir::ExecutionEngine &engine, const FusionPlan &plan);
+
+  // Name of the generated function for group `gid`; must match
+  // group_func_name in xdsl_impl/ops_to_stencil.py.
+  std::string groupFunctionName(const FusedGroup &group, std::size_t gid) const;
   void registerCpuKernelSymbols(mlir::ExecutionEngine &engine);
 
   // Translates a kernel body from C++ source into MLIR via KernelIRBuilder,
@@ -233,6 +269,10 @@ public:
 
 private:
   Backend backend_ = kDefaultBackend;
+  std::size_t queueMax_ = 512; // OPS_MLIR_QUEUE_MAX; auto-flush at this length
+  Stats stats_;
+  FusionOptions fusionOptions_ = FusionOptions::fromEnv();
+  FusionPlan lastPlan_;
   std::mutex mutex_;
   std::vector<LoopDesc> queue_;
   FlushCallback flushCallback_;

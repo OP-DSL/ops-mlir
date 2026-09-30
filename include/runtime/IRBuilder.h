@@ -17,7 +17,10 @@ public:
 
   /// Build an MLIR module from a queue of captured loop descriptions.
   /// Returns the generated module, or nullptr on error.
-  mlir::ModuleOp buildModule(const std::vector<LoopDesc> &loops);
+  /// `groupIds`, when given, has one fusion-group id per loop; it is attached
+  /// as the `fuse_group` attribute so the lowering can merge those loops.
+  mlir::ModuleOp buildModule(const std::vector<LoopDesc> &loops,
+                             const std::vector<int64_t> *groupIds = nullptr);
 
   /// Print the module to a string for debugging.
   std::string moduleToString(mlir::ModuleOp module);
@@ -26,7 +29,8 @@ private:
   mlir::MLIRContext *ctx_;
 
   /// Build a single ops.par_loop operation from a LoopDesc.
-  mlir::Operation *buildParLoopOp(const LoopDesc &loop);
+  mlir::Operation *buildParLoopOp(const LoopDesc &loop,
+                                  const int64_t *groupId = nullptr);
 
   /// Convert a LoopDesc argument into an OPS argument attribute.
   mlir::Attribute buildArgAttr(const ArgDesc &arg);

@@ -257,6 +257,93 @@ int main() {
       "bad_field", /*indexRank=*/1, {},
       "assignment target must be `out->field`");
 
+  //===------------------------------------------------------------------===//
+  // Single precision
+  //===------------------------------------------------------------------===//
+
+  // A float kernel stays f32 end to end (params, literal, result).
+  {
+    std::string diagnostics;
+    mlir::func::FuncOp fn = translate(
+        ctx,
+        "float scale(float a, float b) {\n"
+        "  return 0.25f * (a + b);\n"
+        "}\n",
+        "scale", /*indexRank=*/2, {}, diagnostics);
+    bool ok = fn != nullptr;
+    std::string ir = ok ? printOp(fn) : diagnostics;
+    check(ok && ir.find("(%arg0: f32, %arg1: f32) -> f32") != std::string::npos &&
+              ir.find(": f32") != std::string::npos &&
+              ir.find("f64") == std::string::npos,
+          "f32: signature and literal stay f32", ir);
+    if (fn)
+      fn.erase();
+  }
+
+  // Integer -> float conversion targets the kernel's float type.
+  expectSuccessContaining(
+      ctx, "f32: idx converts to f32",
+      "float idx_kernel(const int *idx) {\n"
+      "  return idx[0] * 0.5f + 1.0f;\n"
+      "}\n",
+      "idx_kernel", /*indexRank=*/2, {},
+      {"arith.sitofp", "to f32", "arith.mulf", "arith.addf"});
+
+  // Mixed precision: a float promoted to double then truncated back must
+  // emit real extf/truncf rather than being folded away.
+  expectSuccessContaining(
+      ctx, "f32: mixed float/double casts",
+      "float mixed(float a, double b) {\n"
+      "  return a * b;\n"
+      "}\n",
+      "mixed", /*indexRank=*/1, {},
+      {"arith.extf", "arith.mulf", "arith.truncf"});
+
+  // Single-precision spellings of <math.h> functions.
+  expectSuccessContaining(
+      ctx, "f32: sinf / expf",
+      "float sinf(float x);\nfloat expf(float x);\n"
+      "float trig(float x) {\n"
+      "  return sinf(x) * expf(x);\n"
+      "}\n",
+      "trig", /*indexRank=*/1, {},
+      {"math.sin", "math.exp", "f32"});
+
+  // float extern constant is baked in as f32.
+  {
+    static float kFactor = 1.5f;
+    std::map<std::string, const void *> constants = {{"factor_f", &kFactor}};
+    expectSuccessContaining(
+        ctx, "f32: registered float constant",
+        "extern float factor_f;\n"
+        "float scale_by(float x) {\n"
+        "  return x * factor_f;\n"
+        "}\n",
+        "scale_by", /*indexRank=*/1, constants,
+        {"1.500000e+00 : f32", "arith.mulf"});
+  }
+
+  // Out-struct of floats with a float local: memref<Nxf32>.
+  expectSuccessContaining(
+      ctx, "f32: out-pointer with float local",
+      "struct Result { float a; float b; };\n"
+      "void two_out(float x, Result *out) {\n"
+      "  float y = x * 2.0f;\n"
+      "  out->a = y + 1.0f;\n"
+      "  out->b = y - 1.0f;\n"
+      "}\n",
+      "two_out", /*indexRank=*/2, {},
+      {"memref<2xf32>", "arith.mulf", "memref.store"});
+
+  // Negative: an out-struct mixing float and double has no single element type.
+  expectFailureContaining(
+      ctx, "f32: mixed-type out-struct rejected",
+      "struct Result { float a; double b; };\n"
+      "void bad(float x, Result *out) {\n"
+      "  out->a = x;\n"
+      "}\n",
+      "bad", /*indexRank=*/1, {}, "unsupported parameter type");
+
   if (failures == 0) {
     std::cout << "All KernelIRBuilder tests passed.\n";
     return 0;

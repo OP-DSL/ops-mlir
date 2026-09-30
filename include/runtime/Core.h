@@ -58,6 +58,10 @@ struct ArgDesc {
   int acc;
   int argtype;
   int opt;
+
+  // Bytes of a read-only ops_arg_gbl, captured when the loop is enqueued so
+  // that a host write between enqueue and flush cannot leak into the loop.
+  std::vector<char> gbl_value;
 };
 
 struct LoopDesc {

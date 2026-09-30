@@ -284,6 +284,7 @@ class ParLoopOp(IRDLOperation):
     range = attr_def(DenseArrayBase)
     args = attr_def(ArrayAttr)
     block_dims = opt_attr_def(IntegerAttr)
+    fuse_group = opt_attr_def(IntegerAttr)
 
     def arg_list(self) -> list[ArgAttr]:
         return list(self.args.data)

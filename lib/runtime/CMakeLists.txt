@@ -8,6 +8,7 @@ add_library(
 	JITEngine.cpp
 	KernelIRBuilder.cpp
 	KernelProfiler.cpp
+	FusionPlanner.cpp
 )
 
 target_include_directories(

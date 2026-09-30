@@ -266,6 +266,10 @@ public:
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addPass(mlir::createCSEPass());
 
+    // Guarded (fused, different-range) kernels put a memref.alloca_scope
+    // inside an scf.if. gpu-to-nvvm lowers alloca_scope by splitting blocks,
+    // which an scf.if region can't hold, so lower the scf.if to cf first.
+    pm.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createSCFToControlFlowPass());
     pm.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createConvertGpuOpsToNVVMOps());
     mlir::GpuNVVMAttachTargetOptions gputargetOptions;
     gputargetOptions.chip = nvgpuSm_;

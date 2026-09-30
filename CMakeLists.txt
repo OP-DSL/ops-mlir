@@ -100,6 +100,7 @@ add_subdirectory(apps)
 enable_testing()
 add_subdirectory(tools)
 add_subdirectory(unittests)
+add_subdirectory(tests)
 
 #===============================================================================
 # Compilation Database for Language Server

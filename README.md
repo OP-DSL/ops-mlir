@@ -101,6 +101,70 @@ Run the 2D Laplace example:
 ./build/apps/c/laplace_2d/laplace_2d
 ```
 
+## Lazy execution and loop fusion
+
+`ops_par_loop` only queues a loop. Queued loops run when something needs their
+results, as one compiled module (cached by the shape of the queue):
+
+- `compile_and_execute()` (explicit flush),
+- the OPS accessors that expose data to the host (`ops_dat_get_raw_pointer`,
+  `ops_dat_fetch_data*`, `ops_dat_set_data*`, `ops_print_dat_to_txtfile`,
+  `ops_reduction_result`, `ops_timing_output`, `ops_halo_transfer`,
+  `ops_exit`, ...), which flush first and, on the GPU, copy the dat back,
+- `sync_all_host_buffers()`, before reading `dat->data` directly,
+- the queue reaching `OPS_MLIR_QUEUE_MAX` loops (default 512).
+
+Read-only `ops_arg_gbl` values are captured when the loop is enqueued.
+
+At flush time the queue is split into groups of consecutive loops that each
+become one generated kernel (`include/runtime/FusionPlanner.h`). Loop *j* joins
+a group unless it would move a value between different points: a non-zero
+offset read of a dat an earlier member wrote (RAW), or a write to a dat an
+earlier member reads at a non-zero offset (WAR, e.g. the Jacobi
+`apply_stencil` / `copy` pair). Loops with reductions never fuse. Loops with
+different ranges fuse into one launch over the bounding box; each member then
+only runs where the point is inside its own range ("guarded"), provided the
+box is not larger than the members' summed volumes and any member smaller than
+the box reads point-locally.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OPS_MLIR_FUSION` | `1` | `0` disables fusion (one kernel per loop) |
+| `OPS_MLIR_FUSION_GUARDED` | `1` | `0` only fuses loops with identical ranges |
+| `OPS_MLIR_FUSION_MAX` | `8` | maximum loops per fused kernel |
+| `OPS_MLIR_FUSION_BOX_RATIO` | `1.0` | bounding box volume / summed member volumes limit |
+| `OPS_MLIR_QUEUE_MAX` | `512` | auto-flush at this queue length |
+| `OPS_MLIR_DUMP_LOWERED` | unset | print the `ops.par_loop` IR and the per-group lowered IR |
+| `OPS_MLIR_STATS` | unset | print loops / launches / flushes / compiles at exit |
+
+## Precision
+
+Kernels and dats may be `float` or `double`. The element type of each dat comes
+from the type string given to `ops_decl_dat`, and read-only scalar globals are
+`float` or `double` by `sizeof`. A loop's written dats must share a type.
+`extern` kernel constants registered with `ops_register_kernel_constant` are
+read through the pointer type the kernel header declares. The GPU used in
+development is fast in single precision only, so the GPU tests run `float`.
+
+## Tests
+
+```bash
+ctest --test-dir build                      # everything except -L gpu-fp64
+ctest --test-dir build -L cpu               # seq / OpenMP
+ctest --test-dir build -L gpu               # fp32 on the GPU
+ctest --test-dir build -L gpu-fp64          # fp64 on the GPU (correctness only)
+```
+
+- `unittests/FusionPlannerTest` and `unittests/KernelIRBuilderTest` need no JIT.
+- `tests/e2e/fusion_cases.cpp` is built for `float` and `double`
+  (`fusion_cases_f32` / `fusion_cases_f64`). Each case is compared with a host
+  reference computed in `double`, fused output is compared with unfused
+  output, and the number of launched kernels is asserted. It is also run with
+  `OPS_MLIR_FUSION=0` and `OPS_MLIR_FUSION_GUARDED=0`.
+- The test kernels live in `tests/kernels/`. `KernelIRBuilder` parses a kernel
+  header with fixed compiler flags, so precision is chosen by which thin header
+  (`kernels_f32.h` or `kernels_f64.h`) the test registers.
+
 ## Citing
 
 ```

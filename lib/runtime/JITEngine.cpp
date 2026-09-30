@@ -42,8 +42,10 @@
 #include "llvm/TargetParser/Host.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <memory>
+#include <set>
 
 #ifdef OPS_ENABLE_CUDA
 #include <cuda.h>
@@ -92,12 +94,20 @@ JITEngine::JITEngine() {
 
   // Resolve backend (without working CLI flags for now)
   backend_ = resolveBackend(0, nullptr);
+
+  if (const char *cap = std::getenv("OPS_MLIR_QUEUE_MAX"))
+    queueMax_ = static_cast<std::size_t>(std::strtoull(cap, nullptr, 10));
 }
 
 JITEngine::~JITEngine() {
   // Safe here specifically because profiler_ is a member subobject, not a
   // separate singleton -- see its declaration's comment (JITEngine.h).
   profiler_.report();
+  if (std::getenv("OPS_MLIR_STATS"))
+    llvm::errs() << "ops-mlir stats: " << stats_.numLoops << " loops, "
+                 << stats_.numLaunches << " kernel launches, "
+                 << stats_.numFlushes << " flushes, " << stats_.numCompiles
+                 << " module compiles\n";
 
   if (Py_IsInitialized()) {
     Py_FinalizeEx();
@@ -113,9 +123,31 @@ void JITEngine::enqueueParLoop(std::uintptr_t kernelToken,
                                     const char *kernelName, ops_block block,
                                     int dims, const int *range,
                                     const ops_arg *args, std::size_t nargs) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  queue_.push_back(
-      buildLoopDesc(kernelToken, kernelName, block, dims, range, args, nargs));
+  bool full;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    queue_.push_back(
+        buildLoopDesc(kernelToken, kernelName, block, dims, range, args, nargs));
+    full = queueMax_ && queue_.size() >= queueMax_;
+  }
+  // Bound the size of a compiled module (and the memory held by the queue).
+  if (full)
+    flushPending();
+}
+
+void JITEngine::flushPending() {
+  if (!queue_.empty())
+    compile_and_execute();
+}
+
+void JITEngine::hostAccess(ops_dat dat) {
+  flushPending();
+  syncHostBuffer(dat);
+}
+
+void JITEngine::hostAccessAll() {
+  flushPending();
+  syncAllHostBuffers();
 }
 
 void JITEngine::flush() {
@@ -179,6 +211,12 @@ ArgDesc JITEngine::buildArgDesc(const ops_arg &arg) {
   desc.acc = arg.acc;
   desc.argtype = arg.argtype;
   desc.opt = arg.opt;
+
+  if (arg.argtype == OPS_ARG_GBL && arg.acc == OPS_READ && arg.data) {
+    std::size_t nbytes = static_cast<std::size_t>(arg.elem_size) *
+                         static_cast<std::size_t>(std::max(arg.dim, 1));
+    desc.gbl_value.assign(arg.data, arg.data + nbytes);
+  }
 
   if (arg.argtype == OPS_ARG_DAT || arg.argtype == OPS_ARG_GBL) {
     if (arg.dat)
@@ -342,8 +380,13 @@ void JITEngine::runBackendLowering(mlir::ModuleOp module, Backend backend) {
 #endif
 }
 
-void JITEngine::compile() {
-  module = builder.buildModule(queue_);
+void JITEngine::compile(const FusionPlan &plan) {
+  std::vector<int64_t> groupIds(queue_.size(), 0);
+  for (std::size_t g = 0; g < plan.groups.size(); ++g)
+    for (std::size_t l : plan.groups[g].loops)
+      groupIds[l] = static_cast<int64_t>(g);
+
+  module = builder.buildModule(queue_, &groupIds);
 
   std::string ir = builder.moduleToString(module);
 
@@ -351,6 +394,9 @@ void JITEngine::compile() {
   llvm::outs() << "=== OPS.PAR_LOOP MLIR IR ===\n\n" << ir << "\n";
   llvm::outs().flush();
 #endif
+
+  if (std::getenv("OPS_MLIR_DUMP_LOWERED"))
+    llvm::errs() << "=== OPS.PAR_LOOP IR ===\n" << ir << "\n";
 
   XdslResult lowered = runXdslLowering(ir);
   if (!lowered.success) {
@@ -363,6 +409,12 @@ void JITEngine::compile() {
             << lowered.ir << "\n";
   llvm::outs().flush();
 #endif
+
+  // OPS_MLIR_DUMP_LOWERED=1: print the per-group IR coming out of xDSL.
+  if (std::getenv("OPS_MLIR_DUMP_LOWERED")) {
+    llvm::errs() << "=== LOWERED IR (fusion plan " << plan.digest()
+                 << ") ===\n" << lowered.ir << "\n";
+  }
 
   loweredModule_ =
     mlir::parseSourceString<mlir::ModuleOp>(lowered.ir, &ctx);
@@ -643,6 +695,8 @@ bool JITEngine::haloTransferDevice(ops_halo_group group) {
 }
 
 void haloTransferIntercepted(ops_halo_group group) {
+  // Halo exchange reads dats that queued loops may still have to produce.
+  JITEngine::instance().flushPending();
   if (JITEngine::instance().haloTransferDevice(group))
     return;
 
@@ -663,7 +717,7 @@ void JITEngine::shutdown() {
 }
 
 void exitIntercepted() {
-  JITEngine::instance().syncAllHostBuffers();
+  JITEngine::instance().hostAccessAll();
   JITEngine::instance().shutdown();
   ::ops_exit();
 }
@@ -683,22 +737,50 @@ void JITEngine::synchronizeBackend(Backend backend) {
 
 
 
+std::string JITEngine::groupFunctionName(const FusedGroup &group,
+                                         std::size_t gid) const {
+  if (group.loops.size() == 1) {
+    std::size_t loopIndex = group.loops.front();
+    return "ops_par_loop_" + queue_[loopIndex].kernel_name + "_" +
+           std::to_string(loopIndex);
+  }
+  return "ops_par_loop_group_" + std::to_string(gid);
+}
+
 /**
- * Execute the queued loops using the provided execution engine.
- * Cache execution engines for previously compiled modules to avoid recompilation.
+ * Execute the queued loops, one generated function per fusion group, using
+ * the provided execution engine. Cache execution engines for previously
+ * compiled modules to avoid recompilation.
+ *
+ * A group's function takes one buffer per distinct dat (by ops_dat index, in
+ * first-appearance order over its member loops), then the read-only scalar
+ * globals of every member loop in order -- the layout convert_group in
+ * xdsl_impl/ops_to_stencil.py emits.
 */
-void JITEngine::execute(mlir::ExecutionEngine &engine) {
-  for (std::size_t i = 0; i < queue_.size(); ++i) {
-    const LoopDesc &loop = queue_[i];
-    std::string funcName =
-        "ops_par_loop_" + loop.kernel_name + "_" + std::to_string(i);
+void JITEngine::execute(mlir::ExecutionEngine &engine, const FusionPlan &plan) {
+  lastPlan_ = plan;
+  for (std::size_t gid = 0; gid < plan.groups.size(); ++gid) {
+    const FusedGroup &group = plan.groups[gid];
+    std::string funcName = groupFunctionName(group, gid);
+
+    // Distinct dats, and which of them any member writes.
+    std::vector<const ArgDesc *> datSlots;
+    std::set<int> seen, written;
+    for (std::size_t l : group.loops) {
+      for (const ArgDesc &arg : queue_[l].args) {
+        if (arg.argtype != OPS_ARG_DAT)
+          continue;
+        if (seen.insert(arg.dat.index).second)
+          datSlots.push_back(&arg);
+        if (arg.acc == OPS_WRITE || arg.acc == OPS_RW || arg.acc == OPS_INC)
+          written.insert(arg.dat.index);
+      }
+    }
 
     std::vector<void *> datPtrs;
     std::vector<std::pair<std::uintptr_t, std::size_t>> writebacks;
-    for (const ArgDesc &arg : loop.args) {
-      if (arg.argtype != OPS_ARG_DAT)
-        continue;
-
+    for (const ArgDesc *slot : datSlots) {
+      const ArgDesc &arg = *slot;
       if (backend_ == Backend::CUDA) {
         std::size_t bytes = datByteSize(arg.dat);
         std::uintptr_t devPtr = ensureDeviceBuffer(arg.data, bytes);
@@ -709,21 +791,26 @@ void JITEngine::execute(mlir::ExecutionEngine &engine) {
           return;
         }
         datPtrs.push_back(reinterpret_cast<void *>(devPtr));
-        if (arg.acc == OPS_WRITE || arg.acc == OPS_RW || arg.acc == OPS_INC)
+        if (written.count(arg.dat.index))
           writebacks.emplace_back(arg.data, bytes);
       } else {
         datPtrs.push_back(reinterpret_cast<void *>(arg.data));
       }
     }
 
-    std::vector<double> gblScratch;
-    gblScratch.reserve(loop.args.size());
-    for (const ArgDesc &arg : loop.args) {
-      // Only read-only globals are passed as values.
-      // Ignore reduction globals.
-      if (arg.argtype != OPS_ARG_GBL || arg.acc != OPS_READ)
-        continue;
-      gblScratch.push_back(*reinterpret_cast<const double *>(arg.data));
+    // Read-only scalar globals are passed by value as f32 or f64, chosen by
+    // sizeof(T) (OPS records only the size), from the value captured when the
+    // loop was enqueued. Reduction globals are ignored.
+    std::vector<std::array<char, 8>> gblScratch;
+    for (std::size_t l : group.loops) {
+      for (const ArgDesc &arg : queue_[l].args) {
+        if (arg.argtype != OPS_ARG_GBL || arg.acc != OPS_READ)
+          continue;
+        std::array<char, 8> value{};
+        std::memcpy(value.data(), arg.gbl_value.data(),
+                    std::min<std::size_t>(arg.gbl_value.size(), value.size()));
+        gblScratch.push_back(value);
+      }
     }
 
     llvm::SmallVector<void *> packedArgs;
@@ -732,8 +819,19 @@ void JITEngine::execute(mlir::ExecutionEngine &engine) {
     for (void *&ptr : datPtrs) {
       packedArgs.push_back(&ptr);
     }
-    for (double &v : gblScratch) {
-      packedArgs.push_back(&v);
+    for (std::array<char, 8> &v : gblScratch) {
+      packedArgs.push_back(v.data());
+    }
+
+    std::string profileName = queue_[group.loops.front()].kernel_name;
+    double bytesMoved = 0.0;
+    for (std::size_t l : group.loops)
+      bytesMoved += computeDataTransferPerLoop(queue_[l]);
+    if (group.loops.size() > 1) {
+      profileName = "fused(";
+      for (std::size_t k = 0; k < group.loops.size(); ++k)
+        profileName += (k ? "+" : "") + queue_[group.loops[k]].kernel_name;
+      profileName += ")";
     }
 
 #ifdef OPS_ENABLE_DEBUG
@@ -741,6 +839,8 @@ void JITEngine::execute(mlir::ExecutionEngine &engine) {
     llvm::outs().flush();
 #endif
     auto kernelStart = profiler_.start();
+    ++stats_.numLaunches;
+    stats_.numLoops += group.loops.size();
     if (auto err = engine.invokePacked(funcName, packedArgs)) {
       llvm::errs() << "Failed to invoke '" << funcName
                   << "': " << llvm::toString(std::move(err)) << "\n";
@@ -748,7 +848,7 @@ void JITEngine::execute(mlir::ExecutionEngine &engine) {
       return;
     }
     synchronizeBackend(backend_);
-    profiler_.end(loop.kernel_name, kernelStart, computeDataTransferPerLoop(loop));
+    profiler_.end(profileName, kernelStart, bytesMoved);
 #ifdef OPS_ENABLE_CUDA
     for (const auto &[hostPtr, bytes] : writebacks) {
       auto it = deviceBuffers_.find(hostPtr);
@@ -766,15 +866,18 @@ void JITEngine::compile_and_execute() {
   if (queue_.empty())
     return;
 
-  ModuleKey key(queue_);
+  FusionPlan plan = planFusion(queue_, fusionOptions_);
+  ModuleKey key(queue_, plan.digest());
+  ++stats_.numFlushes;
 
   auto cached = engineCache_.find(key);
   if (cached != engineCache_.end()) {
-    execute(*cached->second);
+    execute(*cached->second, plan);
     return;
   }
 
-  compile();
+  ++stats_.numCompiles;
+  compile(plan);
 
   llvm::Triple targetTriple(llvm::sys::getDefaultTargetTriple());
   std::string targetLookupError;
@@ -812,10 +915,14 @@ void JITEngine::compile_and_execute() {
   engineOptions.transformer = transformer;
 
   std::string cudaRuntimePath;
+  // ExecutionEngineOptions::sharedLibPaths is an ArrayRef, so the backing
+  // storage must outlive ExecutionEngine::create() below.
+  llvm::StringRef sharedLibs[1];
   if (backend_ == Backend::CUDA) {
     if (const char *path = std::getenv("OPS_MLIR_CUDA_RUNTIME")) {
       cudaRuntimePath = path;
-      engineOptions.sharedLibPaths = {cudaRuntimePath};
+      sharedLibs[0] = cudaRuntimePath;
+      engineOptions.sharedLibPaths = sharedLibs;
     } else {
       llvm::errs() << "Warning: OPS_MLIR_CUDA_RUNTIME not set; GPU kernel "
                      "launches will fail to resolve mgpu* symbols. Set it "
@@ -855,7 +962,7 @@ void JITEngine::compile_and_execute() {
 
   mlir::ExecutionEngine &engineRef = *engine;
   engineCache_.emplace(std::move(key), std::move(engine));
-  execute(engineRef);
+  execute(engineRef, plan);
 }
 
 void JITEngine::registerCpuKernelSymbols(mlir::ExecutionEngine &engine) {

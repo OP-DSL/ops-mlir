@@ -60,9 +60,27 @@ void set_kernel_source_file(const std::string &filePath) {
   ops_mlir::JITEngine::instance().setKernelSourceFile(filePath);
 }
 
+// Runs any queued loops and brings every device-resident dat back to the host.
+// Call before reading `dat->data` directly; the OPS accessors below (fetch,
+// raw pointer, ...) do this on their own.
 void sync_all_host_buffers() {
-  ops_mlir::JITEngine::instance().syncAllHostBuffers();
+  ops_mlir::JITEngine::instance().hostAccessAll();
 }
+
+namespace ops_mlir {
+// Lazy execution: loops only run when something needs their results.
+// These are the host-visible entry points that force that.
+inline void hostRead(ops_dat dat) { JITEngine::instance().hostAccess(dat); }
+inline void hostWrote(ops_dat dat) {
+  JITEngine::instance().invalidateDeviceBuffer(
+      reinterpret_cast<std::uintptr_t>(dat->data));
+}
+inline void hostReleased(ops_dat dat, ops_access acc) {
+  if (acc != OPS_READ)
+    hostWrote(dat);
+}
+inline void hostFlush() { JITEngine::instance().flushPending(); }
+} // namespace ops_mlir
 
 // TODO: Use dat.data_d instead of deviceBuffers_. or improve the logic re copy only affected dats.
 // Invalidate cached device buffers, forcing a host->device re-copy on next use.
@@ -73,6 +91,47 @@ void sync_all_host_buffers() {
 #define ops_fetch_dat_hdf5_file(dat, file)                                   \
   (ops_mlir::JITEngine::instance().syncHostBuffer(dat),                      \
    ::ops_fetch_dat_hdf5_file(dat, file))
+
+// Host-visible accessors: run the queued loops (and copy the dat back from the
+// GPU) first; host writes invalidate the cached device copy.
+#define ops_dat_get_raw_pointer(dat, part, stencil, memspace)                \
+  (ops_mlir::hostRead(dat),                                                  \
+   ::ops_dat_get_raw_pointer(dat, part, stencil, memspace))
+#define ops_dat_release_raw_data(dat, part, acc)                             \
+  (::ops_dat_release_raw_data(dat, part, acc),                               \
+   ops_mlir::hostReleased(dat, acc))
+#define ops_dat_fetch_data(dat, part, data)                                  \
+  (ops_mlir::hostRead(dat), ::ops_dat_fetch_data(dat, part, data))
+#define ops_dat_fetch_data_memspace(dat, part, data, memspace)               \
+  (ops_mlir::hostRead(dat),                                                  \
+   ::ops_dat_fetch_data_memspace(dat, part, data, memspace))
+#define ops_dat_fetch_data_slab_memspace(dat, part, data, range, memspace)   \
+  (ops_mlir::hostRead(dat),                                                  \
+   ::ops_dat_fetch_data_slab_memspace(dat, part, data, range, memspace))
+#define ops_dat_set_data(dat, part, data)                                    \
+  (ops_mlir::hostRead(dat), ::ops_dat_set_data(dat, part, data),             \
+   ops_mlir::hostWrote(dat))
+#define ops_dat_set_data_memspace(dat, part, data, memspace)                 \
+  (ops_mlir::hostRead(dat),                                                  \
+   ::ops_dat_set_data_memspace(dat, part, data, memspace),                   \
+   ops_mlir::hostWrote(dat))
+#define ops_dat_set_data_slab_memspace(dat, part, data, range, memspace)     \
+  (ops_mlir::hostRead(dat),                                                  \
+   ::ops_dat_set_data_slab_memspace(dat, part, data, range, memspace),       \
+   ops_mlir::hostWrote(dat))
+#define ops_get_data(dat) (ops_mlir::hostRead(dat), ::ops_get_data(dat))
+#define ops_print_dat_to_txtfile(dat, file)                                  \
+  (ops_mlir::hostRead(dat), ::ops_print_dat_to_txtfile(dat, file))
+#define ops_dat_copy(orig) (ops_mlir::hostRead(orig), ::ops_dat_copy(orig))
+#define ops_dat_deep_copy(target, orig)                                      \
+  (ops_mlir::hostRead(orig), ops_mlir::hostRead(target),                     \
+   ::ops_dat_deep_copy(target, orig), ops_mlir::hostWrote(target))
+#define ops_reduction_result(handle, ptr)                                    \
+  (ops_mlir::hostFlush(), ::ops_reduction_result(handle, ptr))
+#define ops_timing_output(stream)                                            \
+  (ops_mlir::hostFlush(), ::ops_timing_output(stream))
+#define ops_timing_output_stdout()                                           \
+  (ops_mlir::hostFlush(), ::ops_timing_output_stdout())
 
 // Tear down JITEngine's cached ExecutionEngines deterministically before
 // the real ops_exit runs -- see JITEngine::shutdown's comment for why.

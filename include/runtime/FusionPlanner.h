@@ -1,0 +1,79 @@
+//===- FusionPlanner.h - Dependence-aware grouping of queued loops -------===//
+//
+// Part of OPS-MLIR Project
+//
+// This file is distributed under the MIT License.
+// See LICENSE.txt for details.
+//
+// Decides which consecutive queued par_loops can run as a single generated
+// kernel. Pure C++ over LoopDesc: no MLIR, no GPU, unit-testable.
+//
+// Fusing loop j into a group that already holds loop i (i before j) executes
+// both at each point p, in order, instead of running i over its whole range
+// and then j. That is equivalent iff no value flows between different points:
+//   * i writes D and j reads D at a non-zero offset  (RAW across points)
+//   * i reads D at a non-zero offset and j writes D  (WAR across points)
+// are the only ways it can, so those pairs stay separate. This holds for any
+// pair of ranges: a point outside a member's range simply skips that member
+// (a "guarded" group), and reads of a dat that member would have written see
+// the old value, exactly as in sequential execution.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef OPS_MLIR_RUNTIME_FUSION_PLANNER_H
+#define OPS_MLIR_RUNTIME_FUSION_PLANNER_H
+
+#include "runtime/Core.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace ops_mlir {
+
+struct FusionOptions {
+  bool enabled = true;
+  // Upper bound on loops per group (register pressure / kernel size).
+  std::size_t maxGroupSize = 8;
+  // Fuse loops with different ranges into one guarded launch over the
+  // bounding box.
+  bool allowGuarded = true;
+  // A guarded group is only formed if
+  //   volume(bounding box) <= boxRatio * sum(member volumes)
+  // so a thin boundary loop does not drag a full-grid launch along.
+  double boxRatio = 1.0;
+
+  /// Reads OPS_MLIR_FUSION, OPS_MLIR_FUSION_MAX, OPS_MLIR_FUSION_GUARDED and
+  /// OPS_MLIR_FUSION_BOX_RATIO on top of the defaults.
+  static FusionOptions fromEnv();
+};
+
+struct FusedGroup {
+  std::vector<std::size_t> loops; // indices into the queue, ascending
+  bool guarded = false;           // members have differing ranges
+  std::vector<int64_t> range;     // bounding box, OPS order [lo0,hi0,lo1,hi1..]
+};
+
+struct FusionPlan {
+  std::vector<FusedGroup> groups;
+
+  /// Compact text form ("0,1,2|3|4,5"), part of the compiled-module cache key.
+  std::string digest() const;
+};
+
+/// Groups the queue. Every loop lands in exactly one group, in order.
+FusionPlan planFusion(const std::vector<LoopDesc> &queue,
+                      const FusionOptions &options);
+
+/// True if every point of the stencil is the zero offset with unit stride,
+/// i.e. the access only touches the iteration point.
+bool isPointLocal(const StencilDesc &stencil);
+
+/// True if the loop has a reduction (a non-read-only global): those loops
+/// are never fused.
+bool hasReduction(const LoopDesc &loop);
+
+} // namespace ops_mlir
+
+#endif // OPS_MLIR_RUNTIME_FUSION_PLANNER_H
