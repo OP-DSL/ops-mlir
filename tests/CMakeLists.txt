@@ -47,6 +47,11 @@ foreach(prec f64 f32)
     ENV OPS_MLIR_FUSION=0)
   add_ops_e2e_test(fusion_cases_${prec} seq SUFFIX _sameRange LABELS cpu
     ENV OPS_MLIR_FUSION_GUARDED=0)
+  # Adjacent-only grouping (no dependence DAG), and latest-group placement.
+  add_ops_e2e_test(fusion_cases_${prec} seq SUFFIX _noReorder LABELS cpu
+    ENV OPS_MLIR_FUSION_REORDER=0)
+  add_ops_e2e_test(fusion_cases_${prec} seq SUFFIX _latest LABELS cpu
+    ENV OPS_MLIR_FUSION_PLACEMENT=latest)
 endforeach()
 
 if(OPS_ENABLE_CUDA)
@@ -56,6 +61,8 @@ if(OPS_ENABLE_CUDA)
     ENV OPS_MLIR_FUSION=0)
   add_ops_e2e_test(fusion_cases_f32 cuda SUFFIX _sameRange LABELS gpu
     ENV OPS_MLIR_FUSION_GUARDED=0)
+  add_ops_e2e_test(fusion_cases_f32 cuda SUFFIX _noReorder LABELS gpu
+    ENV OPS_MLIR_FUSION_REORDER=0)
   # fp64 on this GPU is correctness-only; opt in with -L gpu-fp64.
   add_ops_e2e_test(fusion_cases_f64 cuda LABELS gpu-fp64)
 endif()

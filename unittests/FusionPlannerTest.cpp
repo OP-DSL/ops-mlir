@@ -7,8 +7,11 @@
 
 #include "runtime/FusionPlanner.h"
 
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <map>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -294,6 +297,246 @@ int main() {
     for (std::size_t i = 0; ok && i < flat.size(); ++i)
       ok = flat[i] == i;
     check(ok, "each loop appears once, in order", p.digest());
+  }
+
+  //===------------------------------------------------------------------===//
+  // Reordering (DAG planner)
+  //===------------------------------------------------------------------===//
+
+  auto consecutive = [] {
+    FusionOptions o;
+    o.reorder = false;
+    return o;
+  };
+  auto latest = [] {
+    FusionOptions o;
+    o.placement = FusionOptions::Placement::Latest;
+    return o;
+  };
+
+  // Two interleaved chains, each link a stencil read of the previous output:
+  //   a1 a2 b1 b2 a3 b3     (a_k reads a_{k-1} 5pt; same for b)
+  // Adjacent grouping is forced into 4 kernels; the DAG planner runs the
+  // independent chains side by side in 3.
+  {
+    std::vector<LoopDesc> q = {
+        loop({datArg(1, OPS_READ), datArg(2, OPS_WRITE)}),        // a1
+        loop({datArg(2, OPS_READ, true), datArg(3, OPS_WRITE)}),  // a2
+        loop({datArg(11, OPS_READ), datArg(12, OPS_WRITE)}),      // b1
+        loop({datArg(12, OPS_READ, true), datArg(13, OPS_WRITE)}),// b2
+        loop({datArg(3, OPS_READ, true), datArg(4, OPS_WRITE)}),  // a3
+        loop({datArg(13, OPS_READ, true), datArg(14, OPS_WRITE)}) // b3
+    };
+    check(plan(q, consecutive()) == "0|1,2|3,4|5", "consecutive planner: 4 kernels",
+          plan(q, consecutive()));
+    check(plan(q) == "0,2|1,3|4,5", "DAG planner: independent chains side by side",
+          plan(q));
+    check(plan(q, latest()) == "0|1,2|3,4|5", "latest placement matches adjacent grouping",
+          plan(q, latest()));
+    check(planFusion(q, consecutive()).numReordered() == 0, "consecutive planner never reorders");
+    check(planFusion(q, FusionOptions()).numReordered() > 0, "DAG planner reports reordering");
+  }
+
+  // Footprints, not whole dats, define dependences: a stencil reader whose
+  // reach does not touch what an earlier loop wrote is independent of it, so
+  // a later loop can hoist past it.
+  {
+    const std::vector<int64_t> strip = {-1, 0, -1, 11}, inner = {3, 10, 0, 10};
+    std::vector<LoopDesc> q = {
+        loop({datArg(1, OPS_WRITE)}, strip),                        // L0 strip
+        loop({datArg(1, OPS_READ, true), datArg(2, OPS_WRITE)}, inner), // L1 reads dat1 far from the strip
+        loop({datArg(3, OPS_WRITE)}, strip)};                       // L2 strip
+    check(plan(q, consecutive()) == "0|1|2", "consecutive: three kernels", plan(q, consecutive()));
+    check(plan(q) == "0,2|1", "DAG: hoists L2 next to L0", plan(q));
+    // The same read overlapping the strip IS a dependence.
+    const std::vector<int64_t> near = {0, 10, 0, 10};
+    std::vector<LoopDesc> q2 = {
+        loop({datArg(1, OPS_WRITE)}, strip),
+        loop({datArg(1, OPS_READ, true), datArg(2, OPS_WRITE)}, near),
+        loop({datArg(3, OPS_WRITE)}, strip)};
+    check(plan(q2) == "0,2|1", "DAG: dependent reader still ordered after L0", plan(q2));
+    auto p2 = planFusion(q2, FusionOptions());
+    check(p2.groups.size() == 2 && p2.groups[0].loops.front() == 0 &&
+              p2.groups[1].loops.front() == 1,
+          "DAG: reader runs after its producer");
+  }
+
+  // A loop never moves across a reduction barrier.
+  {
+    std::vector<LoopDesc> q = {loop({datArg(1, OPS_WRITE)}),
+                               loop({datArg(1, OPS_READ), reductionArg()}),
+                               loop({datArg(2, OPS_WRITE)})};
+    check(plan(q) == "0|1|2", "DAG: reduction is a barrier for reordering", plan(q));
+  }
+
+  // A loop may not jump ahead of a loop it depends on, even one it could
+  // otherwise fuse with: c2 needs b (point), b needs a (stencil).
+  {
+    std::vector<LoopDesc> q = {
+        loop({datArg(1, OPS_WRITE)}),                                // 0: a
+        loop({datArg(1, OPS_READ, true), datArg(2, OPS_WRITE)}),     // 1: b = f(a)
+        loop({datArg(2, OPS_READ), datArg(3, OPS_WRITE)})};          // 2: c = g(b)
+    check(plan(q) == "0|1,2", "DAG: dependent loop stays behind its producer", plan(q));
+  }
+
+  //===------------------------------------------------------------------===//
+  // Randomized oracle: a plan must compute exactly what program order does
+  //===------------------------------------------------------------------===//
+  //
+  // Random 1D programs over a few dats. Reference: run the loops in order.
+  // Candidate: run the plan's groups in order; inside a group visit each box
+  // point and, at each, every member whose range contains it, in member
+  // order, writing in place. Any planner bug (a wrongly fused WAR/RAW, a move
+  // across a dependence, a bad bounding box) shows up as different data.
+  {
+    static const int kOffsetSets[][4] = {{0, 0, 0, 0}, {-1, 0, 1, 3}, {1, 0, 0, 2}, {-1, 0, 0, 2}};
+    static const int kNumPts[] = {1, 3, 2, 2};
+    static const int kOne[1] = {1};
+    const int kGrid = 14, kBase = 2; // dat cell index = x + kBase
+    const int64_t kMod = 1000003;
+
+    struct Arg { int dat, acc, st; };
+    struct Prog { std::vector<std::vector<Arg>> loops; std::vector<std::pair<int, int>> ranges; };
+
+    std::mt19937 rng(12345);
+    auto rnd = [&](int lo, int hi) { return std::uniform_int_distribution<int>(lo, hi)(rng); };
+
+    auto toQueue = [&](const Prog &pr) {
+      std::vector<LoopDesc> q;
+      for (std::size_t i = 0; i < pr.loops.size(); ++i) {
+        LoopDesc l;
+        l.kernel_name = "k";
+        l.block = 1;
+        l.dims = 1;
+        l.range = {pr.ranges[i].first, pr.ranges[i].second};
+        for (const Arg &a : pr.loops[i]) {
+          ArgDesc d{};
+          d.argtype = OPS_ARG_DAT;
+          d.acc = a.acc;
+          d.dat.index = a.dat;
+          d.stencil.dims = 1;
+          d.stencil.points = kNumPts[a.st];
+          d.stencil.stencil = reinterpret_cast<std::uintptr_t>(kOffsetSets[a.st]);
+          d.stencil.stride = reinterpret_cast<std::uintptr_t>(kOne);
+          l.args.push_back(d);
+        }
+        q.push_back(std::move(l));
+      }
+      return q;
+    };
+
+    using Grid = std::vector<std::vector<int64_t>>;
+    auto execAt = [&](const Prog &pr, std::size_t li, int x, Grid &g) {
+      int64_t v = 7 * (li + 1);
+      for (const Arg &a : pr.loops[li]) {
+        if (a.acc == OPS_WRITE)
+          continue;
+        for (int k = 0; k < kNumPts[a.st]; ++k)
+          v = (v * 31 + g[a.dat][x + kOffsetSets[a.st][k] + kBase]) % kMod;
+      }
+      for (const Arg &a : pr.loops[li])
+        if (a.acc != OPS_READ)
+          g[a.dat][x + kBase] = (v + 17 * a.dat) % kMod;
+    };
+
+    auto freshGrid = [&] {
+      Grid g(4, std::vector<int64_t>(kGrid + 2 * kBase));
+      for (int d = 0; d < 4; ++d)
+        for (int x = 0; x < kGrid + 2 * kBase; ++x)
+          g[d][x] = (d * 101 + x * 13 + 5) % kMod;
+      return g;
+    };
+
+    int bad = 0, reordered = 0, fusedLoops = 0, total = 0;
+    std::string firstBad;
+    for (int trial = 0; trial < 4000; ++trial) {
+      Prog pr;
+      int nloops = rnd(2, 12);
+      for (int i = 0; i < nloops; ++i) {
+        std::vector<Arg> args;
+        int nargs = rnd(1, 3);
+        std::map<int, bool> used;
+        bool writes = false;
+        for (int a = 0; a < nargs; ++a) {
+          int dat = rnd(0, 3);
+          if (used[dat])
+            continue;
+          used[dat] = true;
+          int mode = rnd(0, 2);
+          int acc = mode == 0 ? OPS_READ : mode == 1 ? OPS_WRITE : OPS_RW;
+          // OPS requires a dat written in a loop to be accessed point-locally.
+          int st = acc == OPS_READ ? rnd(0, 3) : 0;
+          writes |= acc != OPS_READ;
+          args.push_back({dat, acc, st});
+        }
+        if (!writes)
+          args.push_back({rnd(0, 3), OPS_WRITE, 0});
+        // A dat read through a stencil must not also be written by this loop.
+        std::map<int, bool> wr;
+        for (const Arg &a : args) if (a.acc != OPS_READ) wr[a.dat] = true;
+        for (Arg &a : args) if (a.acc == OPS_READ && wr[a.dat]) a.st = 0;
+        // Drop duplicate dats the fallback write may have created.
+        std::vector<Arg> uniq; std::map<int, int> seen;
+        for (const Arg &a : args) if (seen[a.dat]++ == 0) uniq.push_back(a);
+        pr.loops.push_back(uniq);
+        int lo = rnd(0, kGrid - 2), hi = rnd(lo + 1, kGrid);
+        pr.ranges.push_back({lo, hi});
+      }
+      std::vector<LoopDesc> q = toQueue(pr);
+
+      Grid ref = freshGrid();
+      for (std::size_t li = 0; li < q.size(); ++li)
+        for (int x = pr.ranges[li].first; x < pr.ranges[li].second; ++x)
+          execAt(pr, li, x, ref);
+
+      for (int variant = 0; variant < 6; ++variant) {
+        FusionOptions o;
+        o.reorder = variant % 2 == 0;
+        o.allowGuarded = variant % 3 != 0;
+        o.boxRatio = variant < 3 ? 1.0 : 50.0;
+        o.maxGroupSize = variant == 5 ? 3 : 8;
+        o.placement = variant == 4 ? FusionOptions::Placement::Latest
+                                   : FusionOptions::Placement::Earliest;
+        FusionPlan plan = planFusion(q, o);
+
+        // Every loop exactly once.
+        std::vector<int> seenLoop(q.size(), 0);
+        bool wellFormed = true;
+        for (const FusedGroup &g : plan.groups) {
+          for (std::size_t k = 0; k < g.loops.size(); ++k) {
+            wellFormed &= ++seenLoop[g.loops[k]] == 1;
+            wellFormed &= k == 0 || g.loops[k - 1] < g.loops[k];
+          }
+        }
+        for (int c : seenLoop) wellFormed &= c == 1;
+
+        Grid got = freshGrid();
+        for (const FusedGroup &g : plan.groups) {
+          int lo = g.range[0], hi = g.range[1];
+          for (int x = lo; x < hi; ++x)
+            for (std::size_t li : g.loops)
+              if (x >= pr.ranges[li].first && x < pr.ranges[li].second)
+                execAt(pr, li, x, got);
+          // The group's box must cover every member.
+          for (std::size_t li : g.loops)
+            wellFormed &= pr.ranges[li].first >= lo && pr.ranges[li].second <= hi;
+          if (g.loops.size() > 1) fusedLoops += static_cast<int>(g.loops.size());
+        }
+        ++total;
+        if (plan.numReordered() > 0) ++reordered;
+        if (!wellFormed || got != ref) {
+          if (!bad++)
+            firstBad = "trial " + std::to_string(trial) + " variant " + std::to_string(variant) +
+                       " plan " + plan.digest() + (wellFormed ? "" : " (malformed)");
+        }
+      }
+    }
+    check(bad == 0, "randomized oracle: plan == program order (" + std::to_string(total) + " plans)",
+          std::to_string(bad) + " mismatches; first: " + firstBad);
+    check(reordered > 100, "randomized oracle exercises reordering",
+          "only " + std::to_string(reordered) + " reordered plans");
+    check(fusedLoops > 1000, "randomized oracle exercises fusion",
+          "only " + std::to_string(fusedLoops) + " fused loop slots");
   }
 
   if (failures == 0) {

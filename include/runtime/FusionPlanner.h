@@ -5,8 +5,25 @@
 // This file is distributed under the MIT License.
 // See LICENSE.txt for details.
 //
-// Decides which consecutive queued par_loops can run as a single generated
-// kernel. Pure C++ over LoopDesc: no MLIR, no GPU, unit-testable.
+// Decides which queued par_loops run together as a single generated kernel,
+// and in what order the kernels run. Pure C++ over LoopDesc: no MLIR, no GPU,
+// unit-testable.
+//
+// Two planners share the legality rules below:
+//   * consecutive (OPS_MLIR_FUSION_REORDER=0): only adjacent loops fuse;
+//   * DAG (default): a dependence graph over the whole queue lets independent
+//     loops be hoisted next to the loops they can fuse with, so a loop that
+//     cannot join its neighbours may still join an earlier kernel.
+//
+// DAG planner. Between loops i < j that touch the same dat there is an edge
+// when their footprints overlap (write range vs. read range expanded by the
+// stencil, for RAW; likewise WAR, WAW). Loops joined by no path may run in
+// either order. An edge is *fusable* when the value only moves within a
+// point (RAW: j reads D at the zero offset; WAR: i read D at the zero
+// offset). Loops are placed, in program order, into an existing group when
+// every edge to a member is fusable and the groups stay acyclic (so no loop
+// is moved across one it depends on); kernels are emitted in a topological
+// order of the groups.
 //
 // Fusing loop j into a group that already holds loop i (i before j) executes
 // both at each point p, in order, instead of running i over its whole range
@@ -39,30 +56,45 @@ struct FusionOptions {
   // Fuse loops with different ranges into one guarded launch over the
   // bounding box.
   bool allowGuarded = true;
+  // Build a dependence DAG and allow loops to move past independent ones.
+  bool reorder = true;
+  // Which legal group a loop joins when the DAG planner has a choice:
+  // the earliest one (shortest dependence chains first; most fusion) or the
+  // latest (keeps loops near their program-order neighbours).
+  enum class Placement { Earliest, Latest };
+  Placement placement = Placement::Earliest;
   // A guarded group is only formed if
   //   volume(bounding box) <= boxRatio * sum(member volumes)
   // so a thin boundary loop does not drag a full-grid launch along.
   double boxRatio = 1.0;
 
-  /// Reads OPS_MLIR_FUSION, OPS_MLIR_FUSION_MAX, OPS_MLIR_FUSION_GUARDED and
-  /// OPS_MLIR_FUSION_BOX_RATIO on top of the defaults.
+  /// Reads OPS_MLIR_FUSION, OPS_MLIR_FUSION_MAX, OPS_MLIR_FUSION_GUARDED,
+  /// OPS_MLIR_FUSION_BOX_RATIO, OPS_MLIR_FUSION_REORDER and
+  /// OPS_MLIR_FUSION_PLACEMENT (earliest|latest) on top of the defaults.
   static FusionOptions fromEnv();
 };
 
 struct FusedGroup {
-  std::vector<std::size_t> loops; // indices into the queue, ascending
+  std::vector<std::size_t> loops; // indices into the queue, ascending (also
+                                  // a valid order to run them in)
   bool guarded = false;           // members have differing ranges
   std::vector<int64_t> range;     // bounding box, OPS order [lo0,hi0,lo1,hi1..]
 };
 
 struct FusionPlan {
-  std::vector<FusedGroup> groups;
+  std::vector<FusedGroup> groups; // in execution order
+
+  /// Number of loops that execute in a different position relative to the
+  /// others than program order (0 for the consecutive planner).
+  std::size_t numReordered() const;
 
   /// Compact text form ("0,1,2|3|4,5"), part of the compiled-module cache key.
   std::string digest() const;
 };
 
-/// Groups the queue. Every loop lands in exactly one group, in order.
+/// Groups the queue. Every loop lands in exactly one group. With reordering
+/// off the groups are runs of adjacent loops; with it on they may interleave
+/// but every dependence is respected.
 FusionPlan planFusion(const std::vector<LoopDesc> &queue,
                       const FusionOptions &options);
 

@@ -424,6 +424,98 @@ void caseFusedVsUnfused(Env &e) {
          "fused=" + std::to_string(fusedLaunches) + " unfused=" + std::to_string(unfusedLaunches));
 }
 
+//===----------------------------------------------------------------------===//
+// Reordering
+//===----------------------------------------------------------------------===//
+
+// Two independent chains whose links are stencil reads of the previous link,
+// enqueued interleaved:   a1 a2 b1 b2 a3 b3
+// Adjacent grouping needs 5 kernels; the dependence DAG runs both chains side
+// by side in 3 ([a1 b1] [a2 b2] [a3 b3]).
+struct Chains { ops_dat A3, B3; };
+
+Chains interleavedChains(Env &e, const char *tag) {
+  auto nm = [&](const char *n) { return std::string(tag) + n; };
+  ops_dat A0 = newDat(e, nm("A0").c_str()), A1 = newDat(e, nm("A1").c_str()),
+          A2 = newDat(e, nm("A2").c_str()), A3 = newDat(e, nm("A3").c_str());
+  ops_dat B0 = newDat(e, nm("B0").c_str()), B1 = newDat(e, nm("B1").c_str()),
+          B2 = newDat(e, nm("B2").c_str()), B3 = newDat(e, nm("B3").c_str());
+  // Inputs, and zeroed halos for the stencil outputs.
+  for (ops_dat d : {A0, B0})
+    ops_par_loop(k_init, "k_init", e.block, 2, e.full, ARG_W(d, e.s00), ops_arg_idx());
+  for (ops_dat d : {A1, A2, A3, B1, B2, B3})
+    ops_par_loop(k_zero, "k_zero", e.block, 2, e.full, ARG_W(d, e.s00));
+  flushAndSync();
+
+  beginCase();
+  ops_par_loop(k_scale2, "k_scale2", e.block, 2, e.full, ARG_R(A0, e.s00), ARG_W(A1, e.s00));      // a1
+  ops_par_loop(k_lap5, "k_lap5", e.block, 2, e.interior, ARG_R(A1, e.s5), ARG_W(A2, e.s00));       // a2
+  ops_par_loop(k_plus1, "k_plus1", e.block, 2, e.full, ARG_R(B0, e.s00), ARG_W(B1, e.s00));        // b1
+  ops_par_loop(k_lap5, "k_lap5", e.block, 2, e.interior, ARG_R(B1, e.s5), ARG_W(B2, e.s00));       // b2
+  ops_par_loop(k_lap5, "k_lap5", e.block, 2, e.interior, ARG_R(A2, e.s5), ARG_W(A3, e.s00));       // a3
+  ops_par_loop(k_lap5, "k_lap5", e.block, 2, e.interior, ARG_R(B2, e.s5), ARG_W(B3, e.s00));       // b3
+  flushAndSync();
+  return {A3, B3};
+}
+
+void caseReorder(Env &e) {
+  auto &jit = jitEngine();
+  FusionOptions saved = jit.fusionOptions();
+
+  // Host reference (halos of the stencil outputs are zero).
+  auto a1 = [](int i, int j) { return 2 * initRef(i, j); };
+  auto b1 = [](int i, int j) { return initRef(i, j) + 1; };
+  auto lap = [](auto f, int i, int j) { return 0.25 * (f(i + 1, j) + f(i - 1, j) + f(i, j + 1) + f(i, j - 1)); };
+  auto inside = [](int i, int j) { return i >= 0 && i < NX && j >= 0 && j < NY; };
+  auto a2 = [&](int i, int j) { return inside(i, j) ? lap(a1, i, j) : 0.0; };
+  auto b2 = [&](int i, int j) { return inside(i, j) ? lap(b1, i, j) : 0.0; };
+  auto a3 = [&](int i, int j) { return lap(a2, i, j); };
+  auto b3 = [&](int i, int j) { return lap(b2, i, j); };
+
+  FusionOptions dag = saved, adjacent = saved;
+  dag.reorder = true;
+  adjacent.reorder = false;
+
+  jit.setFusionOptions(dag);
+  Chains d = interleavedChains(e, "rd");
+  size_t dagLaunches = jit.stats().numLaunches;
+  size_t dagReordered = jit.lastPlan().numReordered();
+
+  jit.setFusionOptions(adjacent);
+  Chains c = interleavedChains(e, "rc");
+  size_t adjLaunches = jit.stats().numLaunches;
+  jit.setFusionOptions(saved);
+
+  std::string msg;
+  bool ok = compare<real_t>(view(d.A3), a3, 0, NX, 0, NY, tolerance<real_t>(4), msg) &&
+            compare<real_t>(view(d.B3), b3, 0, NX, 0, NY, tolerance<real_t>(4), msg);
+  check("reorder_matches_reference", ok, msg);
+
+  bool cpu = jit.backend() != ops_mlir::Backend::CUDA;
+  bool same = true;
+  if (cpu)
+    same = identical<real_t>(view(d.A3), view(c.A3), 0, NX, 0, NY) &&
+           identical<real_t>(view(d.B3), view(c.B3), 0, NX, 0, NY);
+  else {
+    Field<real_t> fa = view(c.A3), fb = view(c.B3);
+    same = compare<real_t>(view(d.A3), [&](int i, int j) { return fa.at(i, j); }, 0, NX, 0, NY, tolerance<real_t>(4), msg) &&
+           compare<real_t>(view(d.B3), [&](int i, int j) { return fb.at(i, j); }, 0, NX, 0, NY, tolerance<real_t>(4), msg);
+  }
+  check("reorder_equals_adjacent", same, msg);
+
+  if (saved.enabled) {
+    // 3 kernels when loops can move; 5 when only neighbours fuse (b1, a full-
+    // range loop, cannot join a2's group: a2 reads a stencil on a smaller range).
+    report(dagLaunches == 3 && adjLaunches == 5 && dagReordered > 0,
+           std::string(PREC_NAME) + "/reorder/launches",
+           "dag=" + std::to_string(dagLaunches) + " adjacent=" + std::to_string(adjLaunches) +
+               " reordered=" + std::to_string(dagReordered));
+  } else {
+    report(dagLaunches == 6 && adjLaunches == 6, std::string(PREC_NAME) + "/reorder/launches",
+           "fusion off: dag=" + std::to_string(dagLaunches) + " adjacent=" + std::to_string(adjLaunches));
+  }
+}
+
 } // namespace
 
 int main(int argc, const char **argv) {
@@ -452,6 +544,7 @@ int main(int argc, const char **argv) {
   caseQueueCap(e);
   caseModuleCache(e);
   caseFusedVsUnfused(e);
+  caseReorder(e);
 
   std::printf("%d passed, %d failed\n", passes, failures);
   ops_exit();
