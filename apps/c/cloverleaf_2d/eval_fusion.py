@@ -61,10 +61,15 @@ def parse(err: str, out: str) -> dict:
     m = re.search(r"coverage: (\d+) loops JIT-compiled, (\d+) through", err)
     if m:
         r.update(jit_loops=int(m[1]), host_loops=int(m[2]))
+    m = re.search(r"fallback kernels \(seconds\):(.*)", err)
+    if m:   # which kernels stay on the stock implementation, and what they cost
+        r["host_kernels"] = {k: float(v) for k, v in re.findall(r"(\S+)=([0-9.]+)", m[1])}
     m = re.search(r"fallback total seconds: ([0-9.]+)", err)
     r["host_s"] = float(m[1]) if m else 0.0
+    m = re.search(r"plus ([0-9.]+) copying", err)
+    r["host_copy_s"] = float(m[1]) if m else 0.0
     if "execute_s" in r:
-        r["steady_s"] = r["execute_s"] + r["host_s"]
+        r["steady_s"] = r["execute_s"] + r["host_s"] + r["host_copy_s"]
     return r
 
 

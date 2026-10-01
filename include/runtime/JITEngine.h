@@ -338,6 +338,7 @@ private:
   FlushCallback flushCallback_;
   std::vector<std::string> kernelSourceFiles_;
   std::string kernelPreamble_;
+  double hostCopySeconds_ = 0; // device-to-host copies ahead of fallback loops
   std::unordered_map<std::uintptr_t, std::string> kernelSymbols_; // by kernel address
   std::map<std::string, const void *> kernelConstants_;
 

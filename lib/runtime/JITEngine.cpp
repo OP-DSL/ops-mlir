@@ -173,7 +173,9 @@ JITEngine::~JITEngine() {
       double total = 0;
       for (const auto &kv : hostSeconds_)
         total += kv.second;
-      llvm::errs() << "ops-mlir fallback total seconds: " << llvm::format("%.3f", total) << "\n";
+      llvm::errs() << "ops-mlir fallback total seconds: " << llvm::format("%.3f", total)
+                   << " plus " << llvm::format("%.3f", hostCopySeconds_)
+                   << " copying their dats from the device\n";
       llvm::errs() << "ops-mlir fallback kernels (seconds):";
       for (const auto &[k, t] : hostSeconds_)
         llvm::errs() << " " << k << "=" << llvm::format("%.3f", t);
@@ -1249,9 +1251,11 @@ void JITEngine::syncHostBufferPtr(std::uintptr_t hostPtr) {
 // current on the host first, and any dat it writes makes the device copy stale.
 void JITEngine::runHostLoop(const LoopDesc &loop) {
   ++stats_.numHostLoops;
+  auto copyStart = std::chrono::steady_clock::now();
   for (const ArgDesc &arg : loop.args)
     if (arg.argtype == OPS_ARG_DAT)
       syncHostBufferPtr(arg.data);
+  hostCopySeconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - copyStart).count();
   auto start = std::chrono::steady_clock::now();
   loop.fallback();
   hostSeconds_[loop.kernel_name] +=
