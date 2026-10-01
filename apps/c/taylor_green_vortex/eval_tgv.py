@@ -475,7 +475,8 @@ def ms(x):
 
 
 def findings(R):
-    """Headline results, with the numbers taken from the data."""
+    """Headline results. Numbers come from the data, and so do the claims: a statement
+    such as "memory-bound" is only made when the numbers support it."""
     t = R["timing"]
     mn = R["meta"].get("main_n", 128)
     g32, g64 = t[f"opensbli_f32/cuda/N{mn}"], t[f"opensbli/cuda/N{mn}"]
@@ -484,14 +485,13 @@ def findings(R):
     def sp(tab, a, b):
         return tab[a]["per_iter"] / tab[b]["per_iter"]
     st = {k: v["stage"] for k, v in R["plan"].items()}
-    L = []
-    L.append("## Summary\n")
+    L = ["## Summary\n"]
     L.append(f"* **One Runge-Kutta stage** queues {st['unfused']['loops']} loops. Adjacent-only fusion turns them into "
              f"{st['adjacent, same-range']['kernels']} kernels; the dependence DAG into {st[DEFAULT]['kernels']}, "
              f"moving {st[DEFAULT]['moved']} loops past independent ones. Launches per iteration (including the "
              f"filter steps): {g32['unfused']['launches_per_iter']:.0f} → {g32['adjacent, same-range']['launches_per_iter']:.0f} "
              f"→ {g32[DEFAULT]['launches_per_iter']:.0f}.")
-    L.append(f"* **Single precision on the GPU ({mn}³):** {ms(g32['unfused']['per_iter'])} ms/iteration unfused → "
+    L.append(f"* **Single precision on {gpu} ({mn}³):** {ms(g32['unfused']['per_iter'])} ms/iteration unfused → "
              f"{ms(g32['adjacent, same-range']['per_iter'])} ms with adjacent same-range fusion "
              f"({sp(g32,'unfused','adjacent, same-range'):.2f}×) → {ms(g32[DEFAULT]['per_iter'])} ms with the DAG planner "
              f"({sp(g32,'unfused',DEFAULT):.2f}×). Most of the gain is ordinary fusion; reordering adds "
@@ -500,14 +500,31 @@ def findings(R):
     if "bandwidth" in R:
         bu, bf = R["bandwidth"]["unfused"]["stage_bytes"], R["bandwidth"][DEFAULT]["stage_bytes"]
         ku, kf = g32["unfused"]["breakdown"]["kernel"], g32[DEFAULT]["breakdown"]["kernel"]
-        L.append(f"* **Why:** the kernels are memory-bound. The byte model predicts {bu/bf:.2f}× less traffic; the measured "
-                 f"kernel time drops {ku/kf:.2f}×, and the modelled bandwidth is {3*bu/ku/1e9:.0f} GB/s unfused against "
-                 f"{3*bf/kf/1e9:.0f} GB/s fused (peak {peak} GB/s). Host overhead (enqueue, planning, cache key, argument "
-                 f"packing) is under 4% of an iteration, so cutting launches was not the gain; removing memory traffic was.")
-    L.append(f"* **Double precision on the GPU** gains only {sp(g64,'unfused',DEFAULT):.2f}× "
-             f"({ms(g64['unfused']['per_iter'])} → {ms(g64[DEFAULT]['per_iter'])} ms): this GPU's fp64 rate, not memory "
-             f"bandwidth, is the limit, so saved traffic buys little. Single precision is "
-             f"{g64[DEFAULT]['per_iter']/g32[DEFAULT]['per_iter']:.1f}× faster than double here.")
+        r_traffic, r_time = bu / bf, ku / kf
+        bw_u, bw_f = 3 * bu / ku / 1e9, 3 * bf / kf / 1e9
+        host = lambda tt: (tt["breakdown"]["enqueue"] + tt["breakdown"]["plan"] + tt["breakdown"]["execute"]
+                           - tt["breakdown"]["kernel"]) / tt["per_iter"]
+        hostpct = max(host(g32["unfused"]), host(g32[DEFAULT])) * 100
+        if r_time >= 0.95 * r_traffic:
+            why = (f"* **Why:** the kernels are memory-bound. The byte model predicts {r_traffic:.2f}× less traffic and the "
+                   f"measured kernel time drops {r_time:.2f}×; the modelled bandwidth is {bw_u:.0f} GB/s unfused and "
+                   f"{bw_f:.0f} GB/s fused (peak {peak:.0f}). The gain is the memory traffic that fusion removes")
+        else:
+            why = (f"* **Why less than the traffic saving:** the byte model predicts {r_traffic:.2f}× less traffic but the "
+                   f"kernel time drops only {r_time:.2f}×. The modelled bandwidth falls from {bw_u:.0f} GB/s "
+                   f"({bw_u/peak*100:.0f}% of the {peak:.0f} GB/s peak) unfused to {bw_f:.0f} GB/s ({bw_f/peak*100:.0f}%) "
+                   f"fused: the fused kernels move fewer bytes but sustain less bandwidth"
+                   + (" (see the Nsight Compute section for the per-kernel cause)" if R.get("_has_ncu") else ""))
+        L.append(why + f". Host overhead (enqueue, planning, cache key, argument packing) is under {max(hostpct, 1):.0f}% "
+                 f"of an iteration, so the number of launches itself is not what costs time.")
+    r64 = g64[DEFAULT]["per_iter"] / g32[DEFAULT]["per_iter"]
+    L.append(f"* **Double precision on {gpu}:** {ms(g64['unfused']['per_iter'])} → {ms(g64[DEFAULT]['per_iter'])} ms "
+             f"({sp(g64,'unfused',DEFAULT):.2f}×). Double costs {r64:.1f}× single (doubling the bytes alone would give 2×), "
+             + ("so fp64 arithmetic throughput is a limit." if r64 > 3.5 else
+                "somewhat more than that." if r64 > 2.3 else
+                "so it is about bandwidth-proportional.")
+             + (f" Fusion helps double much less than single ({sp(g64,'unfused',DEFAULT):.2f}× vs "
+                f"{sp(g32,'unfused',DEFAULT):.2f}×)." if sp(g64,'unfused',DEFAULT) < 0.9 * sp(g32,'unfused',DEFAULT) else ""))
     if "openmp_8t" in R:
         o32 = next(v for k, v in R["openmp_8t"].items() if k.startswith("opensbli_f32/"))
         o64 = next(v for k, v in R["openmp_8t"].items() if k.startswith("opensbli/"))
@@ -516,26 +533,42 @@ def findings(R):
         L.append(f"* **OpenMP ({nthr} threads, {ncpu}³):** {sp(o32,'unfused',DEFAULT):.2f}× in single precision "
                  f"({ms(o32['unfused']['per_iter'])} → {ms(o32[DEFAULT]['per_iter'])} ms) and "
                  f"{sp(o64,'unfused',DEFAULT):.2f}× in double ({ms(o64['unfused']['per_iter'])} → {ms(o64[DEFAULT]['per_iter'])} ms). "
-                 f"(See section 2 for the full-machine runs and their spreads.)")
+                 f"(Section 2 has every configuration and its spread.)")
     sizes = R.get("sizes")
     if sizes:
         ns = sorted(int(k) for k in sizes)
-        big = [sizes[str(n)]["unfused"]["per_iter"] / sizes[str(n)][DEFAULT]["per_iter"] for n in ns if n >= 64]
-        L.append(f"* **Problem size:** for N ≥ 64 the GPU speed-up is steady at {min(big):.2f}–{max(big):.2f}×. "
-                 f"Below that an iteration takes only 1.5–3 ms and the individual measurements scatter by more than the "
-                 f"differences between planners, so no trend is claimed there.")
+        ratios = {n: sizes[str(n)]["unfused"]["per_iter"] / sizes[str(n)][DEFAULT]["per_iter"] for n in ns}
+        lo = min(ratios, key=ratios.get)
+        hi = max(ratios, key=ratios.get)
+        L.append(f"* **Problem size (single precision, GPU):** the speed-up ranges from {ratios[lo]:.2f}× (N={lo}) to "
+                 f"{ratios[hi]:.2f}× (N={hi}) over N = {ns[0]}…{ns[-1]}. It is not monotonic in N, and the dips "
+                 f"were not investigated.")
     c = R.get("caps")
     if c:
-        L.append("* **Parameters:** a cap of 8 loops per kernel already reaches the plan's 6 kernels per stage (16 and 32 "
-                 "change nothing, a cap of 1 is the unfused case); the bounding-box ratio has no effect here; earliest vs. "
-                 "latest placement is within noise.")
-    L.append(f"* **Cost:** JIT compilation of the {len(R['plan'][DEFAULT]['all'])} distinct queue shapes takes {g32['unfused']['compile_total']:.1f} s "
-             f"unfused and {g32[DEFAULT]['compile_total']:.1f} s fused (first 100 iterations cost about "
-             f"{g32[DEFAULT]['warmup_extra']:.1f} s more than steady state), a one-off equal to roughly "
-             f"{g32[DEFAULT]['compile_total']/g32[DEFAULT]['per_iter']:.0f} steady iterations.")
-    L.append("* **Correctness:** all planner configurations give results bitwise identical to the unfused run, on the CPU "
-             "backend and on the GPU, in both precisions (section 6). Single precision stays within about 2e-6 of double "
-             "(rms, relative to the flow scale) after 26 steps.")
+        mx = sorted(((int(k), v["per_iter"], v["stage_kernels"]) for k, v in c["max"].items()))
+        best = min(v for _, v, _ in mx)
+        first = next(m for m, v, _ in mx if v <= best * 1.01)
+        rs = [v["per_iter"] for v in c["ratio"].values()]
+        L.append(f"* **Parameters:** a cap of {first} loops per kernel already reaches the best time "
+                 f"({mx[[m for m,_,_ in mx].index(first)][2]} kernels per stage; larger caps change nothing, a cap of 1 is the "
+                 f"unfused case). The bounding-box ratio "
+                 + ("has little effect here" if (max(rs) - min(rs)) / min(rs) < 0.05 else "matters here")
+                 + f" ({ms(min(rs))}–{ms(max(rs))} ms). Earliest vs. latest placement: "
+                 f"{ms(g32[DEFAULT]['per_iter'])} vs {ms(g32['DAG, guarded, latest']['per_iter'])} ms.")
+    L.append(f"* **Cost:** JIT compilation of the {len(R['plan'][DEFAULT]['all'])} distinct queue shapes takes "
+             f"{g32['unfused']['compile_total']:.1f} s unfused and {g32[DEFAULT]['compile_total']:.1f} s fused (the first "
+             f"100 iterations cost about {g32[DEFAULT]['warmup_extra']:.1f} s more than steady state), a one-off equal to "
+             f"roughly {g32[DEFAULT]['compile_total']/g32[DEFAULT]['per_iter']:.0f} steady iterations.")
+    accs = [a for k, rows in R["accuracy"].items() if k != "f32_vs_f64" for a in rows.values()]
+    e = R["accuracy"]["f32_vs_f64"]
+    if all(a["bitwise"] for a in accs):
+        L.append(f"* **Correctness:** all {len(accs)} planner-configuration runs are bitwise identical to the unfused run "
+                 f"(CPU and GPU, both precisions; section 6). Single precision stays within {max(e.values()):.0e} of double "
+                 f"(rms, relative to the flow scale) after 26 steps.")
+    else:
+        bad = sum(1 for a in accs if not a["bitwise"])
+        L.append(f"* **Correctness:** {bad} of {len(accs)} planner-configuration runs differ from the unfused run; "
+                 f"largest difference {max(a['max_abs'] for a in accs):.1e} (section 6).")
     why = st[DEFAULT]['why']
     L.append("* **What limits it:** a stage still needs several kernels. For the loops that had to start a new kernel, "
              "the planner's diagnostics count the reasons an existing kernel was rejected: "
@@ -555,6 +588,7 @@ def report(args):
     tag = getattr(args, 'tag', '') or ''
     suffix = ('_' + tag) if tag else ''
     R = json.load(open(args.results))
+    R["_has_ncu"] = bool(getattr(args, "include", None))
     os.makedirs(os.path.join(args.outdir, "img"), exist_ok=True)
     md = []
     w = md.append
@@ -563,7 +597,7 @@ def report(args):
     w("# Taylor-Green vortex: fusion and reordering evaluation" + (" - " + gpu_name if tag else "") + "\n")
     w(f"Generated by `apps/c/taylor_green_vortex/eval_tgv.py` on {meta['date']}. "
       f"GPU: {meta.get('gpu', '?')}; {meta.get('cpus', '?')} CPU threads. "
-      f"Raw data: `data/tgv_eval.json`.\n")
+      f"Raw data: `data/tgv_eval{suffix}.json`.\n")
 
     w(findings(R))
     # ---- plan
@@ -744,6 +778,8 @@ def report(args):
     w("Single against double precision (rms error relative to the flow scale): "
       + ", ".join(f"{k} {v:.2e}" for k, v in e.items()) + ".\n")
 
+    for extra in getattr(args, "include", None) or []:
+        md.append(open(extra).read())
     out = os.path.join(args.outdir, f"tgv_evaluation{suffix}.md")
     open(out, "w").write("\n".join(md))
     print("wrote", out)
@@ -768,6 +804,7 @@ def main():
     p.add_argument("--results", required=True)
     p.add_argument("--outdir", required=True)
     p.add_argument("--tag", help="suffix for the output file names, e.g. a100")
+    p.add_argument("--include", action="append", help="markdown file appended to the report (repeatable)")
     a = ap.parse_args()
     run_all(a) if a.cmd == "run" else report(a)
 

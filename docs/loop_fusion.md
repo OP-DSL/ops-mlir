@@ -439,7 +439,11 @@ Measured on the Taylor-Green vortex (RTX 4050 laptop GPU; full data and method i
   fusion (1.44×), reordering adds about 6%. The kernels are memory-bound: the modelled
   traffic drops 1.55× and so does the kernel time. Host overhead is under 4%.
 * Double precision on this GPU: only 1.10× (fp64 throughput is the limit).
-* Every configuration reproduces the unfused result bit for bit.
+* On an A100 (cluster node `renyi`, 256³, [`tgv_evaluation_a100.md`](tgv_evaluation_a100.md)) the
+  single-precision gain is smaller, **24.2 → 20.0 ms (1.21×)**. Nsight Compute shows why: the largest
+  fused kernel moves 2× fewer bytes than its parts but needs 160 registers per thread, so it runs at
+  17% occupancy and 30% of peak DRAM throughput and is only 1.48× faster. Double precision gains 1.05×.
+* Every configuration reproduces the unfused result bit for bit, on both GPUs.
 
 ## 12. Limitations and future work
 

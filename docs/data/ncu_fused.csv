@@ -1,0 +1,122 @@
+==PROF== Connected to process 1847073 (/scratch/reguly/ops-mlir-work/ops-mlir/build/apps/c/taylor_green_vortex/opensbli_f32)
+-----------------------------------------
+ MPI partition and reading input file time: 0.000000
+ -----------------------------------------
+[1;32mOpenSBLI is starting from the initial condition.
+[0mDataset 'rho_B0' already found in file opensbli_output_000001.h5 ...  overwriting
+Dataset 'rhou0_B0' already found in file opensbli_output_000001.h5 ...  overwriting
+Dataset 'rhou1_B0' already found in file opensbli_output_000001.h5 ...  overwriting
+Dataset 'rhou2_B0' already found in file opensbli_output_000001.h5 ...  overwriting
+Dataset 'rhoE_B0' already found in file opensbli_output_000001.h5 ...  overwriting
+dataset 'DRP_filt' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'Delta0block0' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'Delta1block0' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'Delta2block0' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'HDF5_timing' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'Minf' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'Pr' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'Re' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'block0np0' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'block0np1' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'block0np2' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'dt' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'filter_frequency' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'gama' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'niter' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'simulation_time' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'start_iter' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'write_output_file' already found in file opensbli_output_000001.h5 ... overwriting
+dataset 'iter' already found in file opensbli_output_000001.h5 ... overwriting
+
+Timings are:
+-----------------------------------------
+Total Wall time 7.850313
+Dataset 'rho_B0' already found in file opensbli_output.h5 ...  overwriting
+Dataset 'rhou0_B0' already found in file opensbli_output.h5 ...  overwriting
+Dataset 'rhou1_B0' already found in file opensbli_output.h5 ...  overwriting
+Dataset 'rhou2_B0' already found in file opensbli_output.h5 ...  overwriting
+Dataset 'rhoE_B0' already found in file opensbli_output.h5 ...  overwriting
+dataset 'DRP_filt' already found in file opensbli_output.h5 ... overwriting
+dataset 'Delta0block0' already found in file opensbli_output.h5 ... overwriting
+dataset 'Delta1block0' already found in file opensbli_output.h5 ... overwriting
+dataset 'Delta2block0' already found in file opensbli_output.h5 ... overwriting
+dataset 'HDF5_timing' already found in file opensbli_output.h5 ... overwriting
+dataset 'Minf' already found in file opensbli_output.h5 ... overwriting
+dataset 'Pr' already found in file opensbli_output.h5 ... overwriting
+dataset 'Re' already found in file opensbli_output.h5 ... overwriting
+dataset 'block0np0' already found in file opensbli_output.h5 ... overwriting
+dataset 'block0np1' already found in file opensbli_output.h5 ... overwriting
+dataset 'block0np2' already found in file opensbli_output.h5 ... overwriting
+dataset 'dt' already found in file opensbli_output.h5 ... overwriting
+dataset 'filter_frequency' already found in file opensbli_output.h5 ... overwriting
+dataset 'gama' already found in file opensbli_output.h5 ... overwriting
+dataset 'niter' already found in file opensbli_output.h5 ... overwriting
+dataset 'simulation_time' already found in file opensbli_output.h5 ... overwriting
+dataset 'start_iter' already found in file opensbli_output.h5 ... overwriting
+dataset 'write_output_file' already found in file opensbli_output.h5 ... overwriting
+dataset 'iter' already found in file opensbli_output.h5 ... overwriting
+=== Kernel Timing Summary ===
+opensbliblock00Kernel040: 6 calls, 0.33896 s total, 0.0564933 s avg, 3.45727 GB/s
+fused(opensbliblock00Kernel008+opensbliblock00Kernel010+opensbliblock00Kernel012+opensbliblock00Kernel019+opensbliblock00Kernel025): 6 calls, 1.20301 s total, 0.200502 s avg, 0.769193 GB/s
+opensbliblock00Kernel039: 1 calls, 0.0456832 s total, 0.0456832 s avg, 1.07155 GB/s
+opensbliblock00Kernel007: 6 calls, 0.335093 s total, 0.0558489 s avg, 0.297532 GB/s
+opensbliblock00Kernel009: 6 calls, 0.335482 s total, 0.0559136 s avg, 0.288182 GB/s
+fused(opensbliblock00Kernel011+opensbliblock00Kernel014+opensbliblock00Kernel015): 6 calls, 0.336055 s total, 0.0560091 s avg, 0.863071 GB/s
+fused(opensbliblock00Kernel013+opensbliblock00Kernel016+opensbliblock00Kernel017+opensbliblock00Kernel018+opensbliblock00Kernel031+opensbliblock00Kernel032): 6 calls, 0.338374 s total, 0.0563956 s avg, 7.20357 GB/s
+Total time: 2.93266 s
+==PROF== Disconnected from process 1847073
+"ID","Process ID","Process Name","Host Name","Kernel Name","Context","Stream","Block Size","Grid Size","Device","CC","Section Name","Metric Name","Metric Unit","Metric Value"
+"0","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_0_kernel","1","13","(32, 4, 1)","(5, 33, 132)","0","8.0","Command line profiler metrics","dram__bytes.sum","byte","85633536"
+"0","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_0_kernel","1","13","(32, 4, 1)","(5, 33, 132)","0","8.0","Command line profiler metrics","dram__throughput.avg.pct_of_peak_sustained_elapsed","%","50.42"
+"0","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_0_kernel","1","13","(32, 4, 1)","(5, 33, 132)","0","8.0","Command line profiler metrics","gpu__time_duration.sum","ns","109248"
+"0","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_0_kernel","1","13","(32, 4, 1)","(5, 33, 132)","0","8.0","Command line profiler metrics","launch__block_size","","128"
+"0","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_0_kernel","1","13","(32, 4, 1)","(5, 33, 132)","0","8.0","Command line profiler metrics","launch__grid_size","","21780"
+"0","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_0_kernel","1","13","(32, 4, 1)","(5, 33, 132)","0","8.0","Command line profiler metrics","launch__occupancy_limit_registers","block","21"
+"0","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_0_kernel","1","13","(32, 4, 1)","(5, 33, 132)","0","8.0","Command line profiler metrics","launch__registers_per_thread","register/thread","22"
+"0","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_0_kernel","1","13","(32, 4, 1)","(5, 33, 132)","0","8.0","Command line profiler metrics","lts__t_sector_hit_rate.pct","%","70.07"
+"0","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_0_kernel","1","13","(32, 4, 1)","(5, 33, 132)","0","8.0","Command line profiler metrics","sm__warps_active.avg.pct_of_peak_sustained_active","%","88.69"
+"1","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel007_5_kernel","1","13","(32, 4, 1)","(4, 33, 132)","0","8.0","Command line profiler metrics","dram__bytes.sum","byte","10124800"
+"1","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel007_5_kernel","1","13","(32, 4, 1)","(4, 33, 132)","0","8.0","Command line profiler metrics","dram__throughput.avg.pct_of_peak_sustained_elapsed","%","22.22"
+"1","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel007_5_kernel","1","13","(32, 4, 1)","(4, 33, 132)","0","8.0","Command line profiler metrics","gpu__time_duration.sum","ns","29376"
+"1","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel007_5_kernel","1","13","(32, 4, 1)","(4, 33, 132)","0","8.0","Command line profiler metrics","launch__block_size","","128"
+"1","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel007_5_kernel","1","13","(32, 4, 1)","(4, 33, 132)","0","8.0","Command line profiler metrics","launch__grid_size","","17424"
+"1","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel007_5_kernel","1","13","(32, 4, 1)","(4, 33, 132)","0","8.0","Command line profiler metrics","launch__occupancy_limit_registers","block","21"
+"1","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel007_5_kernel","1","13","(32, 4, 1)","(4, 33, 132)","0","8.0","Command line profiler metrics","launch__registers_per_thread","register/thread","20"
+"1","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel007_5_kernel","1","13","(32, 4, 1)","(4, 33, 132)","0","8.0","Command line profiler metrics","lts__t_sector_hit_rate.pct","%","62.05"
+"1","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel007_5_kernel","1","13","(32, 4, 1)","(4, 33, 132)","0","8.0","Command line profiler metrics","sm__warps_active.avg.pct_of_peak_sustained_active","%","50.17"
+"2","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel009_6_kernel","1","13","(32, 4, 1)","(4, 33, 128)","0","8.0","Command line profiler metrics","dram__bytes.sum","byte","9824000"
+"2","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel009_6_kernel","1","13","(32, 4, 1)","(4, 33, 128)","0","8.0","Command line profiler metrics","dram__throughput.avg.pct_of_peak_sustained_elapsed","%","22.17"
+"2","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel009_6_kernel","1","13","(32, 4, 1)","(4, 33, 128)","0","8.0","Command line profiler metrics","gpu__time_duration.sum","ns","28544"
+"2","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel009_6_kernel","1","13","(32, 4, 1)","(4, 33, 128)","0","8.0","Command line profiler metrics","launch__block_size","","128"
+"2","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel009_6_kernel","1","13","(32, 4, 1)","(4, 33, 128)","0","8.0","Command line profiler metrics","launch__grid_size","","16896"
+"2","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel009_6_kernel","1","13","(32, 4, 1)","(4, 33, 128)","0","8.0","Command line profiler metrics","launch__occupancy_limit_registers","block","21"
+"2","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel009_6_kernel","1","13","(32, 4, 1)","(4, 33, 128)","0","8.0","Command line profiler metrics","launch__registers_per_thread","register/thread","20"
+"2","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel009_6_kernel","1","13","(32, 4, 1)","(4, 33, 128)","0","8.0","Command line profiler metrics","lts__t_sector_hit_rate.pct","%","62.34"
+"2","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel009_6_kernel","1","13","(32, 4, 1)","(4, 33, 128)","0","8.0","Command line profiler metrics","sm__warps_active.avg.pct_of_peak_sustained_active","%","50.85"
+"3","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_3_kernel","1","13","(32, 4, 1)","(4, 32, 132)","0","8.0","Command line profiler metrics","dram__bytes.sum","byte","34760448"
+"3","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_3_kernel","1","13","(32, 4, 1)","(4, 32, 132)","0","8.0","Command line profiler metrics","dram__throughput.avg.pct_of_peak_sustained_elapsed","%","44.75"
+"3","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_3_kernel","1","13","(32, 4, 1)","(4, 32, 132)","0","8.0","Command line profiler metrics","gpu__time_duration.sum","ns","50048"
+"3","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_3_kernel","1","13","(32, 4, 1)","(4, 32, 132)","0","8.0","Command line profiler metrics","launch__block_size","","128"
+"3","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_3_kernel","1","13","(32, 4, 1)","(4, 32, 132)","0","8.0","Command line profiler metrics","launch__grid_size","","16896"
+"3","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_3_kernel","1","13","(32, 4, 1)","(4, 32, 132)","0","8.0","Command line profiler metrics","launch__occupancy_limit_registers","block","16"
+"3","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_3_kernel","1","13","(32, 4, 1)","(4, 32, 132)","0","8.0","Command line profiler metrics","launch__registers_per_thread","register/thread","32"
+"3","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_3_kernel","1","13","(32, 4, 1)","(4, 32, 132)","0","8.0","Command line profiler metrics","lts__t_sector_hit_rate.pct","%","75.79"
+"3","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_3_kernel","1","13","(32, 4, 1)","(4, 32, 132)","0","8.0","Command line profiler metrics","sm__warps_active.avg.pct_of_peak_sustained_active","%","84.45"
+"4","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_4_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","dram__bytes.sum","byte","222692480"
+"4","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_4_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","dram__throughput.avg.pct_of_peak_sustained_elapsed","%","29.90"
+"4","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_4_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","gpu__time_duration.sum","ns","479040"
+"4","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_4_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","launch__block_size","","128"
+"4","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_4_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","launch__grid_size","","16384"
+"4","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_4_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","launch__occupancy_limit_registers","block","3"
+"4","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_4_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","launch__registers_per_thread","register/thread","160"
+"4","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_4_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","lts__t_sector_hit_rate.pct","%","82.30"
+"4","1847073","opensbli_f32","127.0.0.1","ops_par_loop_group_4_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","sm__warps_active.avg.pct_of_peak_sustained_active","%","17.15"
+"5","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel040_16_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","dram__bytes.sum","byte","212489216"
+"5","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel040_16_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","dram__throughput.avg.pct_of_peak_sustained_elapsed","%","62.88"
+"5","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel040_16_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","gpu__time_duration.sum","ns","217344"
+"5","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel040_16_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","launch__block_size","","128"
+"5","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel040_16_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","launch__grid_size","","16384"
+"5","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel040_16_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","launch__occupancy_limit_registers","block","10"
+"5","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel040_16_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","launch__registers_per_thread","register/thread","45"
+"5","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel040_16_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","lts__t_sector_hit_rate.pct","%","57.89"
+"5","1847073","opensbli_f32","127.0.0.1","ops_par_loop_opensbliblock00Kernel040_16_kernel","1","13","(32, 4, 1)","(4, 32, 128)","0","8.0","Command line profiler metrics","sm__warps_active.avg.pct_of_peak_sustained_active","%","55.63"

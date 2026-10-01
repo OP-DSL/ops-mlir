@@ -43,3 +43,10 @@ copy the file back and run `eval_tgv.py report --results ... --outdir docs --tag
 * **Shared LLVM install.** It is only read. It has no NVPTX-compiler/fatbin libraries, so
   GPU code is assembled with `ptxas` from CUDA 12.3 (`CUDA_ROOT` is set in `env_cl.sh`).
 * **GPU architecture** is detected from the device (`sm_80` on the A100s).
+
+## Results
+
+The A100 evaluation (`docs/tgv_evaluation_a100.md`, data in `docs/data/tgv_eval_a100.json`) was
+produced by `job_eval.sbatch` with the arguments shown above, plus `job_ncu.sbatch` for the
+Nsight Compute section. The results file lives on renyi's `/scratch`; copy it to the shared home
+from inside a job (`srun -p gpu -w renyi cp ...`) before fetching it.
