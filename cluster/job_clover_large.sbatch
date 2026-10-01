@@ -26,13 +26,13 @@ EF="python3 apps/c/cloverleaf_2d/eval_fusion.py --tmp $OPS_CL_TMP"
   $EF --exe $B/cloverleaf_3d/cloverleaf_3d --stock-exe $B/cloverleaf_3d/cloverleaf_3d_stock --deck $D3 --backends "" --out $E/clover_large_stock_3d.json ) &
 STOCK=$!
 
-CUDA_V=off,consecutive,max2,max3,max4,max8,max16,max64,ratio0.5,ratio2
+CUDA_V=off,consecutive,noguard,max2,max3,max4,max8,max16,max64,ratio0.5,ratio2,ratio4,ratio16
 $EF --exe $B/cloverleaf_2d/cloverleaf_2d --deck $D2 --backends cuda --variants $CUDA_V \
     --launch-logs $E/launch_logs_2d --out $E/clover_large_cuda_2d.json
 $EF --exe $B/cloverleaf_3d/cloverleaf_3d --deck $D3 --backends cuda --variants $CUDA_V \
     --launch-logs $E/launch_logs_3d --out $E/clover_large_cuda_3d.json
 
 wait $STOCK
-OMP_V=off,consecutive,max4,max8,max64
+OMP_V=off,consecutive,noguard,max2,max8,ratio16
 $EF --exe $B/cloverleaf_2d/cloverleaf_2d --deck $D2 --backends openmp --variants $OMP_V --threads 16 --out $E/clover_large_openmp_2d.json
 $EF --exe $B/cloverleaf_3d/cloverleaf_3d --deck $D3 --backends openmp --variants $OMP_V --threads 16 --out $E/clover_large_openmp_3d.json

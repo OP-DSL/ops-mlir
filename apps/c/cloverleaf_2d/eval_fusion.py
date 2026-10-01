@@ -30,6 +30,7 @@ FIXED = {
     "consecutive": {"OPS_MLIR_FUSION_REORDER": "0"},
     "dag":         {},
     "dag-latest":  {"OPS_MLIR_FUSION_PLACEMENT": "latest"},
+    "noguard":     {"OPS_MLIR_FUSION_GUARDED": "0"},   # only loops with identical ranges fuse
 }
 
 
