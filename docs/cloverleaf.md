@@ -206,11 +206,11 @@ What the numbers say:
   (−23 %). On the A100 the gain is 7–9 %. In 2D on one thread fusion is *slower* (+18 %) — the fused
   kernels have more live values and I did not look into why the sequential code is slower, so the cause
   is unconfirmed; it is a measured regression, not a noise effect (three variants, same result).
-* **The A100 is nowhere near its memory bandwidth here.** 8 902 launches take ≈ 3.9 s, i.e. ≈ 0.44 ms per
-  launch, whereas a 960² loop touching ten double dats moves very roughly 80 MB (≈ 0.05 ms at 1.5 TB/s). The launches are dominated by
-  per-launch costs in the runtime (argument packing, a stream synchronisation after every group, and the
-  host fallbacks' copies), so fusing fewer, larger kernels pays less than it would with a leaner launch
-  path. This is the first thing to fix to make the GPU numbers meaningful.
+* **The A100 numbers on the 960² / 96³ decks are dominated by things other than the kernels.** The
+  host-fallback reductions (`calc_dt_kernel_min`, `field_summary_kernel`) take more time than all GPU kernels, and a whole-run
+  "kernel seconds" figure includes a one-off cost of ≈ 0.8 s the first time each compiled module launches. (An earlier
+  version of this text blamed ≈ 0.44 ms per-launch overhead; that was wrong. Measured per launch, the steady overhead is
+  15–30 µs.) See [cloverleaf_large.md](cloverleaf_large.md), which separates these and uses the larger decks.
 * Group size (8 → 32) and placement (earliest/latest) make no measurable difference: the dependences, not
   the cap, bound the groups here.
 
