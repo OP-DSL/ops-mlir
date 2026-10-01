@@ -42,3 +42,10 @@ target_link_libraries(cloverleaf_2d PRIVATE
   ops_seq_local m)
 # -rdynamic: the runtime names kernels by their address (dladdr), see kernelSymbolName.
 target_link_options(cloverleaf_2d PRIVATE -no-pie -rdynamic)
+
+# The same sources built the stock way (no shim, no JIT): the reference for CloverLeaf's
+# built-in QA check and for timing the original implementation.
+add_executable(cloverleaf_2d_stock ${CLOVER_SRCS})
+target_include_directories(cloverleaf_2d_stock PRIVATE ${CLOVER_DIR} ${OPS_ROOT}/include)
+target_link_libraries(cloverleaf_2d_stock PRIVATE ops_seq_local m)
+target_link_options(cloverleaf_2d_stock PRIVATE -no-pie)
