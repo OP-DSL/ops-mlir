@@ -12,7 +12,7 @@
 #   sbatch -D $HOME/ops-mlir-cl/src -o $HOME/ops-mlir-cl/logs/%x-%j.log cluster/job_clover_repeat.sbatch
 set -uo pipefail
 source "$SLURM_SUBMIT_DIR/cluster/env_cl.sh"
-bash "$SLURM_SUBMIT_DIR/cluster/setup_renyi.sh"
+flock "$OPS_CL_ROOT/.setup.lock" bash "$SLURM_SUBMIT_DIR/cluster/setup_renyi.sh"
 E=$OPS_CL_ROOT/eval; mkdir -p "$E"
 cd "$OPS_CL_ROOT/ops-mlir"
 V=off,consecutive,max2,max3,max4,noguard,ratio16

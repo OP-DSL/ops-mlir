@@ -11,7 +11,7 @@
 # Results: ~/ops-mlir-cl/work/eval/clover_ncu_{2d,3d}[_$CLOVER_NCU_TAG].json
 set -uo pipefail
 source "$SLURM_SUBMIT_DIR/cluster/env_cl.sh"
-bash "$SLURM_SUBMIT_DIR/cluster/setup_renyi.sh"
+flock "$OPS_CL_ROOT/.setup.lock" bash "$SLURM_SUBMIT_DIR/cluster/setup_renyi.sh"
 E=$OPS_CL_ROOT/eval; mkdir -p "$E"
 cd "$OPS_CL_ROOT/ops-mlir"
 V=${CLOVER_NCU_VARIANTS:-off,max2,max4,max8,max16,max64}

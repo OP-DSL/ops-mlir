@@ -12,7 +12,7 @@
 #   sbatch -D ~/ops-mlir-cl/src -o ~/ops-mlir-cl/logs/%x-%j.log cluster/job_clover_large.sbatch
 set -uo pipefail
 source "$SLURM_SUBMIT_DIR/cluster/env_cl.sh"
-bash "$SLURM_SUBMIT_DIR/cluster/setup_renyi.sh"
+flock "$OPS_CL_ROOT/.setup.lock" bash "$SLURM_SUBMIT_DIR/cluster/setup_renyi.sh"
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv
 E=$OPS_CL_ROOT/eval; mkdir -p "$E"
 cd "$OPS_CL_ROOT/ops-mlir"

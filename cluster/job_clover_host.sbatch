@@ -11,7 +11,7 @@
 # Results: ~/ops-mlir-cl/work/eval/clover_host_{2d,3d}.json
 set -uo pipefail
 source "$SLURM_SUBMIT_DIR/cluster/env_cl.sh"
-bash "$SLURM_SUBMIT_DIR/cluster/setup_renyi.sh"
+flock "$OPS_CL_ROOT/.setup.lock" bash "$SLURM_SUBMIT_DIR/cluster/setup_renyi.sh"
 E=$OPS_CL_ROOT/eval; mkdir -p "$E"
 cd "$OPS_CL_ROOT/ops-mlir"
 EF="python3 apps/c/cloverleaf_2d/eval_fusion.py --tmp $OPS_CL_TMP --backends cuda --variants dag"

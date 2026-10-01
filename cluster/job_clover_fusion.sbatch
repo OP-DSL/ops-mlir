@@ -11,7 +11,7 @@
 # Results: ~/ops-mlir-cl/work/eval/clover_fusion_{2d,3d}.json
 set -uo pipefail
 source "$SLURM_SUBMIT_DIR/cluster/env_cl.sh"
-bash "$SLURM_SUBMIT_DIR/cluster/setup_renyi.sh"
+flock "$OPS_CL_ROOT/.setup.lock" bash "$SLURM_SUBMIT_DIR/cluster/setup_renyi.sh"
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv
 mkdir -p "$OPS_CL_ROOT/eval"
 cd "$OPS_CL_ROOT/ops-mlir"
