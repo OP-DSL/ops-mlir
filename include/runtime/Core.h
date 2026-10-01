@@ -13,6 +13,11 @@ namespace ops_mlir {
 
 enum class ArgKind { Dat, Gbl, Idx, Reduce, Unknown };
 
+// Element type of a scalar/array global. OPS records only sizeof(T) for these, which
+// cannot tell int from float, so the wrapper deduces it from the kernel signature.
+// Unknown keeps the older "4 bytes is float, 8 bytes is double" reading.
+enum ElemKind : int { EK_Unknown = 0, EK_F32 = 1, EK_F64 = 2, EK_I32 = 3, EK_I64 = 4 };
+
 struct DatDesc {
   std::uintptr_t handle;
   int index;
@@ -59,6 +64,10 @@ struct ArgDesc {
   int acc;
   int argtype;
   int opt;
+  int elem_kind = EK_Unknown; // ElemKind, set for globals
+  // Added by the runtime, not passed by the application: the current value of a
+  // registered constant the kernel reads (see KernelConstRef).
+  bool synthetic = false;
 
   // Bytes of a read-only ops_arg_gbl, captured when the loop is enqueued so
   // that a host write between enqueue and flush cannot leak into the loop.

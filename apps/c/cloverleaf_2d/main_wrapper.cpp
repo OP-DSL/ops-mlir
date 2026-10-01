@@ -15,5 +15,7 @@ int main(int argc, char **argv) {
   while (std::getline(headers, path, ':'))
     if (!path.empty())
       set_kernel_source_file(path);
+  // The kernel headers rely on what the application's own sources include before them.
+  set_kernel_preamble("#include \"data.h\"\n#include \"definitions.h\"\n");
   return clover_original_main(argc, argv);
 }

@@ -131,7 +131,8 @@ mlir::Attribute IRBuilder::buildArgAttr(const ArgDesc &arg) {
       static_cast<int64_t>(arg.data_d),
       arg.acc,
       arg.argtype,
-      arg.opt);
+      arg.opt,
+      arg.elem_kind);
 }
 
 ops_mlir::ops::DatAttr IRBuilder::buildDatAttr(const DatDesc &dat) {

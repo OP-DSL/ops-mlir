@@ -44,6 +44,8 @@
 
 #include <algorithm>
 #include <csignal>
+#include <cxxabi.h>
+#include <dlfcn.h>
 #include <cstdio>
 #include <execinfo.h>
 #include <sys/syscall.h>
@@ -179,7 +181,11 @@ JITEngine::~JITEngine() {
                  << stats_.numLaunches << " kernel launches, "
                  << stats_.numFlushes << " flushes, " << stats_.numCompiles
                  << " module compiles; seconds: compile "
-                 << llvm::format("%.4f", stats_.compileSeconds) << " execute "
+                 << llvm::format("%.4f", stats_.compileSeconds) << " (xdsl "
+                 << llvm::format("%.2f", stats_.xdslSeconds) << ", kernels "
+                 << llvm::format("%.2f", stats_.kernelIRSeconds) << ", backend "
+                 << llvm::format("%.2f", stats_.backendSeconds) << ", engine "
+                 << llvm::format("%.2f", stats_.engineSeconds) << ") execute "
                  << llvm::format("%.4f", stats_.executeSeconds) << " halo "
                  << llvm::format("%.4f", stats_.haloSeconds) << " enqueue "
                  << llvm::format("%.4f", stats_.enqueueSeconds) << " plan "
@@ -195,18 +201,41 @@ void JITEngine::setFlushCallback(FlushCallback callback) {
   flushCallback_ = std::move(callback);
 }
 
+// Name of the function at `addr`, via the dynamic symbol table (the executable must
+// export its symbols, -rdynamic). Applications label loops with strings that need
+// not be unique -- CloverLeaf runs a dozen different kernels as "update_halo_kernel1"
+// -- but the kernel's address is, so the definition is looked up by that.
+static std::string kernelSymbolName(std::uintptr_t addr) {
+  Dl_info info;
+  if (!dladdr(reinterpret_cast<void *>(addr), &info) || !info.dli_sname ||
+      reinterpret_cast<std::uintptr_t>(info.dli_saddr) != addr)
+    return {};
+  int status = 0;
+  char *demangled = abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, &status);
+  std::string name = status == 0 && demangled ? demangled : info.dli_sname;
+  std::free(demangled);
+  name = name.substr(0, name.find('('));
+  if (std::size_t colons = name.rfind("::"); colons != std::string::npos)
+    name = name.substr(colons + 2);
+  return name;
+}
+
 void JITEngine::enqueueParLoop(std::uintptr_t kernelToken,
                                     const char *kernelName, ops_block block,
                                     int dims, const int *range,
                                     const ops_arg *args, std::size_t nargs,
-                                    std::function<void()> fallback) {
+                                    std::function<void()> fallback,
+                                    const int *elemKinds) {
   bool full;
   {
     ScopedSeconds timer(stats_.enqueueSeconds);
     std::lock_guard<std::mutex> lock(mutex_);
+    std::string symbol = fallback ? kernelSymbolName(kernelToken) : std::string();
     queue_.push_back(
-        buildLoopDesc(kernelToken, kernelName, block, dims, range, args, nargs));
+        buildLoopDesc(kernelToken, symbol.empty() ? kernelName : symbol.c_str(), block, dims, range, args, nargs,
+                      elemKinds));
     queue_.back().fallback = std::move(fallback);
+    attachConstantArgs(queue_.back());
     full = queueMax_ && queue_.size() >= queueMax_;
   }
   // Bound the size of a compiled module (and the memory held by the queue).
@@ -264,7 +293,8 @@ std::string JITEngine::detectNVGpuSm() {
 LoopDesc JITEngine::buildLoopDesc(std::uintptr_t kernelToken,
                                        const char *kernelName, ops_block block,
                                        int dims, const int *range,
-                                       const ops_arg *args, std::size_t nargs) {
+                                       const ops_arg *args, std::size_t nargs,
+                                       const int *elemKinds) {
   LoopDesc loop;
   loop.kernel_name = kernelName;
   loop.kernel_token = kernelToken;
@@ -275,13 +305,13 @@ LoopDesc JITEngine::buildLoopDesc(std::uintptr_t kernelToken,
 
   loop.args.reserve(nargs);
   for (std::size_t i = 0; i < nargs; ++i) {
-    loop.args.push_back(buildArgDesc(args[i]));
+    loop.args.push_back(buildArgDesc(args[i], elemKinds ? elemKinds[i] : EK_Unknown));
   }
 
   return loop;
 }
 
-ArgDesc JITEngine::buildArgDesc(const ops_arg &arg) {
+ArgDesc JITEngine::buildArgDesc(const ops_arg &arg, int elemKind) {
   ArgDesc desc;
   desc.dim = arg.dim;
   desc.elem_size = arg.elem_size;
@@ -289,7 +319,10 @@ ArgDesc JITEngine::buildArgDesc(const ops_arg &arg) {
   desc.data_d = reinterpret_cast<std::uintptr_t>(arg.data_d);
   desc.acc = arg.acc;
   desc.argtype = arg.argtype;
-  desc.opt = arg.opt;
+  // ops_arg_reduce and ops_arg_gbl leave `opt` uninitialised; it is only meaningful
+  // for dats, and would otherwise make identical loops look different.
+  desc.opt = arg.argtype == OPS_ARG_DAT ? arg.opt : 0;
+  desc.elem_kind = arg.argtype == OPS_ARG_GBL ? elemKind : EK_Unknown;
 
   if (arg.argtype == OPS_ARG_GBL && arg.acc == OPS_READ && arg.data) {
     std::size_t nbytes = static_cast<std::size_t>(arg.elem_size) *
@@ -445,6 +478,8 @@ void JITEngine::runBackendLowering(mlir::ModuleOp module, Backend backend) {
 
   if (mlir::failed(pipeline->run(module, ctx))) {
     llvm::errs() << "backend lowering failed for module\n";
+    if (std::getenv("OPS_MLIR_DUMP_FAILED"))
+      module.print(llvm::errs());
     return;
   }
 
@@ -477,7 +512,12 @@ void JITEngine::compile(const FusionPlan &plan) {
   if (std::getenv("OPS_MLIR_DUMP_LOWERED"))
     llvm::errs() << "=== OPS.PAR_LOOP IR ===\n" << ir << "\n";
 
+  auto since = [](std::chrono::steady_clock::time_point t) {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t).count();
+  };
+  auto phase = std::chrono::steady_clock::now();
   XdslResult lowered = runXdslLowering(ir);
+  stats_.xdslSeconds += since(phase);
   if (!lowered.success) {
     llvm::errs() << "xDSL lowering failed: " <<  lowered.error << "\n";
     return;
@@ -511,10 +551,14 @@ void JITEngine::compile(const FusionPlan &plan) {
     if (!seen)
       kernels.push_back(&loop);
   }
+  phase = std::chrono::steady_clock::now();
   for (const LoopDesc *loop : kernels)
     materializeKernelBody(*loop);
+  stats_.kernelIRSeconds += since(phase);
 
+  phase = std::chrono::steady_clock::now();
   runBackendLowering(*loweredModule_, backend_);
+  stats_.backendSeconds += since(phase);
   module = *loweredModule_;
 }
 
@@ -545,7 +589,7 @@ bool JITEngine::materializeKernelBody(const LoopDesc &loop) {
     // accessor-style kernel: its signature follows from the loop's arguments
     translatedFn = kernelBuilder.generateAccessor(
         kernelSourceFiles_, kernelName, kernelName, indexRank, kernelArgInfos(loop),
-        kernelConstants_, llvm::errs());
+        kernelConstants_, llvm::errs(), nullptr, kernelPreamble_);
   }
   // The kernel may live in any of the registered headers; only the last
   // attempt reports its diagnostics.
@@ -921,18 +965,24 @@ void JITEngine::execute(mlir::ExecutionEngine &engine, const FusionPlan &plan) {
       }
     }
 
-    // Read-only scalar globals are passed by value as f32 or f64, chosen by
-    // sizeof(T) (OPS records only the size), from the value captured when the
-    // loop was enqueued. Reduction globals are ignored.
+    // Read-only globals are passed by value, one scalar per component, typed by
+    // the element kind (or sizeof(T) when unknown), from the value captured when
+    // the loop was enqueued. Reduction globals are ignored.
     std::vector<std::array<char, 8>> gblScratch;
     for (std::size_t l : group.loops) {
       for (const ArgDesc &arg : queue_[l].args) {
         if (arg.argtype != OPS_ARG_GBL || arg.acc != OPS_READ)
           continue;
-        std::array<char, 8> value{};
-        std::memcpy(value.data(), arg.gbl_value.data(),
-                    std::min<std::size_t>(arg.gbl_value.size(), value.size()));
-        gblScratch.push_back(value);
+        // An array global is passed as one scalar per component.
+        const std::size_t elem = static_cast<std::size_t>(std::max(arg.elem_size, 1));
+        for (int c = 0; c < std::max(arg.dim, 1); ++c) {
+          std::array<char, 8> value{};
+          std::size_t offset = static_cast<std::size_t>(c) * elem;
+          if (offset < arg.gbl_value.size())
+            std::memcpy(value.data(), arg.gbl_value.data() + offset,
+                        std::min({arg.gbl_value.size() - offset, elem, value.size()}));
+          gblScratch.push_back(value);
+        }
       }
     }
 
@@ -1023,6 +1073,8 @@ std::vector<KernelArgInfo> JITEngine::kernelArgInfos(const LoopDesc &loop) {
   mlir::Builder bld(&ctx);
   std::vector<KernelArgInfo> out;
   for (const ArgDesc &a : loop.args) {
+    if (a.synthetic)
+      continue;
     KernelArgInfo k;
     k.access = a.acc;
     if (a.argtype == OPS_ARG_DAT) {
@@ -1031,8 +1083,14 @@ std::vector<KernelArgInfo> JITEngine::kernelArgInfos(const LoopDesc &loop) {
         k.elt = bld.getF64Type();
       else if (a.dat.type == "float")
         k.elt = bld.getF32Type();
+      else if (a.dat.type == "int")
+        k.elt = bld.getI32Type();
       const int *offsets = reinterpret_cast<const int *>(a.stencil.stencil);
       int points = a.stencil.points, dims = a.stencil.dims;
+      if (const int *stride = reinterpret_cast<const int *>(a.stencil.stride))
+        for (int d = 0; d < dims; ++d)
+          if (stride[d] != 1)
+            k.strided = true;
       if (!offsets || points == 0) {
         k.points.push_back({0, 0, 0});
       } else {
@@ -1046,13 +1104,20 @@ std::vector<KernelArgInfo> JITEngine::kernelArgInfos(const LoopDesc &loop) {
     } else if (a.argtype == OPS_ARG_GBL) {
       k.kind = a.acc == OPS_READ ? KernelArgInfo::Kind::Gbl : KernelArgInfo::Kind::Reduce;
       k.dim = a.dim;
-      // OPS records only sizeof(T); the translator checks this against the
-      // kernel's declared parameter type and refuses a mismatch (e.g. int).
-      int bytes = a.dim > 0 ? a.elem_size / a.dim : a.elem_size;
-      if (bytes == 8)
-        k.elt = bld.getF64Type();
-      else if (bytes == 4)
-        k.elt = bld.getF32Type();
+      // OPS records only sizeof(T) (per component); the wrapper deduces the kind
+      // from the kernel signature, and the translator checks it against the
+      // declared parameter type.
+      switch (a.elem_kind) {
+      case EK_F32: k.elt = bld.getF32Type(); break;
+      case EK_F64: k.elt = bld.getF64Type(); break;
+      case EK_I32: k.elt = bld.getI32Type(); break;
+      case EK_I64: k.elt = bld.getI64Type(); break;
+      default:
+        if (a.elem_size == 8)
+          k.elt = bld.getF64Type();
+        else if (a.elem_size == 4)
+          k.elt = bld.getF32Type();
+      }
     } else {
       k.kind = KernelArgInfo::Kind::Idx;
     }
@@ -1065,6 +1130,7 @@ std::string JITEngine::argInfoDigest(const std::vector<KernelArgInfo> &infos) {
   std::string d;
   for (const KernelArgInfo &k : infos) {
     d += std::to_string(static_cast<int>(k.kind)) + "/" + std::to_string(k.access) + "/" +
+         (k.strided ? "s" : "u") +
          std::to_string(k.dim) + "/" + (!k.elt ? "?" : k.elt.isF64() ? "d" : k.elt.isF32() ? "f" : "i") + "/";
     for (const auto &p : k.points)
       d += std::to_string(p[0]) + "," + std::to_string(p[1]) + "," + std::to_string(p[2]) + ";";
@@ -1086,17 +1152,41 @@ bool JITEngine::kernelTranslatable(const LoopDesc &loop) {
   std::string reason;
   llvm::raw_string_ostream os(reason);
   KernelIRBuilder builder(ctx);
+  std::vector<KernelConstRef> constRefs;
   mlir::func::FuncOp fn = builder.generateAccessor(
       kernelSourceFiles_, loop.kernel_name, loop.kernel_name, loop.dims, infos,
-      kernelConstants_, os);
+      kernelConstants_, os, &constRefs, kernelPreamble_);
   bool ok = static_cast<bool>(fn);
   if (fn)
     fn.erase();
-  translatable_[loop.kernel_name] = {ok, sig};
+  translatable_[loop.kernel_name] = {ok, sig, std::move(constRefs)};
   if (explain_)
     llvm::errs() << (ok ? "[jit] " : "[host] ") << loop.kernel_name
                  << (ok ? "\n" : ": " + os.str());
   return ok;
+}
+
+void JITEngine::attachConstantArgs(LoopDesc &loop) {
+  if (!loop.fallback || hostMode_ != HostMode::Auto || !kernelTranslatable(loop))
+    return;
+  for (const KernelConstRef &ref : translatable_[loop.kernel_name].constRefs) {
+    auto reg = kernelConstants_.find(ref.name);
+    if (reg == kernelConstants_.end() || !reg->second)
+      continue;
+    ArgDesc a{};
+    a.argtype = OPS_ARG_GBL;
+    a.acc = OPS_READ;
+    a.dim = 1;
+    a.elem_size = ref.elt.getIntOrFloatBitWidth() / 8;
+    a.synthetic = true;
+    a.elem_kind = ref.elt.isF32()    ? EK_F32
+                  : ref.elt.isF64()  ? EK_F64
+                  : a.elem_size == 8 ? EK_I64
+                                     : EK_I32;
+    const char *src = static_cast<const char *>(reg->second) + ref.offset;
+    a.gbl_value.assign(src, src + a.elem_size);
+    loop.args.push_back(std::move(a));
+  }
 }
 
 bool JITEngine::runsOnHost(const LoopDesc &loop) {
@@ -1211,7 +1301,9 @@ void JITEngine::verifyLoop(LoopDesc &loop) {
       llvm::errs() << "[verify] " << loop.kernel_name << ": dat " << bufs[i].name
                    << (bufs[i].declaredWritten ? "" : " (NOT written by this loop!)") << " differs in "
                    << bad << " of " << n << " values (max |diff| " << worst << "); first at x="
-                   << first % sx << " y=" << first / sx << " jit=" << a[first] << " stock=" << b[first] << "\n";
+                   << first % sx << " y=" << first / sx << " before=" << reinterpret_cast<const double *>(start[i].data())[first]
+                   << " jit=" << a[first] << " stock=" << b[first] << "; loop range"
+                   << [&] { std::string r; for (int64_t v : loop.range) r += " " + std::to_string(v); return r; }() << "\n";
   }
   if (anyBad)
     ++verifyBad_[loop.kernel_name];
@@ -1292,10 +1384,16 @@ void JITEngine::compileAndExecuteSegment() {
     }
   }
 
+  auto engineStart = std::chrono::steady_clock::now();
   auto engineOrErr = mlir::ExecutionEngine::create(module, engineOptions);
+  stats_.engineSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - engineStart).count();
   if (!engineOrErr) {
     llvm::errs() << "Failed to create ExecutionEngine: "
                   << llvm::toString(engineOrErr.takeError()) << "\n";
+    llvm::errs() << "  while compiling:";
+    for (const LoopDesc &l : queue_)
+      llvm::errs() << " " << l.kernel_name;
+    llvm::errs() << "\n";
     // Dropping the loops would silently corrupt the run; the stock implementation
     // still can execute them.
     if (std::all_of(queue_.begin(), queue_.end(),

@@ -40,4 +40,5 @@ target_link_libraries(cloverleaf_2d PRIVATE
   ${mlir_dialect_libs} ${mlir_conversion_libs} ${mlir_extension_libs}
   MLIRRegisterAllPasses MLIRIR MLIRPass MLIRSupport
   ops_seq_local m)
-target_link_options(cloverleaf_2d PRIVATE -no-pie)
+# -rdynamic: the runtime names kernels by their address (dladdr), see kernelSymbolName.
+target_link_options(cloverleaf_2d PRIVATE -no-pie -rdynamic)

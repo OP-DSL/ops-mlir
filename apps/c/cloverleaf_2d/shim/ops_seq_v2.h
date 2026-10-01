@@ -15,4 +15,16 @@
 #define OPS_MLIR_STOCK_FALLBACK 1
 #include "ops/OPSWrapper.h"
 
+// Globals that kernels read are declared with ops_decl_const (stock OPS needs that for
+// its GPU backends). Registering them as well lets the JIT translate those reads; it
+// snapshots their value every time a loop is enqueued, since e.g. dt changes per step.
+namespace ops_mlir {
+template <class T>
+inline void declareConst(char const *name, int dim, char const *type, T *data) {
+  ::ops_decl_const(name, dim, type, data);
+  ops_register_kernel_constant(name, data);
+}
+} // namespace ops_mlir
+#define ops_decl_const(name, dim, type, data) ops_mlir::declareConst(name, dim, type, data)
+
 #endif

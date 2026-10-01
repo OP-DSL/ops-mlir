@@ -228,6 +228,7 @@ class ArgAttr(ParametrizedAttribute):
     acc: IntAttr
     argtype: IntAttr
     opt: IntAttr
+    elem_kind: IntAttr
 
     @classmethod
     def parse_parameters(cls, parser: AttrParser) -> list:
@@ -249,7 +250,10 @@ class ArgAttr(ParametrizedAttribute):
             argtype = _parse_int(parser)
             parser.parse_punctuation(",")
             opt = _parse_int(parser)
-        return [dat, stencil, dim, elem_size, data, data_d, acc, argtype, opt]
+            parser.parse_punctuation(",")
+            elem_kind = _parse_int(parser)
+        return [dat, stencil, dim, elem_size, data, data_d, acc, argtype, opt,
+                elem_kind]
 
     def print_parameters(self, printer: Printer) -> None:
         with printer.in_angle_brackets():
@@ -270,6 +274,8 @@ class ArgAttr(ParametrizedAttribute):
             _print_int(printer, self.argtype)
             printer.print_string(", ")
             _print_int(printer, self.opt)
+            printer.print_string(", ")
+            _print_int(printer, self.elem_kind)
 
 
 @irdl_op_definition

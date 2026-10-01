@@ -106,10 +106,12 @@ def OPS_ArgAttr : AttrDef<OPS_Dialect, "Arg"> {
     "int64_t":$data_d,
     "int32_t":$acc,
     "int32_t":$argtype,
-    "int32_t":$opt
+    "int32_t":$opt,
+    "int32_t":$elem_kind
   );
   let assemblyFormat = "`<` $dat `,` $stencil `,` $dim `,` $elem_size `,`"
-                       " $data `,` $data_d `,` $acc `,` $argtype `,` $opt `>`";
+                       " $data `,` $data_d `,` $acc `,` $argtype `,` $opt `,`"
+                       " $elem_kind `>`";
 }
 
 

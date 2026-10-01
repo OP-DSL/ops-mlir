@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from xdsl.builder import Builder, InsertPoint
 from xdsl.context import Context
 from xdsl.dialects import arith, func, memref, scf, stencil
-from xdsl.dialects.builtin import IndexType, IntegerAttr, MemRefType, ModuleOp, i32, f32, f64
+from xdsl.dialects.builtin import IndexType, IntegerAttr, MemRefType, ModuleOp, i32, i64, f32, f64
 from xdsl.ir import Block, Region, SSAValue
 from xdsl.passes import ModulePass
 
@@ -51,8 +51,9 @@ def range_bounds(rng: list[int], ndim: int) -> list[tuple[int, int]]:
 def normalized_range_bounds(rng: list[int], d_m: list[int], ndim: int) -> list[tuple[int, int]]:
     return [(lb - dm, ub - dm) for (lb, ub), dm in zip(range_bounds(rng, ndim), d_m)]
 
-_ELT_BY_TYPE_NAME = {"float": f32, "double": f64}
+_ELT_BY_TYPE_NAME = {"float": f32, "double": f64, "int": i32}
 _ELT_BY_BYTES = {4: f32, 8: f64}
+_ELT_BY_KIND = {1: f32, 2: f64, 3: i32, 4: i64}  # ElemKind in runtime/Core.h
 
 
 def dat_elt(dat: DatAttr):
@@ -67,9 +68,13 @@ def dat_elt(dat: DatAttr):
 
 
 def gbl_elt(arg):
-    """MLIR element type of a scalar global. OPS ignores the type string of
-    ops_arg_gbl and only records sizeof(T), so the size picks the type."""
-    nbytes = arg.elem_size.data // max(arg.dim.data, 1)
+    """MLIR element type of a global. OPS ignores the type string of
+    ops_arg_gbl and only records sizeof(T); the wrapper deduces the element kind
+    from the kernel signature when it can, and otherwise the size picks the type."""
+    kind = arg.elem_kind.data
+    if kind in _ELT_BY_KIND:
+        return _ELT_BY_KIND[kind]
+    nbytes = arg.elem_size.data
     if nbytes not in _ELT_BY_BYTES:
         raise NotImplementedError(
             f"ops_arg_gbl with element size {nbytes} bytes is not supported; "
@@ -170,13 +175,8 @@ def convert_group(
     for op in loops:
         for a in op.arg_list():
             if a.argtype.data == ArgType.GBL and a.acc.data == Access.READ:
-                if a.dim.data != 1:
-                    raise NotImplementedError(
-                        f"ops_arg_gbl with dim={a.dim.data} is not supported "
-                        f"(kernel '{op.kernel_name.data}'); only scalar (dim=1) "
-                        "globals are modeled."
-                    )
-                gbl_args.append(a)
+                # An array global is passed as one scalar per component.
+                gbl_args.extend([a] * max(a.dim.data, 1))
     gbl_types = [gbl_elt(a) for a in gbl_args]
 
     field_types = {
@@ -276,7 +276,7 @@ def convert_group(
                     access_results.append(access(key, point))
 
         n_gbl = sum(
-            1 for a in args
+            max(a.dim.data, 1) for a in args
             if a.argtype.data == ArgType.GBL and a.acc.data == Access.READ
         )
         member_gbl = gbl_values[gbl_cursor: gbl_cursor + n_gbl]

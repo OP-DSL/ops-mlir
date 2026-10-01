@@ -63,6 +63,8 @@ public:
         digest_ += std::to_string(arg.elem_size);
         digest_ += ';';
         digest_ += std::to_string(arg.opt);
+        digest_ += ';';
+        digest_ += std::to_string(arg.elem_kind);
 
         const DatDesc &dat = arg.dat;
         digest_ += ";dat:";
@@ -138,7 +140,8 @@ public:
   void enqueueParLoop(std::uintptr_t kernelToken, const char *kernelName,
                       ops_block block, int dims, const int *range,
                       const ops_arg *args, std::size_t nargs,
-                      std::function<void()> fallback = {});
+                      std::function<void()> fallback = {},
+                      const int *elemKinds = nullptr);
 
   void flush();
 
@@ -162,6 +165,10 @@ public:
     std::size_t numHostLoops = 0; // loops run through the stock OPS fallback
     // Wall-clock seconds spent in the runtime (for profiling).
     double compileSeconds = 0;   // planning is cheap; this is IR build + lowering + JIT
+    double xdslSeconds = 0;      //   of which: the Python (xDSL) lowering
+    double kernelIRSeconds = 0;  //   of which: translating kernel bodies
+    double backendSeconds = 0;   //   of which: the MLIR backend pipeline
+    double engineSeconds = 0;    //   of which: LLVM translation and code generation
     double executeSeconds = 0;   // launches, including the kernels themselves
     double kernelSeconds = 0;    // just invokePacked + device sync, summed over launches
     double haloSeconds = 0;      // ops_halo_transfer, excluding any flush it triggers
@@ -192,6 +199,9 @@ public:
     kernelSourceFiles_.push_back(std::move(path));
   }
 
+  // Source text parsed in front of every kernel file by the accessor translator.
+  void setKernelPreamble(std::string text) { kernelPreamble_ = std::move(text); }
+
   // Register extern global kernel constants (e.g. pi, jmax) for translation into MLIR 
   void registerKernelConstant(const std::string &name, const void *ptr) {
     kernelConstants_[name] = ptr;
@@ -220,9 +230,14 @@ private:
 
   LoopDesc buildLoopDesc(std::uintptr_t kernelToken, const char *kernelName,
                          ops_block block, int dims, const int *range,
-                         const ops_arg *args, std::size_t nargs);
+                         const ops_arg *args, std::size_t nargs,
+                         const int *elemKinds);
 
-  ArgDesc buildArgDesc(const ops_arg &arg);
+  ArgDesc buildArgDesc(const ops_arg &arg, int elemKind);
+
+  // Appends the current value of every registered constant the loop's kernel reads
+  // as a synthetic read-only global, so it reaches the compiled code as an argument.
+  void attachConstantArgs(LoopDesc &loop);
 
   DatDesc describeDat(ops_dat dat);
   StencilDesc describeStencil(ops_stencil stencil);
@@ -253,7 +268,7 @@ private:
   void syncHostBufferPtr(std::uintptr_t hostPtr);
   enum class HostMode { Auto, All, None };
   HostMode hostMode_ = HostMode::Auto;
-  struct Probe { bool ok; std::string signature; };
+  struct Probe { bool ok; std::string signature; std::vector<KernelConstRef> constRefs; };
   std::map<std::string, Probe> translatable_; // by kernel name; first signature wins
   bool explain_ = false;                       // OPS_MLIR_EXPLAIN
   std::map<std::string, double> hostSeconds_; // fallback time per kernel
@@ -318,6 +333,7 @@ private:
   std::vector<LoopDesc> queue_;
   FlushCallback flushCallback_;
   std::vector<std::string> kernelSourceFiles_;
+  std::string kernelPreamble_;
   std::map<std::string, const void *> kernelConstants_;
 
   std::unordered_map<ModuleKey, std::unique_ptr<mlir::ExecutionEngine>>

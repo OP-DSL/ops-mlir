@@ -37,6 +37,31 @@
 // The captured loops are queued for JIT compilation.
 //===----------------------------------------------------------------------===//
 
+namespace ops_mlir {
+// Element kind of a kernel parameter, from its declared type. ops_arg_gbl records only
+// sizeof(T), so this is the only place an int global is told apart from a float one.
+template <typename T> constexpr int elemKindOf() {
+  using U = std::remove_cv_t<T>;
+  if constexpr (std::is_same_v<U, float>) return EK_F32;
+  else if constexpr (std::is_same_v<U, double>) return EK_F64;
+  else if constexpr (std::is_same_v<U, int>) return EK_I32;
+  else if constexpr (std::is_same_v<U, long> || std::is_same_v<U, long long>) return EK_I64;
+  else return EK_Unknown;
+}
+template <typename P> struct ParamKind { static constexpr int value = EK_Unknown; };
+template <typename T> struct ParamKind<T *> { static constexpr int value = elemKindOf<T>(); };
+
+template <typename... P, std::size_t N>
+void fillElemKinds(void (*)(P...), int (&out)[N]) {
+  if constexpr (sizeof...(P) > 0 && sizeof...(P) <= N) {
+    const int k[sizeof...(P)] = {ParamKind<std::remove_reference_t<P>>::value...};
+    for (std::size_t i = 0; i < sizeof...(P); ++i)
+      out[i] = k[i];
+  }
+}
+template <typename F, std::size_t N> void fillElemKinds(F, int (&)[N]) {}
+} // namespace ops_mlir
+
 #ifdef OPS_MLIR_STOCK_FALLBACK
 // Built via the shim ops_seq_v2.h (apps/c/cloverleaf_*/shim), which has renamed the
 // stock OPS implementation to ops_par_loop_stock. Each queued loop carries a closure
@@ -96,9 +121,12 @@ void ops_par_loop(KernelFn kernel, const char *name, ops_block block, int dims,
                                          opsArgs...);
 #endif
 
+  int elemKinds[sizeof...(Args) ? sizeof...(Args) : 1] = {};
+  ops_mlir::fillElemKinds(kernel, elemKinds);
+
   ops_mlir::JITEngine::instance().enqueueParLoop(
       token, name, block, dims, range, packedArgs.data(), packedArgs.size(),
-      std::move(fallback));
+      std::move(fallback), elemKinds);
 }
 
 inline void compile_and_execute() {
@@ -109,6 +137,10 @@ inline void compile_and_execute() {
 template <typename T>
 void ops_register_kernel_constant(const char *name, T *data) {
   ops_mlir::JITEngine::instance().registerKernelConstant(name, data);
+}
+
+inline void set_kernel_preamble(const std::string &text) {
+  ops_mlir::JITEngine::instance().setKernelPreamble(text);
 }
 
 inline void set_kernel_source_file(const std::string &filePath) {

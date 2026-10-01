@@ -30,6 +30,7 @@
 #include "runtime/KernelIRBuilder.h"
 
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/RecordLayout.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Frontend/ASTUnit.h"
 #include "clang/Tooling/Tooling.h"
@@ -58,15 +59,27 @@ namespace {
 /// What the kernel sees of OPS: only the pieces its headers mention.
 const char *kPrelude = R"(
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <math.h>
+#include <float.h>
 struct ops_block_core; typedef ops_block_core *ops_block;
 struct ops_dat_core; typedef ops_dat_core *ops_dat;
 struct ops_reduction_core; typedef ops_reduction_core *ops_reduction;
+struct ops_stencil_core; typedef ops_stencil_core *ops_stencil;
+struct ops_halo_core; typedef ops_halo_core *ops_halo;
+struct ops_halo_group_core; typedef ops_halo_group_core *ops_halo_group;
+struct ops_arg;
+typedef int ops_access;
 template <class T> struct ACC {
   T &operator()(int) const; T &operator()(int, int) const; T &operator()(int, int, int) const;
 };
+// The same definitions as OPS's ops_macros.h -- SIGN in particular is not Fortran's.
 #define MIN(a, b) ((a < b) ? (a) : (b))
+#define MIN3(a, b, c) MIN(a,MIN(b,c))
 #define MAX(a, b) ((a > b) ? (a) : (b))
+#define MAX3(a, b, c) MAX(a,MAX(b,c))
+#define SIGN(a, b) ((b < 0.0) ? (a * (-1)) : (a))
 #line 1
 )";
 
@@ -104,6 +117,7 @@ public:
         rank(rank), constants(constants), errs(errs), astCtx(decl->getASTContext()) {}
 
   mlir::func::FuncOp run(const std::string &name);
+  const std::vector<KernelConstRef> &constRefs() const { return constRefList; }
 
   Target resolveTarget(const clang::Expr *e);
   bool ok() const { return ok_; }
@@ -131,6 +145,22 @@ private:
     std::vector<mlir::Value> out; // current value of each output argument (or null)
   } env;
   llvm::DenseMap<const clang::VarDecl *, int64_t> constVars; // unrolled loop variables
+
+  // Registered constants the body reads, in order of first use, with the function
+  // parameter that carries each.
+  struct ConstUse {
+    const clang::VarDecl *var;
+    int64_t offset;
+    mlir::Type elt;
+    mlir::Value value;
+  };
+  std::vector<ConstUse> constUses;
+  std::vector<KernelConstRef> constRefList;
+  void collectConstUses();
+  /// The (global, byte offset) a `g` or `g.member.member` expression names.
+  bool constantRef(const clang::Expr *e, const clang::VarDecl *&var, int64_t &offset,
+                   clang::QualType &type);
+  mlir::Value constantValue(const clang::Expr *e);
 
   //---- helpers -------------------------------------------------------------
   mlir::Value fail(const llvm::Twine &msg) {
@@ -242,7 +272,6 @@ private:
   }
 
   //---- expressions ---------------------------------------------------------
-  mlir::Value bakeGlobal(const clang::VarDecl *var);
   mlir::Value readAccessor(const clang::CXXOperatorCallExpr *call);
   mlir::Value emitCall(const clang::CallExpr *call);
   mlir::Value emitBinary(const clang::BinaryOperator *op);
@@ -307,18 +336,71 @@ Target Translator::resolveTarget(const clang::Expr *e) {
 // Expressions
 //===----------------------------------------------------------------------===//
 
-mlir::Value Translator::bakeGlobal(const clang::VarDecl *var) {
-  auto it = constants.find(var->getNameAsString());
-  if (it == constants.end() || !it->second)
+bool Translator::constantRef(const clang::Expr *e, const clang::VarDecl *&var,
+                             int64_t &offset, clang::QualType &type) {
+  e = e->IgnoreParenImpCasts();
+  if (const auto *dre = llvm::dyn_cast<clang::DeclRefExpr>(e)) {
+    const auto *vd = llvm::dyn_cast<clang::VarDecl>(dre->getDecl());
+    if (!vd || llvm::isa<clang::ParmVarDecl>(vd) || !vd->hasGlobalStorage())
+      return false;
+    var = vd;
+    offset = 0;
+    type = vd->getType();
+    return true;
+  }
+  if (const auto *me = llvm::dyn_cast<clang::MemberExpr>(e)) {
+    if (me->isArrow())
+      return false;
+    const auto *fd = llvm::dyn_cast<clang::FieldDecl>(me->getMemberDecl());
+    if (!fd || !constantRef(me->getBase(), var, offset, type))
+      return false;
+    const clang::RecordDecl *rec = fd->getParent();
+    if (rec->isInvalidDecl())
+      return false;
+    offset += astCtx.getASTRecordLayout(rec).getFieldOffset(fd->getFieldIndex()) / 8;
+    type = fd->getType();
+    return true;
+  }
+  return false;
+}
+
+void Translator::collectConstUses() {
+  struct Collector : clang::RecursiveASTVisitor<Collector> {
+    Translator &tr;
+    explicit Collector(Translator &t) : tr(t) {}
+    void note(clang::Expr *e) {
+      const clang::VarDecl *var = nullptr;
+      int64_t offset = 0;
+      clang::QualType type;
+      if (!tr.constantRef(e, var, offset, type))
+        return;
+      mlir::Type elt = tr.scalarType(type);
+      if (!elt || elt.isInteger(1) || !tr.constants.count(var->getNameAsString()))
+        return;
+      for (const ConstUse &u : tr.constUses)
+        if (u.var == var && u.offset == offset)
+          return;
+      tr.constUses.push_back({var, offset, elt, {}});
+    }
+    bool VisitDeclRefExpr(clang::DeclRefExpr *e) { return note(e), true; }
+    bool VisitMemberExpr(clang::MemberExpr *e) { return note(e), true; }
+  } collector(*this);
+  collector.TraverseStmt(const_cast<clang::Stmt *>(decl->getBody()));
+}
+
+mlir::Value Translator::constantValue(const clang::Expr *e) {
+  const clang::VarDecl *var = nullptr;
+  int64_t offset = 0;
+  clang::QualType type;
+  if (!constantRef(e, var, offset, type))
+    return fail("unsupported reference to a global or a member of one");
+  auto reg = constants.find(var->getNameAsString());
+  if (reg == constants.end() || !reg->second)
     return fail("reference to '" + var->getNameAsString() +
                 "': not a registered constant (ops_register_kernel_constant)");
-  clang::QualType t = var->getType().getUnqualifiedType();
-  if (t->isSpecificBuiltinType(clang::BuiltinType::Double))
-    return constFloat(b.getF64Type(), *reinterpret_cast<const double *>(it->second));
-  if (t->isSpecificBuiltinType(clang::BuiltinType::Float))
-    return constFloat(b.getF32Type(), *reinterpret_cast<const float *>(it->second));
-  if (t->isIntegerType() && astCtx.getTypeSize(t) == 32)
-    return constInt(b.getI32Type(), *reinterpret_cast<const int32_t *>(it->second));
+  for (const ConstUse &u : constUses)
+    if (u.var == var && u.offset == offset)
+      return u.value;
   return fail("global '" + var->getNameAsString() + "' has an unsupported type");
 }
 
@@ -460,6 +542,8 @@ mlir::Value Translator::emit(const clang::Expr *e) {
     }
     }
   }
+  if (llvm::isa<clang::MemberExpr>(e))
+    return constantValue(e);
   if (const auto *x = llvm::dyn_cast<clang::CStyleCastExpr>(e)) {
     mlir::Type to = scalarType(x->getType());
     mlir::Value v = emit(x->getSubExpr());
@@ -483,7 +567,7 @@ mlir::Value Translator::emit(const clang::Expr *e) {
       if (it != env.locals.end())
         return it->second;
       if (vd->hasGlobalStorage())
-        return bakeGlobal(vd);
+        return constantValue(e);
       if (llvm::isa<clang::ParmVarDecl>(vd)) {
         int a = paramArg(e);
         // a by-value global scalar
@@ -640,15 +724,6 @@ void Translator::emitIncDec(const clang::UnaryOperator *op) {
   assign(t, r);
 }
 
-static void setYield(mlir::OpBuilder &b, mlir::Block *blk, mlir::ValueRange vals,
-                     mlir::Location loc) {
-  if (!blk->empty() && blk->back().hasTrait<mlir::OpTrait::IsTerminator>())
-    blk->back().erase();
-  mlir::OpBuilder::InsertionGuard g(b);
-  b.setInsertionPointToEnd(blk);
-  b.create<mlir::scf::YieldOp>(loc, vals);
-}
-
 void Translator::emitIf(const clang::IfStmt *s) {
   mlir::Value cond = toBool(emit(s->getCond()));
   if (!cond)
@@ -675,28 +750,49 @@ void Translator::emitIf(const clang::IfStmt *s) {
     types.push_back(cur.getType());
   }
 
-  auto op = b.create<mlir::scf::IfOp>(loc, types, cond, /*withElseRegion=*/true);
+  // Both branches only compute on values that are already loaded, so they can run
+  // unconditionally and be merged with selects. That keeps the kernel body free of
+  // regions: a region inside the memref.alloca_scope the kernel is inlined into
+  // would have to become several blocks, which the scope forbids. Integer division
+  // is the one operation that must not run speculatively.
+  struct Unsafe : clang::RecursiveASTVisitor<Unsafe> {
+    bool found = false;
+    bool VisitBinaryOperator(clang::BinaryOperator *op) {
+      switch (op->getOpcode()) {
+      case clang::BO_Div: case clang::BO_Rem: case clang::BO_DivAssign: case clang::BO_RemAssign:
+        if (op->getType()->isIntegerType())
+          found = true;
+        break;
+      default: break;
+      }
+      return true;
+    }
+  } unsafe;
+  unsafe.TraverseStmt(const_cast<clang::Stmt *>(s->getThen()));
+  if (s->getElse())
+    unsafe.TraverseStmt(const_cast<clang::Stmt *>(s->getElse()));
+  if (unsafe.found) {
+    fail("integer division inside a conditional cannot be evaluated speculatively");
+    return;
+  }
+
   Env saved = env;
-  auto branch = [&](mlir::Block *blk, const clang::Stmt *body) {
-    mlir::OpBuilder::InsertionGuard g(b);
-    b.setInsertionPointToStart(blk);
+  auto branch = [&](const clang::Stmt *body) {
     env = saved;
     if (body)
       emitStmt(body);
     std::vector<mlir::Value> vals;
-    for (size_t i = 0; i < targets.size(); ++i) {
-      mlir::Value v = cast(current(targets[i]), types[i]);
-      if (!v)
-        return;
-      vals.push_back(v);
-    }
-    setYield(b, blk, vals, loc);
+    for (size_t i = 0; i < targets.size(); ++i)
+      vals.push_back(cast(current(targets[i]), types[i]));
+    return vals;
   };
-  branch(op.thenBlock(), s->getThen());
-  branch(op.elseBlock(), s->getElse());
+  std::vector<mlir::Value> thenVals = branch(s->getThen());
+  std::vector<mlir::Value> elseVals = branch(s->getElse());
   env = saved;
+  if (!ok_)
+    return;
   for (size_t i = 0; i < targets.size(); ++i)
-    assign(targets[i], op.getResult(i));
+    assign(targets[i], b.create<mlir::arith::SelectOp>(loc, cond, thenVals[i], elseVals[i]));
 }
 
 void Translator::emitFor(const clang::ForStmt *s) {
@@ -793,8 +889,11 @@ mlir::func::FuncOp Translator::run(const std::string &name) {
   for (size_t i = 0; i < params.size(); ++i)
     parmIndex[params[i]] = static_cast<int>(i);
 
-  // signature
-  std::vector<mlir::Type> inputs;
+  collectConstUses();
+
+  // signature: dat points, then global elements, then constants, then the outputs.
+  // The loop's other lowering (ops_to_stencil.py) calls kernels in this order.
+  std::vector<mlir::Type> inputs, gblInputs;
   std::vector<std::pair<int, size_t>> pointSlots; // (arg, point) per input
   std::vector<std::pair<int, size_t>> gblSlots;
   std::vector<int> idxSlots;
@@ -806,6 +905,9 @@ mlir::func::FuncOp Translator::run(const std::string &name) {
     case KernelArgInfo::Kind::Dat:
       if (!k.elt)
         return fail("dat of unsupported element type"), mlir::func::FuncOp();
+      if (k.strided)
+        return fail("strided stencils (dats indexed along fewer dimensions) are not supported yet"),
+               mlir::func::FuncOp();
       if (k.access == 0 || k.access == 2) // READ, RW
         for (size_t p = 0; p < k.points.size(); ++p) {
           inputs.push_back(k.elt);
@@ -824,7 +926,7 @@ mlir::func::FuncOp Translator::run(const std::string &name) {
       if (!k.elt)
         return fail("global of unsupported element type"), mlir::func::FuncOp();
       for (int e = 0; e < k.dim; ++e) {
-        inputs.push_back(k.elt);
+        gblInputs.push_back(k.elt);
         gblSlots.push_back({(int)i, (size_t)e});
       }
       break;
@@ -836,6 +938,10 @@ mlir::func::FuncOp Translator::run(const std::string &name) {
   }
   if (numOutputs == 0)
     return fail("kernel writes no dat"), mlir::func::FuncOp();
+
+  inputs.insert(inputs.end(), gblInputs.begin(), gblInputs.end());
+  for (const ConstUse &u : constUses)
+    inputs.push_back(u.elt);
 
   std::vector<mlir::Type> results;
   if (numOutputs == 1) {
@@ -860,6 +966,10 @@ mlir::func::FuncOp Translator::run(const std::string &name) {
     if (gblValue[a].empty())
       gblValue[a].resize(args[a].dim);
     gblValue[a][e] = entry->getArgument(input++);
+  }
+  for (ConstUse &u : constUses) {
+    u.value = entry->getArgument(input++);
+    constRefList.push_back({u.var->getNameAsString(), u.offset, u.elt});
   }
   mlir::Value outMemref = numOutputs > 1 ? entry->getArgument(input) : mlir::Value();
 
@@ -904,14 +1014,22 @@ mlir::func::FuncOp Translator::run(const std::string &name) {
 mlir::func::FuncOp KernelIRBuilder::generateAccessor(
     const std::vector<std::string> &sourceFiles, const std::string &kernelName,
     const std::string &functionName, int indexRank, const std::vector<KernelArgInfo> &args,
-    const std::map<std::string, const void *> &constants, llvm::raw_ostream &errs) {
+    const std::map<std::string, const void *> &constants, llvm::raw_ostream &errs,
+    std::vector<KernelConstRef> *constRefs, const std::string &preamble) {
   for (const std::string &file : sourceFiles) {
     auto code = llvm::MemoryBuffer::getFile(file);
     if (!code)
       continue;
-    std::string text = std::string(kPrelude) + (*code)->getBuffer().str();
-    std::unique_ptr<clang::ASTUnit> unit = clang::tooling::buildASTFromCodeWithArgs(
-        text, {"-x", "c++", "-std=c++17", "-resource-dir=" OPS_CLANG_RESOURCE_DIR}, file);
+    // Parsing a kernel file with the application's headers costs about a second, and
+    // every kernel in it, probed and then translated again for each module, would
+    // pay that. The parse depends only on the file and the preamble, so keep it.
+    static std::map<std::pair<std::string, std::string>, std::unique_ptr<clang::ASTUnit>> parsed;
+    auto &unit = parsed[{file, preamble}];
+    if (!unit) {
+      std::string text = std::string(kPrelude) + preamble + "\n#line 1\n" + (*code)->getBuffer().str();
+      unit = clang::tooling::buildASTFromCodeWithArgs(
+          text, {"-x", "c++", "-std=c++17", "-ferror-limit=0", "-resource-dir=" OPS_CLANG_RESOURCE_DIR}, file);
+    }
     if (!unit)
       continue;
 
@@ -929,9 +1047,23 @@ mlir::func::FuncOp KernelIRBuilder::generateAccessor(
     if (!finder.found)
       continue;
 
+    // A body that did not parse cleanly (an undeclared name, say) has expressions the
+    // translator would mis-read; refuse it rather than guess.
+    struct Unresolved : clang::RecursiveASTVisitor<Unresolved> {
+      bool found = false;
+      bool VisitRecoveryExpr(clang::RecoveryExpr *) { return found = true, false; }
+    } unresolved;
+    unresolved.TraverseStmt(const_cast<clang::Stmt *>(finder.found->getBody()));
+    if (unresolved.found || finder.found->isInvalidDecl()) {
+      errs << "accessor kernel '" << kernelName
+           << "': the body has unresolved names (see the compiler errors)\n";
+      return {};
+    }
+
     Translator tr(context_, finder.found, args, indexRank, constants, errs);
     mlir::func::FuncOp fn = tr.run(functionName);
-    // `unit` (and with it the AST the translator read) dies here; the MLIR is self-contained.
+    if (fn && constRefs)
+      *constRefs = tr.constRefs();
     return fn;
   }
   errs << "accessor kernel '" << kernelName << "': definition not found in the registered sources\n";
