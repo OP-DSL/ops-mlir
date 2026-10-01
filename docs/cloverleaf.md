@@ -214,6 +214,11 @@ What the numbers say:
 * Group size (8 → 32) and placement (earliest/latest) make no measurable difference: the dependences, not
   the cap, bound the groups here.
 
+The larger decks (2D 3840², 3D 256³), with Nsight Compute, register pressure and a measured breakdown of where
+the step time goes, are in [cloverleaf_large.md](cloverleaf_large.md). That study found the timings above to be
+contaminated by a concurrent job on the shared node in places, and redid the A100 sweeps with repetitions; its
+numbers supersede the CUDA figures in this section.
+
 ### 4.3 Against the stock implementation
 
 For orientation only. The stock sequential `ops_par_loop` is OPS's development path (a generic loop that
