@@ -174,7 +174,7 @@ def launch_histogram(w, dim, ev):
 
 
 def ncu_section(w, dim, ev, outdir, tag):
-    data = load(f"{ev}/clover_ncu_{dim}.json")
+    data = (load(f"{ev}/clover_ncu_{dim}.json") or []) + (load(f"{ev}/clover_ncu_{dim}_extra.json") or [])
     if not data:
         return
     w(f"### {dim.upper()}: one steady-state time step under Nsight Compute\n")
