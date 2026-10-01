@@ -190,7 +190,8 @@ JITEngine::~JITEngine() {
                  << llvm::format("%.2f", stats_.kernelIRSeconds) << ", backend "
                  << llvm::format("%.2f", stats_.backendSeconds) << ", engine "
                  << llvm::format("%.2f", stats_.engineSeconds) << ") execute "
-                 << llvm::format("%.4f", stats_.executeSeconds) << " halo "
+                 << llvm::format("%.4f", stats_.executeSeconds) << " (kernel "
+                 << llvm::format("%.4f", stats_.kernelSeconds) << ") halo "
                  << llvm::format("%.4f", stats_.haloSeconds) << " enqueue "
                  << llvm::format("%.4f", stats_.enqueueSeconds) << " plan "
                  << llvm::format("%.4f", stats_.planSeconds) << "\n";
@@ -1035,7 +1036,24 @@ void JITEngine::execute(mlir::ExecutionEngine &engine, const FusionPlan &plan) {
     synchronizeBackend(backend_);
     stats_.kernelSeconds += std::chrono::duration<double>(
                                 std::chrono::steady_clock::now() - launchStart).count();
+    double launchSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - launchStart).count();
     profiler_.end(profileName, kernelStart, bytesMoved);
+    // OPS_MLIR_LAUNCH_LOG=<file>: one line per launch -- index, seconds (launch plus
+    // synchronisation), modelled bytes, generated function, and the loops it fuses --
+    // to line the runtime's groups up with a profiler's kernel list.
+    static std::FILE *launchLog = [] {
+      const char *path = std::getenv("OPS_MLIR_LAUNCH_LOG");
+      return path ? std::fopen(path, "w") : nullptr;
+    }();
+    if (launchLog) {
+      std::fprintf(launchLog, "%zu\t%.9f\t%.0f\t%s\t", stats_.numLaunches - 1, launchSeconds, bytesMoved,
+                   funcName.c_str());
+      for (std::size_t k = 0; k < group.loops.size(); ++k)
+        std::fprintf(launchLog, "%s%s", k ? "+" : "", queue_[group.loops[k]].kernel_name.c_str());
+      std::fprintf(launchLog, "\n");
+      std::fflush(launchLog);
+    }
 #ifdef OPS_ENABLE_CUDA
     for (const auto &[hostPtr, bytes] : writebacks) {
       auto it = deviceBuffers_.find(hostPtr);
