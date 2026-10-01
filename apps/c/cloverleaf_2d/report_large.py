@@ -135,7 +135,8 @@ def window_table(ev, dim):
     """variant -> list of (gpu ms/step, host ms/step), one per repetition that has a log."""
     import glob
     out = collections.defaultdict(list)
-    for path in sorted(glob.glob(f"{ev}/launch_logs_{dim}/cuda_*.tsv")):
+    d = f"{ev}/repeat_logs_{dim}" if os.path.isdir(f"{ev}/repeat_logs_{dim}") else f"{ev}/launch_logs_{dim}"
+    for path in sorted(glob.glob(f"{d}/cuda_*.tsv")):
         m = re.fullmatch(r"cuda_(.+?)(?:_\d+)?\.tsv", os.path.basename(path))
         rows = read_launch_log(path)
         if rows and any(r[0] == "H" for r in rows):

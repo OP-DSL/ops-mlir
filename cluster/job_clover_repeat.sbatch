@@ -17,5 +17,5 @@ E=$OPS_CL_ROOT/eval; mkdir -p "$E"
 cd "$OPS_CL_ROOT/ops-mlir"
 V=off,consecutive,max2,max3,max4,noguard,ratio16
 EF="python3 apps/c/cloverleaf_2d/eval_fusion.py --tmp $OPS_CL_TMP --backends cuda --variants $V --repeat ${REPEAT:-3}"
-$EF --exe build/apps/c/cloverleaf_2d/cloverleaf_2d --deck $OPS_CL_ROOT/OPS/apps/c/CloverLeaf/clover_bm16_short.in --out $E/clover_repeat_2d.json
-$EF --exe build/apps/c/cloverleaf_3d/cloverleaf_3d --deck $OPS_CL_ROOT/OPS/apps/c/CloverLeaf_3D/clover_bm1s_short.in --out $E/clover_repeat_3d.json
+$EF --exe build/apps/c/cloverleaf_2d/cloverleaf_2d --deck $OPS_CL_ROOT/OPS/apps/c/CloverLeaf/clover_bm16_short.in --launch-logs $E/repeat_logs_2d --out $E/clover_repeat_2d.json
+$EF --exe build/apps/c/cloverleaf_3d/cloverleaf_3d --deck $OPS_CL_ROOT/OPS/apps/c/CloverLeaf_3D/clover_bm1s_short.in --launch-logs $E/repeat_logs_3d --out $E/clover_repeat_3d.json
