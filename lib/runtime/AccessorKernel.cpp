@@ -414,11 +414,45 @@ mlir::Value Translator::readAccessor(const clang::CXXOperatorCallExpr *call) {
   if (n != static_cast<unsigned>(rank))
     return fail("accessor with " + llvm::Twine(n) + " indices in a " + llvm::Twine(rank) +
                 "D loop (multi-component dats are not supported)");
+  // An offset may depend on data (upwinding picks the donor cell by the sign of a
+  // flux). It is always one of the stencil's declared points, so read them all and
+  // select the one whose offset matches.
+  std::array<mlir::Value, 3> dynamicOffset;
+  bool dynamic = false;
   for (unsigned i = 0; i < n; ++i) {
     auto v = evalInt(call->getArg(i + 1));
-    if (!v)
-      return fail("accessor offset is not a compile-time constant");
-    off[i] = static_cast<int>(*v);
+    if (v) {
+      off[i] = static_cast<int>(*v);
+      continue;
+    }
+    dynamic = true;
+    dynamicOffset[i] = cast(emit(call->getArg(i + 1)), b.getI32Type());
+    if (!dynamicOffset[i])
+      return {};
+  }
+  if (dynamic) {
+    if (info.access != 0 || pointValue[a].empty())
+      return fail("a data-dependent accessor offset on an argument that is written");
+    mlir::Value result;
+    for (size_t p = 0; p < info.points.size(); ++p) {
+      mlir::Value match;
+      bool possible = true;
+      for (unsigned i = 0; i < n; ++i) {
+        if (!dynamicOffset[i]) {
+          possible &= info.points[p][i] == off[i];
+          continue;
+        }
+        mlir::Value eq = b.create<mlir::arith::CmpIOp>(
+            loc, mlir::arith::CmpIPredicate::eq, dynamicOffset[i],
+            constInt(b.getI32Type(), info.points[p][i]));
+        match = match ? (mlir::Value)b.create<mlir::arith::AndIOp>(loc, match, eq) : eq;
+      }
+      if (!possible)
+        continue;
+      result = result ? (mlir::Value)b.create<mlir::arith::SelectOp>(loc, match, pointValue[a][p], result)
+                      : pointValue[a][p];
+    }
+    return result ? result : fail("a data-dependent accessor offset matches no stencil point");
   }
   bool zero = off[0] == 0 && off[1] == 0 && off[2] == 0;
   if (zero && info.access != 0 /*OPS_READ*/ && env.out[a])
@@ -738,16 +772,13 @@ void Translator::emitIf(const clang::IfStmt *s) {
   std::vector<mlir::Type> types;
   for (const Target &t : scan.targets) {
     mlir::Value cur = current(t);
-    if (!cur) {
-      if (t.kind == Target::Local)
-        continue; // declared inside the branch
-      fail("an output written conditionally has no value to keep on the other path "
-           "(argument " + llvm::Twine(t.arg) + ")");
-      return;
-    }
+    if (!cur && t.kind == Target::Local)
+      continue; // declared inside the branch
+    // A write-only output has no value yet; that is fine if both branches assign it,
+    // which is checked once they have been emitted.
     targets.push_back(t);
     before.push_back(cur);
-    types.push_back(cur.getType());
+    types.push_back(cur ? cur.getType() : args[t.arg].elt);
   }
 
   // Both branches only compute on values that are already loaded, so they can run
@@ -791,6 +822,11 @@ void Translator::emitIf(const clang::IfStmt *s) {
   env = saved;
   if (!ok_)
     return;
+  for (size_t i = 0; i < targets.size(); ++i)
+    if (!thenVals[i] || !elseVals[i]) {
+      fail("an output is not assigned on every path (argument " + llvm::Twine(targets[i].arg) + ")");
+      return;
+    }
   for (size_t i = 0; i < targets.size(); ++i)
     assign(targets[i], b.create<mlir::arith::SelectOp>(loc, cond, thenVals[i], elseVals[i]));
 }
@@ -905,8 +941,8 @@ mlir::func::FuncOp Translator::run(const std::string &name) {
     case KernelArgInfo::Kind::Dat:
       if (!k.elt)
         return fail("dat of unsupported element type"), mlir::func::FuncOp();
-      if (k.strided)
-        return fail("strided stencils (dats indexed along fewer dimensions) are not supported yet"),
+      if (k.strided && k.access != 0)
+        return fail("a dat indexed along fewer dimensions can only be read"),
                mlir::func::FuncOp();
       if (k.access == 0 || k.access == 2) // READ, RW
         for (size_t p = 0; p < k.points.size(); ++p) {

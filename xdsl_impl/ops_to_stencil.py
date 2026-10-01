@@ -21,10 +21,13 @@ from xdsl.passes import ModulePass
 
 from ops_dialect import ArgType, Access, DatAttr, ParLoopOp, StencilAttr
 
-def field_bounds(dat: DatAttr) -> list[tuple[int, int]]:
+def field_bounds(dat: DatAttr, axes: tuple[int, ...] | None = None) -> list[tuple[int, int]]:
     """Normalized 0-based field bounds: lb=0, ub=full allocated size per dim,
-    reversed from OPS's [x, y, z] to put x last (unit-stride) -- see module note."""
-    return [(0, size) for size in reversed(dat.size_list)]
+    reversed from OPS's [x, y, z] to put x last (unit-stride) -- see module note.
+    `axes` keeps only those (reversed-order) axes: a dat indexed along fewer
+    dimensions than the loop has a lower-rank field."""
+    bounds = [(0, size) for size in reversed(dat.size_list)]
+    return bounds if axes is None else [bounds[a] for a in axes]
 
 def halo_offsets(dat_args) -> list[int]:
     """Per-dim d_m values (negative) from the first dat, reversed to match
@@ -44,6 +47,23 @@ def stencil_offsets(stencil_attr: StencilAttr) -> list[tuple[int, ...]]:
 
     flat = (ctypes.c_int32 * (dims * points)).from_address(addr)
     return [tuple(reversed([flat[p * dims + d] for d in range(dims)])) for p in range(points)]
+
+def stencil_strides(stencil_attr: StencilAttr) -> list[int]:
+    """Per-dim (OPS order) stride of an arg's stencil: 1 for a normal dim, 0 for a dim
+    the dat does not have (an array indexed along fewer dimensions)."""
+    dims = stencil_attr.dims.data
+    addr = stencil_attr.stride.data
+    if addr == 0:
+        return [1] * dims
+    return list((ctypes.c_int32 * dims).from_address(addr))
+
+
+def kept_axes(stencil_attr: StencilAttr, ndim: int) -> tuple[int, ...]:
+    """Axes (in the reversed order the lowering uses: x last) of the dat that a
+    stencil actually indexes. Fewer than ndim for a strided stencil."""
+    strides = stencil_strides(stencil_attr)
+    return tuple(sorted(ndim - 1 - d for d in range(ndim) if strides[d] != 0))
+
 
 def range_bounds(rng: list[int], ndim: int) -> list[tuple[int, int]]:
     return list(reversed([(rng[2 * i], rng[2 * i + 1]) for i in range(ndim)]))
@@ -142,16 +162,32 @@ def convert_group(
     # Distinct dats, first-appearance order.
     dat_keys: list[int] = []
     dat_attr: dict[int, DatAttr] = {}
+    dat_axes: dict[int, tuple[int, ...]] = {}  # axes the dat is indexed along
     for op in loops:
         for a in op.arg_list():
             if a.argtype.data == ArgType.DAT:
                 key = a.dat.index.data
+                axes = kept_axes(a.stencil, ndim)
                 if key not in dat_attr:
                     dat_attr[key] = a.dat
+                    dat_axes[key] = axes
                     dat_keys.append(key)
+                elif dat_axes[key] != axes:
+                    raise NotImplementedError(
+                        f"dat '{a.dat.dat_name.data}' is accessed with stencils of "
+                        "different strides in one group"
+                    )
+                if len(axes) < ndim and a.acc.data != Access.READ:
+                    raise NotImplementedError(
+                        f"dat '{a.dat.dat_name.data}' is written through a strided stencil"
+                    )
 
     # d_m is shared by all dats on a block (see halo_offsets).
-    d_m = list(reversed(dat_attr[dat_keys[0]].d_m_list))
+    # (a dat indexed along fewer dimensions has an unrelated d_m in the dimensions it lacks)
+    full_rank = [k for k in dat_keys if len(dat_axes[k]) == ndim]
+    if not full_rank:
+        raise NotImplementedError("a loop needs at least one dat with the loop's full rank")
+    d_m = list(reversed(dat_attr[full_rank[0]].d_m_list))
 
     # Bounding box of the members' (normalized) ranges.
     member_bounds = [
@@ -180,7 +216,7 @@ def convert_group(
     gbl_types = [gbl_elt(a) for a in gbl_args]
 
     field_types = {
-        key: stencil.FieldType(field_bounds(dat_attr[key]), dat_elt(dat_attr[key]))
+        key: stencil.FieldType(field_bounds(dat_attr[key], dat_axes[key]), dat_elt(dat_attr[key]))
         for key in dat_keys
     }
 
@@ -225,9 +261,14 @@ def convert_group(
     def access(key: int, point: tuple) -> SSAValue:
         memo = (key, point)
         if memo not in accesses:
-            accesses[memo] = block_builder.insert(
-                stencil.AccessOp(temp_of[key], point)
-            ).res
+            axes = dat_axes[key]
+            if len(axes) == ndim:
+                op = stencil.AccessOp(temp_of[key], point)
+            else:
+                # lower-rank dat: offsets along the axes it has, mapped onto the
+                # loop's axes
+                op = stencil.AccessOp(temp_of[key], [point[a] for a in axes], list(axes))
+            accesses[memo] = block_builder.insert(op).res
         return accesses[memo]
 
     def in_range(bounds) -> SSAValue | None:
