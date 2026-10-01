@@ -21,7 +21,7 @@ git push cl:ops-mlir-cl/ops-mlir.git HEAD:refs/heads/main
 
 # on the login node (ssh cl): refresh the job scripts, then submit
 cd ~/ops-mlir-cl/src && git pull
-J='-D ~/ops-mlir-cl/src -o ~/ops-mlir-cl/logs/%x-%j.log'
+J="-D $HOME/ops-mlir-cl/src -o $HOME/ops-mlir-cl/logs/%x-%j.log"
 sbatch $J cluster/job_build.sbatch                    # clone, venv, configure, build
 sbatch $J cluster/job_tests.sbatch                    # full ctest on an A100
 sbatch $J cluster/job_eval.sbatch --main-n 256 --cpu-n 64 --omp-threads 24 \
