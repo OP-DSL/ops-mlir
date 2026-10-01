@@ -268,12 +268,20 @@ def run_all(args):
     R = {"meta": {"date": time.strftime("%Y-%m-%d %H:%M:%S"), "window": WINDOW, "timing_iters": TIMING_ITERS,
                   "host": os.uname().nodename}}
     only = set(args.only.split(",")) if args.only else None
+    given = {"main_n": args.main_n, "cpu_n": args.cpu_n, "omp_threads": args.omp_threads,
+             "peak_gbs": args.peak_gbs,
+             "sizes": [int(x) for x in args.sizes.split(",")] if args.sizes else None,
+             "sizes_f64": [int(x) for x in args.sizes_f64.split(",")] if args.sizes_f64 else None}
     if only and os.path.exists(args.out):
         old = json.load(open(args.out))       # resume: keep the stages we are not redoing
         for k, v in old.items():
             if k != "meta":
                 R[k] = v
         R["meta"].update({k: v for k, v in old["meta"].items() if k != "date"})
+    for k, v in given.items():
+        if v is not None:
+            R["meta"][k] = v
+    M = lambda k, d: R["meta"].get(k, d)     # setting with a default
     try:
         gpu = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total,driver_version",
                               "--format=csv,noheader"], capture_output=True, text=True).stdout.strip()
@@ -292,6 +300,7 @@ def run_all(args):
         json.dump(R, open(args.out, "w"), indent=1)
 
     q = args.quick
+    main_n, cpu_n = M("main_n", 128), M("cpu_n", 64)
     reps = 2 if q else 3
     stage("plan", lambda: exp_plan(runner))
     stage("accuracy", lambda: exp_accuracy(runner, cuda_rt))
@@ -299,11 +308,13 @@ def run_all(args):
     # main comparison: every planner configuration
     def main_cmp():
         out = {}
-        for exe, be, n, rp in (("opensbli_f32", "cuda", 128, reps), ("opensbli", "cuda", 128, reps),
-                               ("opensbli_f32", "openmp", 64, reps + 2), ("opensbli", "openmp", 64, reps + 2)):
+        for exe, be, n, rp in (("opensbli_f32", "cuda", main_n, reps), ("opensbli", "cuda", main_n, reps),
+                               ("opensbli_f32", "openmp", cpu_n, reps + 2), ("opensbli", "openmp", cpu_n, reps + 2)):
             key = f"{exe}/{be}/N{n}"
             out[key] = {}
             for name, env in CONFIGS.items():
+                if be == "openmp" and M("omp_threads", None):
+                    env = dict(env, OMP_NUM_THREADS=str(M("omp_threads", None)))
                 out[key][name] = timing(runner, exe, be, n, env, rp,
                                         niter=TIMING_ITERS if be == "cuda" else 300)
                 print(f"   {key} {name}: {out[key][name]['per_iter']*1e3:.2f} ms/iter "
@@ -313,7 +324,7 @@ def run_all(args):
 
     def sizes():
         out = {}
-        for n in ((32, 64, 128) if q else (24, 32, 48, 64, 96, 128, 160)):
+        for n in (M("sizes", None) or ((32, 64, 128) if q else (24, 32, 48, 64, 96, 128, 160))):
             out[str(n)] = {}
             for name in ("unfused", "adjacent, same-range", DEFAULT):
                 out[str(n)][name] = timing(runner, "opensbli_f32", "cuda", n, CONFIGS[name], reps)
@@ -321,11 +332,22 @@ def run_all(args):
         return out
     stage("sizes", sizes)
 
+    def sizes_f64():
+        out = {}
+        for n in M("sizes_f64", None) or []:
+            out[str(n)] = {}
+            for name in ("unfused", "adjacent, same-range", DEFAULT):
+                out[str(n)][name] = timing(runner, "opensbli", "cuda", n, CONFIGS[name], reps)
+                print(f"   f64 N={n} {name}: {out[str(n)][name]['per_iter']*1e3:.2f} ms/iter", flush=True)
+        return out
+    if M("sizes_f64", None):
+        stage("sizes_f64", sizes_f64)
+
     def caps():
         out = {"max": {}, "ratio": {}}
         for m in ((1, 2, 4, 8, 16, 32) if not q else (1, 4, 8, 32)):
             env = {"OPS_MLIR_FUSION_MAX": str(m)}
-            out["max"][str(m)] = timing(runner, "opensbli_f32", "cuda", 128, env, 2)
+            out["max"][str(m)] = timing(runner, "opensbli_f32", "cuda", main_n, env, 2)
             # plan shape for this cap
             r = runner.run("opensbli", "seq", 16, 3, env, plan=True)
             out["max"][str(m)]["stage_kernels"] = max(parse_plans(r["out"]), key=lambda p: p["loops"])["kernels"]
@@ -334,7 +356,7 @@ def run_all(args):
                   f"{out['max'][str(m)]['stage_kernels']} kernels/stage", flush=True)
         for ratio in ((0.5, 1.0, 2.0, 4.0) if not q else (1.0, 4.0)):
             env = {"OPS_MLIR_FUSION_BOX_RATIO": str(ratio)}
-            out["ratio"][str(ratio)] = timing(runner, "opensbli_f32", "cuda", 128, env, 2)
+            out["ratio"][str(ratio)] = timing(runner, "opensbli_f32", "cuda", main_n, env, 2)
             r = runner.run("opensbli", "seq", 16, 3, env, plan=True)
             out["ratio"][str(ratio)]["stage_kernels"] = max(parse_plans(r["out"]), key=lambda p: p["loops"])["kernels"]
             runner.done(r)
@@ -343,14 +365,15 @@ def run_all(args):
     stage("caps", caps)
 
     def openmp_quiet():
-        # WSL oversubscribes 16 threads badly; use half of them and more repetitions.
+        # Fewer threads than the machine has (WSL oversubscribes badly) and more repetitions.
         out = {}
+        threads = M("omp_threads", None) or 8
         for exe in ("opensbli_f32", "opensbli"):
-            key = f"{exe}/openmp/N64/8threads"
+            key = f"{exe}/openmp/N{cpu_n}/{threads}threads"
             out[key] = {}
             for name in ("unfused", "adjacent, same-range", "adjacent, guarded", DEFAULT):
-                env = dict(CONFIGS[name], OMP_NUM_THREADS="8")
-                out[key][name] = timing(runner, exe, "openmp", 64, env, 5, niter=300)
+                env = dict(CONFIGS[name], OMP_NUM_THREADS=str(threads))
+                out[key][name] = timing(runner, exe, "openmp", cpu_n, env, 5, niter=300)
                 print(f"   {key} {name}: {out[key][name]['per_iter']*1e3:.2f} ms/iter "
                       f"(+-{out[key][name]['per_iter_spread']*50:.1f}%)", flush=True)
         return out
@@ -361,7 +384,7 @@ def run_all(args):
         """Byte model at the real grid size, to compare with kernel time."""
         out = {}
         for name in ("unfused", DEFAULT):
-            r = runner.run("opensbli_f32", "cuda", 128, 2, CONFIGS[name], plan=True)
+            r = runner.run("opensbli_f32", "cuda", main_n, 2, CONFIGS[name], plan=True)
             st = max(parse_plans(r["out"]), key=lambda p: p["loops"])
             runner.done(r)
             out[name] = {"stage_bytes": st["bytes_fused"], "stage_bytes_unfused": st["bytes_unfused"]}
@@ -454,7 +477,10 @@ def ms(x):
 def findings(R):
     """Headline results, with the numbers taken from the data."""
     t = R["timing"]
-    g32, g64 = t["opensbli_f32/cuda/N128"], t["opensbli/cuda/N128"]
+    mn = R["meta"].get("main_n", 128)
+    g32, g64 = t[f"opensbli_f32/cuda/N{mn}"], t[f"opensbli/cuda/N{mn}"]
+    peak = R["meta"].get("peak_gbs", 192)
+    gpu = R["meta"].get("gpu", "the GPU").split(",")[0]
     def sp(tab, a, b):
         return tab[a]["per_iter"] / tab[b]["per_iter"]
     st = {k: v["stage"] for k, v in R["plan"].items()}
@@ -465,7 +491,7 @@ def findings(R):
              f"moving {st[DEFAULT]['moved']} loops past independent ones. Launches per iteration (including the "
              f"filter steps): {g32['unfused']['launches_per_iter']:.0f} → {g32['adjacent, same-range']['launches_per_iter']:.0f} "
              f"→ {g32[DEFAULT]['launches_per_iter']:.0f}.")
-    L.append(f"* **Single precision on the GPU (128³):** {ms(g32['unfused']['per_iter'])} ms/iteration unfused → "
+    L.append(f"* **Single precision on the GPU ({mn}³):** {ms(g32['unfused']['per_iter'])} ms/iteration unfused → "
              f"{ms(g32['adjacent, same-range']['per_iter'])} ms with adjacent same-range fusion "
              f"({sp(g32,'unfused','adjacent, same-range'):.2f}×) → {ms(g32[DEFAULT]['per_iter'])} ms with the DAG planner "
              f"({sp(g32,'unfused',DEFAULT):.2f}×). Most of the gain is ordinary fusion; reordering adds "
@@ -476,19 +502,21 @@ def findings(R):
         ku, kf = g32["unfused"]["breakdown"]["kernel"], g32[DEFAULT]["breakdown"]["kernel"]
         L.append(f"* **Why:** the kernels are memory-bound. The byte model predicts {bu/bf:.2f}× less traffic; the measured "
                  f"kernel time drops {ku/kf:.2f}×, and the modelled bandwidth is {3*bu/ku/1e9:.0f} GB/s unfused against "
-                 f"{3*bf/kf/1e9:.0f} GB/s fused (peak 192 GB/s). Host overhead (enqueue, planning, cache key, argument "
+                 f"{3*bf/kf/1e9:.0f} GB/s fused (peak {peak} GB/s). Host overhead (enqueue, planning, cache key, argument "
                  f"packing) is under 4% of an iteration, so cutting launches was not the gain; removing memory traffic was.")
     L.append(f"* **Double precision on the GPU** gains only {sp(g64,'unfused',DEFAULT):.2f}× "
              f"({ms(g64['unfused']['per_iter'])} → {ms(g64[DEFAULT]['per_iter'])} ms): this GPU's fp64 rate, not memory "
              f"bandwidth, is the limit, so saved traffic buys little. Single precision is "
              f"{g64[DEFAULT]['per_iter']/g32[DEFAULT]['per_iter']:.1f}× faster than double here.")
     if "openmp_8t" in R:
-        o32 = R["openmp_8t"]["opensbli_f32/openmp/N64/8threads"]
-        o64 = R["openmp_8t"]["opensbli/openmp/N64/8threads"]
-        L.append(f"* **OpenMP (8 threads, 64³):** {sp(o32,'unfused',DEFAULT):.2f}× in single precision "
+        o32 = next(v for k, v in R["openmp_8t"].items() if k.startswith("opensbli_f32/"))
+        o64 = next(v for k, v in R["openmp_8t"].items() if k.startswith("opensbli/"))
+        nthr = next(iter(R["openmp_8t"])).split("/")[-1].replace("threads", "")
+        ncpu = next(iter(R["openmp_8t"])).split("/")[2][1:]
+        L.append(f"* **OpenMP ({nthr} threads, {ncpu}³):** {sp(o32,'unfused',DEFAULT):.2f}× in single precision "
                  f"({ms(o32['unfused']['per_iter'])} → {ms(o32[DEFAULT]['per_iter'])} ms) and "
                  f"{sp(o64,'unfused',DEFAULT):.2f}× in double ({ms(o64['unfused']['per_iter'])} → {ms(o64[DEFAULT]['per_iter'])} ms). "
-                 f"With all 16 threads the machine was too noisy to conclude anything (spreads up to 80%).")
+                 f"(See section 2 for the full-machine runs and their spreads.)")
     sizes = R.get("sizes")
     if sizes:
         ns = sorted(int(k) for k in sizes)
@@ -524,12 +552,15 @@ def findings(R):
 
 
 def report(args):
+    tag = getattr(args, 'tag', '') or ''
+    suffix = ('_' + tag) if tag else ''
     R = json.load(open(args.results))
     os.makedirs(os.path.join(args.outdir, "img"), exist_ok=True)
     md = []
     w = md.append
     meta = R["meta"]
-    w("# Taylor-Green vortex: fusion and reordering evaluation\n")
+    gpu_name = meta.get("gpu", "").split(",")[0]
+    w("# Taylor-Green vortex: fusion and reordering evaluation" + (" - " + gpu_name if tag else "") + "\n")
     w(f"Generated by `apps/c/taylor_green_vortex/eval_tgv.py` on {meta['date']}. "
       f"GPU: {meta.get('gpu', '?')}; {meta.get('cpus', '?')} CPU threads. "
       f"Raw data: `data/tgv_eval.json`.\n")
@@ -578,20 +609,20 @@ def report(args):
         svg = svg_bars(f"{prec} precision, {be.upper()}, {n[1:]}³", labels,
                        [table[k]["per_iter"] * 1e3 for k in labels],
                        [table[k]["per_iter"] * 1e3 * table[k]["per_iter_spread"] / 2 for k in labels])
-        fn = f"img/timing_{exe}_{be}_{n}.svg"
+        fn = f"img/timing_{exe}_{be}_{n}{suffix}.svg"
         open(os.path.join(args.outdir, fn), "w").write(svg)
         imgs.append(fn)
         w(f"![{key}]({fn})\n")
 
     if "openmp_8t" in R:
-        w("### OpenMP with 8 threads (5 repetitions)\n")
-        w("The 16-thread OpenMP runs above are very noisy on this machine (WSL2). "
-          "Repeated with `OMP_NUM_THREADS=8`:\n")
+        w("### OpenMP, controlled repeat (5 repetitions)\n")
+        w("The OpenMP runs above use every available thread and can be noisy. "
+          "Repeated with a fixed thread count and more repetitions:\n")
         for key, table in R["openmp_8t"].items():
             exe = key.split("/")[0]
             prec = "single" if exe.endswith("f32") else "double"
             base = table["unfused"]["per_iter"]
-            w(f"**{prec} precision, 64³**\n")
+            w(f"**{prec} precision, {key.split('/')[2][1:]}³, {key.split('/')[3].replace('threads', '')} threads**\n")
             w("| configuration | ms / iteration | ± | speed-up vs unfused |")
             w("|---|---:|---:|---:|")
             for name, t in table.items():
@@ -600,9 +631,10 @@ def report(args):
 
     # precision
     try:
-        t32 = R["timing"]["opensbli_f32/cuda/N128"][DEFAULT]["per_iter"]
-        t64 = R["timing"]["opensbli/cuda/N128"][DEFAULT]["per_iter"]
-        w(f"Single versus double precision on the GPU (default planner, 128³): {ms(t32)} ms vs {ms(t64)} ms per "
+        mn_ = R["meta"].get("main_n", 128)
+        t32 = R["timing"][f"opensbli_f32/cuda/N{mn_}"][DEFAULT]["per_iter"]
+        t64 = R["timing"][f"opensbli/cuda/N{mn_}"][DEFAULT]["per_iter"]
+        w(f"Single versus double precision on the GPU (default planner, {mn_}³): {ms(t32)} ms vs {ms(t64)} ms per "
           f"iteration, **{t64/t32:.2f}×**.\n")
     except KeyError:
         pass
@@ -624,12 +656,24 @@ def report(args):
         svg = svg_lines("Speed-up of the default planner vs unfused", ns,
                         {"default / unfused": sp, "1.0": [1.0] * len(ns)}, "grid size N (N³ cells)",
                         "speed-up", logx=True)
-        open(os.path.join(args.outdir, "img/sizes.svg"), "w").write(svg)
-        w("![sizes](img/sizes.svg)\n")
+        open(os.path.join(args.outdir, f"img/sizes{suffix}.svg"), "w").write(svg)
+        w(f"![sizes](img/sizes{suffix}.svg)\n")
+
+    if R.get("sizes_f64"):
+        w("### Double precision (GPU)\n")
+        ns64 = sorted(int(k) for k in R["sizes_f64"])
+        names64 = list(next(iter(R["sizes_f64"].values())).keys())
+        w("| N³ | " + " | ".join(f"{n} ms" for n in names64) + " | speed-up (default) |")
+        w("|---:|" + "---:|" * (len(names64) + 1))
+        for n in ns64:
+            row = R["sizes_f64"][str(n)]
+            w(f"| {n} | " + " | ".join(ms(row[k]["per_iter"]) for k in names64) +
+              f" | {row['unfused']['per_iter'] / row[DEFAULT]['per_iter']:.3f}× |")
+        w("")
 
     # caps
     if "caps" in R:
-        w("## 4. Parameter sweeps (single precision, GPU, 128³)\n")
+        w(f"## 4. Parameter sweeps (single precision, GPU, {R['meta'].get('main_n', 128)}³)\n")
         w("Maximum loops per kernel (`OPS_MLIR_FUSION_MAX`):\n")
         w("| max | kernels / stage | ms / iteration |")
         w("|---:|---:|---:|")
@@ -645,12 +689,12 @@ def report(args):
     # breakdown
     w("## 5. Where the time goes\n")
     w("Exact steady-state breakdown per iteration from the runtime's cumulative timers, differenced "
-      "between windows of 100 iterations (single precision, GPU, 128³). *kernel* is the time inside the "
+      f"between windows of 100 iterations (single precision, GPU, {R['meta'].get('main_n', 128)}³). *kernel* is the time inside the "
       "generated functions including the device synchronisation; *execute overhead* is argument packing, "
       "buffer bookkeeping and profiling around them.\n")
     w("| configuration | wall ms | kernels | execute overhead | halo exchange | enqueue | plan + cache key | other (app) |")
     w("|---|---:|---:|---:|---:|---:|---:|---:|")
-    tab = R["timing"].get("opensbli_f32/cuda/N128", {})
+    tab = R["timing"].get(f"opensbli_f32/cuda/N{R['meta'].get('main_n', 128)}", {})
     for name in ("unfused", "adjacent, same-range", DEFAULT):
         if name not in tab:
             continue
@@ -663,7 +707,7 @@ def report(args):
     w("")
     if "bandwidth" in R and tab:
         w("Modelled memory bandwidth (byte model of the kernels actually launched × 3 stages ÷ kernel time; "
-          "the GPU's peak is 192 GB/s):\n")
+          f"the GPU's peak is {R['meta'].get('peak_gbs', 192)} GB/s):\n")
         w("| configuration | model traffic / iteration | kernel ms | modelled GB/s |")
         w("|---|---:|---:|---:|")
         for name in ("unfused", DEFAULT):
@@ -700,8 +744,9 @@ def report(args):
     w("Single against double precision (rms error relative to the flow scale): "
       + ", ".join(f"{k} {v:.2e}" for k, v in e.items()) + ".\n")
 
-    open(os.path.join(args.outdir, "tgv_evaluation.md"), "w").write("\n".join(md))
-    print("wrote", os.path.join(args.outdir, "tgv_evaluation.md"))
+    out = os.path.join(args.outdir, f"tgv_evaluation{suffix}.md")
+    open(out, "w").write("\n".join(md))
+    print("wrote", out)
 
 
 def main():
@@ -713,9 +758,16 @@ def main():
     r.add_argument("--work")
     r.add_argument("--quick", action="store_true")
     r.add_argument("--only", help="comma-separated stages to (re)run, keeping the rest of --out")
+    r.add_argument("--main-n", type=int, help="grid size of the main GPU comparison (default 128)")
+    r.add_argument("--cpu-n", type=int, help="grid size of the OpenMP comparison (default 64)")
+    r.add_argument("--omp-threads", type=int, help="OMP_NUM_THREADS for the OpenMP runs")
+    r.add_argument("--sizes", help="comma-separated grid sizes for the single-precision size sweep")
+    r.add_argument("--sizes-f64", help="comma-separated grid sizes for a double-precision size sweep")
+    r.add_argument("--peak-gbs", type=float, help="the GPU's peak memory bandwidth in GB/s (default 192)")
     p = sub.add_parser("report")
     p.add_argument("--results", required=True)
     p.add_argument("--outdir", required=True)
+    p.add_argument("--tag", help="suffix for the output file names, e.g. a100")
     a = ap.parse_args()
     run_all(a) if a.cmd == "run" else report(a)
 

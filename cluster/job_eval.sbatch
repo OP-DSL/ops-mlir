@@ -9,6 +9,8 @@
 # Run the Taylor-Green vortex evaluation on one A100 and write results.json.
 #   sbatch cluster/job_eval.sbatch [extra args for eval_tgv.py run]
 set -euo pipefail
+# Bring the checkout and build up to date first (cheap when nothing changed).
+[ "${OPS_SKIP_SETUP:-0}" = 1 ] || bash "$SLURM_SUBMIT_DIR/cluster/setup_renyi.sh"
 source "$SLURM_SUBMIT_DIR/cluster/env_cl.sh"
 OUT=${OPS_EVAL_OUT:-$OPS_CL_ROOT/eval}
 mkdir -p "$OUT"
