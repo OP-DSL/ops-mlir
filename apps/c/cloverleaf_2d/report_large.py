@@ -105,12 +105,12 @@ def svg_scatter(title, groups, xlabel, ylabel, width=640, height=320, xmax=None,
 
 # ------------------------------------------------------------------ launch logs
 STEPS = 87          # both decks run 87 time steps
-LATE = 0.4          # the last 40 % of the run is the steady-state window
 
 
 def read_launch_log(path):
+    import gzip
     rows = []
-    for line in open(path):
+    for line in (gzip.open(path, "rt") if path.endswith(".gz") else open(path)):
         f = line.rstrip("\n").split("\t")
         if f[0] in ("G", "H"):
             kind, _, sec, nbytes, func, members = f
@@ -121,23 +121,37 @@ def read_launch_log(path):
 
 
 def window_ms_per_step(rows):
-    """(GPU launches, host loops) milliseconds per time step over the last 40 % of the run. The first
-    launch of every kernel pays for loading it, so averaging the whole run would charge that one-off
-    cost to the fusion setting that happens to create more distinct kernels."""
-    late = rows[int(len(rows) * (1 - LATE)):]
-    gpu = sum(r[1] for r in late if r[0] == "G")
-    host = sum(r[1] for r in late if r[0] == "H")
-    n = LATE * STEPS
-    return gpu / n * 1e3, host / n * 1e3
+    """(GPU launches, host loops) milliseconds per time step at steady state.
+
+    Each distinct launch (same generated function and fused loops) or host loop is charged its
+    *median* time over the run, times how often it runs, divided by the number of steps. The first
+    launch of a module pays for loading its code (~0.8 s here) and the first loop of every kind pays
+    for allocating and uploading, so a mean or a window of the run would bill those one-off costs to
+    whichever fusion setting creates more modules. Things that run fewer than 5 times (the one-time
+    grid setup) are left out; periodic work (field_summary every 10 steps) stays in."""
+    groups = collections.defaultdict(list)
+    for kind, sec, _, func, members in rows:
+        groups[(kind, func, tuple(members))].append(sec)
+    gpu = host = 0.0
+    for (kind, _, _), xs in groups.items():
+        if len(xs) < 5:
+            continue
+        xs = sorted(xs)
+        t = xs[len(xs) // 2] * len(xs)
+        if kind == "G":
+            gpu += t
+        else:
+            host += t
+    return gpu / STEPS * 1e3, host / STEPS * 1e3
 
 
 def window_table(ev, dim):
     """variant -> list of (gpu ms/step, host ms/step), one per repetition that has a log."""
     import glob
     out = collections.defaultdict(list)
-    d = f"{ev}/repeat_logs_{dim}" if os.path.isdir(f"{ev}/repeat_logs_{dim}") else f"{ev}/launch_logs_{dim}"
-    for path in sorted(glob.glob(f"{d}/cuda_*.tsv")):
-        m = re.fullmatch(r"cuda_(.+?)(?:_\d+)?\.tsv", os.path.basename(path))
+    d = f"{ev}/repeat_logs_{dim}"
+    for path in sorted(glob.glob(f"{d}/cuda_*.tsv*")):
+        m = re.fullmatch(r"cuda_(.+?)(?:_\d+)?\.tsv(?:\.gz)?", os.path.basename(path))
         rows = read_launch_log(path)
         if rows and any(r[0] == "H" for r in rows):
             out[m[1]].append(window_ms_per_step(rows))
@@ -193,7 +207,7 @@ def timing_section(w, dim, ev, outdir, tag, imgs):
     win = window_table(ev, dim)
     if win:
         reps = max(len(v) for v in win.values())
-        w(f"**CUDA (A100): time per time step in the steady-state window** (last {LATE:.0%} of the run; "
+        w(f"**CUDA (A100): time per time step at steady state** (median per distinct launch x its count; "
           f"{'minimum (median) of ' + str(reps) + ' repetitions' if reps > 1 else 'one run'})\n")
         w("| variant | GPU launches ms/step | host loops ms/step | total ms/step | vs off |")
         w("|---|---:|---:|---:|---:|")
@@ -207,27 +221,27 @@ def timing_section(w, dim, ev, outdir, tag, imgs):
             rel = f"{g[0] / base[0] - 1:+.1%} (GPU) / {t[0] / base[1] - 1:+.1%} (total)" if base else ""
             w(f"| {v} | {fmt(g)} | {fmt(h)} | {fmt(t)} | {rel} |")
         w("")
-    if cuda:
+    if cuda and win:
         agg = aggregate(cuda)
-        names = sorted([v for v in agg if re.fullmatch(r"max\d+", v) or v == "off"], key=variant_key)
+        names = sorted([v for v in agg if (re.fullmatch(r"max\d+", v) or v == "off") and v in win], key=variant_key)
         xs = [("1" if v == "off" else v[3:]) for v in names]
         svg = svg_lines(f"{dim.upper()} on the A100: loops per kernel", xs,
-                        {"GPU kernel s (min)": [agg[v]["kernel_s"][0] for v in names],
-                         "launches / 1000": [agg[v]["launches"] / 1000 for v in names]},
-                        "max loops per kernel (OPS_MLIR_FUSION_MAX)", "s  |  thousands of launches")
+                        {"GPU ms / step": [min(x[0] for x in win[v]) for v in names],
+                         "kernels / 100 (launches per run / 87 / 100)": [agg[v]["launches"] / STEPS / 100 for v in names]},
+                        "max loops per kernel (OPS_MLIR_FUSION_MAX)", "ms  |  hundreds of kernels")
         fn = f"img/clover_large_sweep_{dim}{tag}.svg"
         open(os.path.join(outdir, fn), "w").write(svg)
         w(f"![sweep]({fn})\n")
 
 
 def launch_histogram(w, dim, ev):
-    d = f"{ev}/launch_logs_{dim}"
+    d = f"{ev}/repeat_logs_{dim}"
     if not os.path.isdir(d):
         return
     import glob
     rows = []
-    for v in ("off", "consecutive", "noguard", "max2", "max3", "max4", "max8", "max16", "max64", "ratio16"):
-        paths = sorted(glob.glob(f"{d}/cuda_{v}_0.tsv")) or sorted(glob.glob(f"{d}/cuda_{v}.tsv"))
+    for v in ("off", "consecutive", "noguard", "max2", "max3", "max4", "ratio16"):
+        paths = sorted(glob.glob(f"{d}/cuda_{v}_0.tsv*"))
         if not paths:
             continue
         sizes = collections.Counter()
