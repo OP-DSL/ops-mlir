@@ -98,7 +98,7 @@ def profile(args, variant, workdir):
     # 2. profile what follows
     d = sandbox(deck3)
     log3 = os.path.join(workdir, f"{variant}_3.tsv")
-    p = subprocess.run(["ncu", "--csv", "--metrics", METRICS, "--launch-skip", str(skip), args.exe_abs],
+    p = subprocess.run(["ncu", "--csv", "--target-processes", "application-only", "--metrics", METRICS, "--launch-skip", str(skip), args.exe_abs],
                        cwd=d, env=dict(env, OPS_MLIR_LAUNCH_LOG=log3), capture_output=True, text=True)
     shutil.rmtree(d, ignore_errors=True)
     if p.returncode != 0:
