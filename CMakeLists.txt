@@ -67,13 +67,23 @@ endif()
 #===============================================================================
 # OpenMP Setup
 #===============================================================================
-# omp.h and libomp.so live in the OpenMP runtime build alongside LLVM.
-# Derive the path from MLIR_BUILD_DIR (same LLVM tree) — no extra env var needed.
-cmake_path(GET MLIR_BUILD_DIR PARENT_PATH LLVM_PROJECT_DIR)
-set(OMP_RUNTIME_DIR "${LLVM_PROJECT_DIR}/openmp/build/runtime/src")
-if(NOT EXISTS "${OMP_RUNTIME_DIR}/omp.h")
-  message(FATAL_ERROR "omp.h not found at ${OMP_RUNTIME_DIR}. "
-    "Ensure the LLVM OpenMP runtime was built in-tree alongside MLIR_BUILD_DIR.")
+# omp.h and libomp.so. For an in-tree LLVM build they live in the OpenMP runtime
+# build alongside it (derived from MLIR_BUILD_DIR, no extra variable needed).
+# For an *installed* LLVM, point OPS_OMP_INCLUDE_DIR (the directory with omp.h,
+# usually <prefix>/lib/clang/<ver>/include) and OPS_OMP_LIB_DIR (the directory
+# with libomp.so, <prefix>/lib or <prefix>/lib/<triple>) at them.
+if(DEFINED ENV{OPS_OMP_INCLUDE_DIR} AND DEFINED ENV{OPS_OMP_LIB_DIR})
+  set(OMP_INCLUDE_DIR $ENV{OPS_OMP_INCLUDE_DIR})
+  set(OMP_LIB_DIR $ENV{OPS_OMP_LIB_DIR})
+else()
+  cmake_path(GET MLIR_BUILD_DIR PARENT_PATH LLVM_PROJECT_DIR)
+  set(OMP_INCLUDE_DIR "${LLVM_PROJECT_DIR}/openmp/build/runtime/src")
+  set(OMP_LIB_DIR "${OMP_INCLUDE_DIR}")
+endif()
+if(NOT EXISTS "${OMP_INCLUDE_DIR}/omp.h")
+  message(FATAL_ERROR "omp.h not found at ${OMP_INCLUDE_DIR}. Either build the LLVM "
+    "OpenMP runtime in-tree alongside MLIR_BUILD_DIR, or set OPS_OMP_INCLUDE_DIR and "
+    "OPS_OMP_LIB_DIR for an installed LLVM.")
 endif()
 
 add_compile_options(-fopenmp)
@@ -84,8 +94,8 @@ add_link_options(-fopenmp)
 #===============================================================================
 include_directories(${CMAKE_SOURCE_DIR}/include)
 include_directories(${OPS_INCLUDE_DIR})
-include_directories(${OMP_RUNTIME_DIR})
-link_directories(${OMP_RUNTIME_DIR})
+include_directories(${OMP_INCLUDE_DIR})
+link_directories(${OMP_LIB_DIR})
 include_directories(${MLIR_INCLUDE_DIRS})
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
