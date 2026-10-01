@@ -181,7 +181,11 @@ public:
 
   // Loop fusion (see runtime/FusionPlanner.h). Defaults come from the
   // environment; tests override them.
-  void setFusionOptions(const FusionOptions &o) { fusionOptions_ = o; }
+  void setFusionOptions(const FusionOptions &o) {
+    fusionOptions_ = o;
+    planCache_.clear(); // plans and modules are keyed by the queue alone
+    engineCache_.clear();
+  }
   const FusionOptions &fusionOptions() const { return fusionOptions_; }
   // Grouping used by the most recent flush.
   const FusionPlan &lastPlan() const { return lastPlan_; }
@@ -334,10 +338,14 @@ private:
   FlushCallback flushCallback_;
   std::vector<std::string> kernelSourceFiles_;
   std::string kernelPreamble_;
+  std::unordered_map<std::uintptr_t, std::string> kernelSymbols_; // by kernel address
   std::map<std::string, const void *> kernelConstants_;
 
   std::unordered_map<ModuleKey, std::unique_ptr<mlir::ExecutionEngine>>
       engineCache_;
+  // The plan is a function of the queue and the (fixed) options, so a queue seen
+  // before needs no planning: CloverLeaf flushes the same few hundred loops every step.
+  std::unordered_map<ModuleKey, FusionPlan> planCache_;
 
   std::unique_ptr<BackendPipeline> currentPipeline_;
 

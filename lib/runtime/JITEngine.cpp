@@ -230,7 +230,14 @@ void JITEngine::enqueueParLoop(std::uintptr_t kernelToken,
   {
     ScopedSeconds timer(stats_.enqueueSeconds);
     std::lock_guard<std::mutex> lock(mutex_);
-    std::string symbol = fallback ? kernelSymbolName(kernelToken) : std::string();
+    // dladdr and demangling cost ~0.5 ms; a kernel's address never changes.
+    std::string symbol;
+    if (fallback) {
+      auto known = kernelSymbols_.find(kernelToken);
+      if (known == kernelSymbols_.end())
+        known = kernelSymbols_.emplace(kernelToken, kernelSymbolName(kernelToken)).first;
+      symbol = known->second;
+    }
     queue_.push_back(
         buildLoopDesc(kernelToken, symbol.empty() ? kernelName : symbol.c_str(), block, dims, range, args, nargs,
                       elemKinds));
@@ -1314,8 +1321,11 @@ void JITEngine::compileAndExecuteSegment() {
     return;
 
   auto planStart = std::chrono::steady_clock::now();
-  FusionPlan plan = planFusion(queue_, fusionOptions_);
-  ModuleKey key(queue_, plan.digest());
+  ModuleKey key(queue_);
+  auto planned = planCache_.find(key);
+  if (planned == planCache_.end())
+    planned = planCache_.emplace(key, planFusion(queue_, fusionOptions_)).first;
+  const FusionPlan &plan = planned->second;
   ++stats_.numFlushes;
   if (std::getenv("OPS_MLIR_PLAN"))
     reportPlan(key, plan);
