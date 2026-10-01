@@ -43,6 +43,11 @@
 #include "llvm/TargetParser/Host.h"
 
 #include <algorithm>
+#include <csignal>
+#include <cstdio>
+#include <execinfo.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #include <chrono>
 #include <array>
 #include <cstring>
@@ -54,6 +59,31 @@
 #endif
 
 namespace {
+// OPS_MLIR_CRASH_TRACE=1: on SIGABRT/SIGSEGV/SIGBUS print the thread id and a
+// backtrace to stderr (symbolize with addr2line), then die as usual. Useful for
+// failures that disappear under a debugger.
+void crashTraceHandler(int sig) {
+  void *frames[64];
+  int n = backtrace(frames, 64);
+  char head[96];
+  int len = std::snprintf(head, sizeof head, "\n[ops-mlir] fatal signal %d in thread %ld; backtrace:\n",
+                          sig, static_cast<long>(syscall(SYS_gettid)));
+  if (len > 0)
+    (void)!write(2, head, static_cast<size_t>(len));
+  backtrace_symbols_fd(frames, n, 2);
+  std::signal(sig, SIG_DFL);
+  std::raise(sig);
+}
+
+void installCrashTrace() {
+  static bool installed = false;
+  if (installed || !std::getenv("OPS_MLIR_CRASH_TRACE"))
+    return;
+  installed = true;
+  for (int sig : {SIGABRT, SIGSEGV, SIGBUS, SIGFPE})
+    std::signal(sig, crashTraceHandler);
+}
+
 // Adds the wall-clock time of its scope to a counter.
 struct ScopedSeconds {
   explicit ScopedSeconds(double &sink)
@@ -109,6 +139,8 @@ JITEngine::JITEngine() {
 
   // Resolve backend (without working CLI flags for now)
   backend_ = resolveBackend(0, nullptr);
+
+  installCrashTrace();
 
   if (const char *cap = std::getenv("OPS_MLIR_QUEUE_MAX"))
     queueMax_ = static_cast<std::size_t>(std::strtoull(cap, nullptr, 10));
