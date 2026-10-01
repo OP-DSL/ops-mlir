@@ -83,6 +83,15 @@ template <class T> struct ACC {
 #line 1
 )";
 
+/// OPS_ACCn(x, y, z) -- how pointer-style kernels index their nth dat -- as a call that
+/// carries n, so the translator can tell which argument an index belongs to.
+std::string accessMacros() {
+  std::string text = "int __ops_acc(int, ...);\n";
+  for (int n = 0; n < 128; ++n)
+    text += "#define OPS_ACC" + std::to_string(n) + "(...) __ops_acc(" + std::to_string(n) + ", __VA_ARGS__)\n";
+  return text;
+}
+
 /// Something a statement can assign to.
 struct Target {
   enum Kind { None, Local, Output } kind = None;
@@ -272,7 +281,14 @@ private:
   }
 
   //---- expressions ---------------------------------------------------------
-  mlir::Value readAccessor(const clang::CXXOperatorCallExpr *call);
+  /// A read or write of a dat through its kernel parameter, in either style:
+  /// `a(dx, dy)` (ACC<T>) or `a[OPS_ACCn(dx, dy, dz)]` (pointer).
+  struct AccessRef {
+    int arg = -1;
+    std::vector<const clang::Expr *> offsets;
+  };
+  bool matchAccess(const clang::Expr *e, AccessRef &out);
+  mlir::Value readAccess(const AccessRef &ref);
   mlir::Value emitCall(const clang::CallExpr *call);
   mlir::Value emitBinary(const clang::BinaryOperator *op);
   mlir::Value emit(const clang::Expr *e);
@@ -320,14 +336,9 @@ Target Translator::resolveTarget(const clang::Expr *e) {
       t.kind = Target::Local;
       t.var = vd;
     }
-  } else if (const auto *call = llvm::dyn_cast<clang::CXXOperatorCallExpr>(e)) {
-    if (call->getOperator() == clang::OO_Call && call->getNumArgs() >= 1) {
-      int a = paramArg(call->getArg(0));
-      if (a >= 0) {
-        t.kind = Target::Output;
-        t.arg = a;
-      }
-    }
+  } else if (AccessRef ref; matchAccess(e, ref)) {
+    t.kind = Target::Output;
+    t.arg = ref.arg;
   }
   return t;
 }
@@ -404,13 +415,44 @@ mlir::Value Translator::constantValue(const clang::Expr *e) {
   return fail("global '" + var->getNameAsString() + "' has an unsupported type");
 }
 
-mlir::Value Translator::readAccessor(const clang::CXXOperatorCallExpr *call) {
-  int a = paramArg(call->getArg(0));
-  if (a < 0)
-    return fail("accessor call on something that is not a kernel argument");
+bool Translator::matchAccess(const clang::Expr *e, AccessRef &out) {
+  e = e->IgnoreParenImpCasts();
+  if (const auto *call = llvm::dyn_cast<clang::CXXOperatorCallExpr>(e)) {
+    if (call->getOperator() != clang::OO_Call || call->getNumArgs() < 1)
+      return false;
+    int a = paramArg(call->getArg(0));
+    if (a < 0)
+      return false;
+    out.arg = a;
+    for (unsigned i = 1; i < call->getNumArgs(); ++i)
+      out.offsets.push_back(call->getArg(i));
+    return true;
+  }
+  if (const auto *sub = llvm::dyn_cast<clang::ArraySubscriptExpr>(e)) {
+    int a = paramArg(sub->getBase());
+    if (a < 0 || args[a].kind != KernelArgInfo::Kind::Dat)
+      return false;
+    // OPS_ACCn(x, y, z) is __ops_acc(n, x, y, z) here (see the prelude)
+    const auto *acc = llvm::dyn_cast<clang::CallExpr>(sub->getIdx()->IgnoreParenImpCasts());
+    const clang::FunctionDecl *callee = acc ? acc->getDirectCallee() : nullptr;
+    if (!callee || callee->getName() != "__ops_acc" || acc->getNumArgs() < 1)
+      return false;
+    auto n = evalInt(acc->getArg(0));
+    if (!n || *n != a)
+      return false; // OPS_ACCn must index the argument it is applied to
+    out.arg = a;
+    for (unsigned i = 1; i < acc->getNumArgs(); ++i)
+      out.offsets.push_back(acc->getArg(i));
+    return true;
+  }
+  return false;
+}
+
+mlir::Value Translator::readAccess(const AccessRef &ref) {
+  int a = ref.arg;
   const KernelArgInfo &info = args[a];
   std::array<int, 3> off = {0, 0, 0};
-  unsigned n = call->getNumArgs() - 1;
+  unsigned n = ref.offsets.size();
   if (n != static_cast<unsigned>(rank))
     return fail("accessor with " + llvm::Twine(n) + " indices in a " + llvm::Twine(rank) +
                 "D loop (multi-component dats are not supported)");
@@ -420,13 +462,13 @@ mlir::Value Translator::readAccessor(const clang::CXXOperatorCallExpr *call) {
   std::array<mlir::Value, 3> dynamicOffset;
   bool dynamic = false;
   for (unsigned i = 0; i < n; ++i) {
-    auto v = evalInt(call->getArg(i + 1));
+    auto v = evalInt(ref.offsets[i]);
     if (v) {
       off[i] = static_cast<int>(*v);
       continue;
     }
     dynamic = true;
-    dynamicOffset[i] = cast(emit(call->getArg(i + 1)), b.getI32Type());
+    dynamicOffset[i] = cast(emit(ref.offsets[i]), b.getI32Type());
     if (!dynamicOffset[i])
       return {};
   }
@@ -466,8 +508,8 @@ mlir::Value Translator::readAccessor(const clang::CXXOperatorCallExpr *call) {
 
 mlir::Value Translator::emitCall(const clang::CallExpr *call) {
   if (const auto *op = llvm::dyn_cast<clang::CXXOperatorCallExpr>(call)) {
-    if (op->getOperator() == clang::OO_Call)
-      return readAccessor(op);
+    if (AccessRef ref; op->getOperator() == clang::OO_Call && matchAccess(op, ref))
+      return readAccess(ref);
     return fail("unsupported overloaded operator");
   }
   const clang::FunctionDecl *callee = call->getDirectCallee();
@@ -649,6 +691,8 @@ mlir::Value Translator::emit(const clang::Expr *e) {
     return b.create<mlir::arith::SelectOp>(loc, c, t, f);
   }
   if (const auto *x = llvm::dyn_cast<clang::ArraySubscriptExpr>(e)) {
+    if (AccessRef ref; matchAccess(x, ref))
+      return readAccess(ref);
     int a = paramArg(x->getBase());
     auto idx = evalInt(x->getIdx());
     if (a >= 0 && idx && args[a].kind == KernelArgInfo::Kind::Gbl && *idx >= 0 &&
@@ -692,9 +736,10 @@ void Translator::emitAssignment(const clang::BinaryOperator *op) {
   }
   if (t.kind == Target::Output) {
     // only the centre point can be written
-    const auto *call = llvm::cast<clang::CXXOperatorCallExpr>(op->getLHS()->IgnoreParenImpCasts());
-    for (unsigned i = 1; i < call->getNumArgs(); ++i) {
-      auto v = evalInt(call->getArg(i));
+    AccessRef ref;
+    matchAccess(op->getLHS(), ref);
+    for (const clang::Expr *offset : ref.offsets) {
+      auto v = evalInt(offset);
       if (!v || *v != 0) {
         fail("output accessor written at a non-zero offset");
         return;
@@ -1062,7 +1107,7 @@ mlir::func::FuncOp KernelIRBuilder::generateAccessor(
     static std::map<std::pair<std::string, std::string>, std::unique_ptr<clang::ASTUnit>> parsed;
     auto &unit = parsed[{file, preamble}];
     if (!unit) {
-      std::string text = std::string(kPrelude) + preamble + "\n#line 1\n" + (*code)->getBuffer().str();
+      std::string text = std::string(kPrelude) + accessMacros() + preamble + "\n#line 1\n" + (*code)->getBuffer().str();
       unit = clang::tooling::buildASTFromCodeWithArgs(
           text, {"-x", "c++", "-std=c++17", "-ferror-limit=0", "-resource-dir=" OPS_CLANG_RESOURCE_DIR}, file);
     }
