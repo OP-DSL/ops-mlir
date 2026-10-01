@@ -14,7 +14,7 @@ set -euo pipefail
 source "$SLURM_SUBMIT_DIR/cluster/env_cl.sh"
 OUT=${OPS_NCU_OUT:-$OPS_CL_HOME/results}; mkdir -p "$OUT"
 B=$OPS_CL_ROOT/ops-mlir/build/apps/c/taylor_green_vortex
-WORK=$(mktemp -d /scratch/$USER/ncu.XXXX); cd "$WORK"
+WORK=$(mktemp -d "$OPS_CL_TMP/ncu.XXXX"); cd "$WORK"
 M=launch__registers_per_thread,launch__occupancy_limit_registers,sm__warps_active.avg.pct_of_peak_sustained_active,dram__throughput.avg.pct_of_peak_sustained_elapsed,dram__bytes.sum,gpu__time_duration.sum,lts__t_sector_hit_rate.pct,launch__grid_size,launch__block_size
 # launch 0 is the initial-condition kernel; the next 17 (unfused) / 6 (fused) are stage 1.
 for cfg in "unfused 0 17" "fused 1 6"; do set -- $cfg

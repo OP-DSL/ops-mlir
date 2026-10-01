@@ -2,8 +2,8 @@
 # Set up ops-mlir on renyi: clone the sources, create the xDSL venv, configure and
 # build. Idempotent: rerun it to pick up new commits and rebuild.
 #
-# Run it inside a Slurm job on renyi (see cluster/job_build.sbatch), because the
-# work tree is on renyi's node-local /scratch.
+# Run it inside a Slurm job on renyi (see cluster/job_build.sbatch); the work tree is
+# under the shared home directory (OPS_CL_ROOT, see env_cl.sh).
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

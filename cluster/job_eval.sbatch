@@ -17,4 +17,4 @@ mkdir -p "$OUT"
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv
 cd "$OPS_CL_ROOT/ops-mlir"
 python apps/c/taylor_green_vortex/eval_tgv.py run \
-  --app build/apps/c/taylor_green_vortex --out "$OUT/tgv_eval.json" --work "$OUT/work" "$@"
+  --app build/apps/c/taylor_green_vortex --out "$OUT/tgv_eval.json" --work "$OPS_CL_TMP/eval" "$@"

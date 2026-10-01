@@ -4,13 +4,19 @@
 #
 #     source cluster/env_cl.sh
 #
-# Everything lives on renyi's node-local /scratch (fast, unlike the NFS home).
+# Everything lives under the shared home directory, so the login node and any compute
+# node see the same tree (nothing is kept on renyi's node-local /scratch).
 # Override any of these before sourcing.
 
-# Work tree (sources, venv, build) on node-local disk.
-export OPS_CL_ROOT=${OPS_CL_ROOT:-/scratch/$USER/ops-mlir-work}
-# Staging area on the shared (NFS) home: the git remote renyi pulls from, and job logs.
+# Staging area: the git remote renyi pulls from, job logs, results.
 export OPS_CL_HOME=${OPS_CL_HOME:-$HOME/ops-mlir-cl}
+# Work tree (sources, venv, build).
+export OPS_CL_ROOT=${OPS_CL_ROOT:-$OPS_CL_HOME/work}
+# Transient per-run directories (the evaluation creates and deletes hundreds). Each run
+# writes an HDF5 output file, up to ~1 GB at the largest grids; point this at a node-local
+# disk if NFS write speed or the nearly full /home becomes a problem.
+export OPS_CL_TMP=${OPS_CL_TMP:-$OPS_CL_ROOT/tmp}
+mkdir -p "$OPS_CL_TMP" 2>/dev/null || true
 
 # Host toolchain: gcc-toolset-13 provides the libstdc++ that the clang 23 binaries
 # below were built against and that ops-mlir must link with.

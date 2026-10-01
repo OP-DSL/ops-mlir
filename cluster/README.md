@@ -1,14 +1,15 @@
 # ops-mlir on the `cl` cluster (renyi, 2x A100)
 
-Everything runs on **renyi** (Slurm partition `gpu`, `--gres=gpu:a100:N`). The work tree
-is on renyi's node-local `/scratch` (fast; the NFS home is nearly full), so every step
-that touches it is a Slurm job.
+Everything runs on **renyi** (Slurm partition `gpu`, `--gres=gpu:a100:N`) as Slurm jobs. All
+files live under the shared home directory (`~/ops-mlir-cl`), so the login node sees the same
+tree as renyi; nothing is kept on renyi's node-local `/scratch`.
 
 | What | Where |
 |---|---|
 | staging git remote (push here) | `~/ops-mlir-cl/ops-mlir.git` on the login node |
 | job scripts + logs | `~/ops-mlir-cl/src/cluster/`, `~/ops-mlir-cl/logs/` |
-| sources, venv, build (renyi only) | `/scratch/$USER/ops-mlir-work/{OPS,xdsl,venv,ops-mlir}` |
+| sources, venv, build | `~/ops-mlir-cl/work/{OPS,xdsl,venv,ops-mlir}` |
+| transient per-run directories | `~/ops-mlir-cl/work/tmp` (`OPS_CL_TMP`) |
 | LLVM / MLIR / clang 23.1.0 (read-only, not rebuilt) | `~/MLIR/lib_install/llvm-project-23.1.0-CUDA-Release` |
 | CUDA 12.3, serial HDF5, Python 3.12 | `/home/shared/software/cuda/12.3`, `.../op-dsl/hdf5-seq`, conda |
 
@@ -28,8 +29,8 @@ sbatch $J cluster/job_eval.sbatch --main-n 256 --cpu-n 64 --omp-threads 24 \
 ```
 
 `job_eval.sbatch` runs `setup_renyi.sh` first, so a push followed by an eval submission
-rebuilds incrementally. Results land in `/scratch/$USER/ops-mlir-work/eval/tgv_eval.json`;
-copy the file back and run `eval_tgv.py report --results ... --outdir docs --tag a100`.
+rebuilds incrementally. Results land in `~/ops-mlir-cl/work/eval/tgv_eval.json`; copy the
+file back (`scp`) and run `eval_tgv.py report --results ... --outdir docs --tag a100`.
 
 ## Things that bit us
 
@@ -48,5 +49,5 @@ copy the file back and run `eval_tgv.py report --results ... --outdir docs --tag
 
 The A100 evaluation (`docs/tgv_evaluation_a100.md`, data in `docs/data/tgv_eval_a100.json`) was
 produced by `job_eval.sbatch` with the arguments shown above, plus `job_ncu.sbatch` for the
-Nsight Compute section. The results file lives on renyi's `/scratch`; copy it to the shared home
-from inside a job (`srun -p gpu -w renyi cp ...`) before fetching it.
+Nsight Compute section. The results file is in the shared home (`~/ops-mlir-cl/work/eval/`), so it can be fetched
+from the login node directly.
