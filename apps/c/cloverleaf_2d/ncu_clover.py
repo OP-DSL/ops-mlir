@@ -57,8 +57,8 @@ def deck_with_steps(deck, steps, dest):
 def read_log(path):
     rows = []
     for line in open(path):
-        idx, sec, nbytes, func, members = line.rstrip("\n").split("\t")
-        rows.append(dict(idx=int(idx), seconds=float(sec), model_bytes=float(nbytes), func=func,
+        kind, idx, sec, nbytes, func, members = line.rstrip("\n").split("\t")
+        rows.append(dict(kind=kind, idx=int(idx), seconds=float(sec), model_bytes=float(nbytes), func=func,
                          members=members.split("+")))
     return rows
 
@@ -93,7 +93,7 @@ def profile(args, variant, workdir):
     subprocess.run([os.path.abspath(args.exe)], cwd=d, env=dict(env, OPS_MLIR_LAUNCH_LOG=log2),
                    capture_output=True, text=True, check=True)
     shutil.rmtree(d, ignore_errors=True)
-    skip = len(read_log(log2))
+    skip = sum(1 for r in read_log(log2) if r["kind"] == "G")
 
     # 2. profile what follows
     d = sandbox(deck3)
@@ -104,7 +104,7 @@ def profile(args, variant, workdir):
     if p.returncode != 0:
         raise SystemExit(f"ncu failed for {variant}:\n{p.stdout[-1500:]}\n{p.stderr[-1500:]}")
     profiled = parse_ncu(p.stdout)
-    launches = read_log(log3)[skip:]
+    launches = [r for r in read_log(log3) if r["kind"] == "G"][skip:]
 
     # 3. join
     if len(profiled) != len(launches):

@@ -62,6 +62,18 @@
 #include <cuda.h>
 #endif
 
+// OPS_MLIR_LAUNCH_LOG=<file>: one line per launch (G) or host-fallback loop (H) in execution
+// order -- index, seconds (launch plus synchronisation; for H also the device-to-host copies),
+// modelled bytes, generated function, and the loops it fuses -- to line the runtime's groups up
+// with a profiler's kernel list and to time a window of the run.
+static std::FILE *launchLogFile() {
+  static std::FILE *f = [] {
+    const char *path = std::getenv("OPS_MLIR_LAUNCH_LOG");
+    return path ? std::fopen(path, "w") : nullptr;
+  }();
+  return f;
+}
+
 namespace {
 // OPS_MLIR_CRASH_TRACE=1: on SIGABRT/SIGSEGV/SIGBUS print the thread id and a
 // backtrace to stderr (symbolize with addr2line), then die as usual. Useful for
@@ -1041,15 +1053,8 @@ void JITEngine::execute(mlir::ExecutionEngine &engine, const FusionPlan &plan) {
     double launchSeconds = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - launchStart).count();
     profiler_.end(profileName, kernelStart, bytesMoved);
-    // OPS_MLIR_LAUNCH_LOG=<file>: one line per launch -- index, seconds (launch plus
-    // synchronisation), modelled bytes, generated function, and the loops it fuses --
-    // to line the runtime's groups up with a profiler's kernel list.
-    static std::FILE *launchLog = [] {
-      const char *path = std::getenv("OPS_MLIR_LAUNCH_LOG");
-      return path ? std::fopen(path, "w") : nullptr;
-    }();
-    if (launchLog) {
-      std::fprintf(launchLog, "%zu\t%.9f\t%.0f\t%s\t", stats_.numLaunches - 1, launchSeconds, bytesMoved,
+    if (std::FILE *launchLog = launchLogFile()) {
+      std::fprintf(launchLog, "G\t%zu\t%.9f\t%.0f\t%s\t", stats_.numLaunches - 1, launchSeconds, bytesMoved,
                    funcName.c_str());
       for (std::size_t k = 0; k < group.loops.size(); ++k)
         std::fprintf(launchLog, "%s%s", k ? "+" : "", queue_[group.loops[k]].kernel_name.c_str());
@@ -1258,8 +1263,14 @@ void JITEngine::runHostLoop(const LoopDesc &loop) {
   hostCopySeconds_ += std::chrono::duration<double>(std::chrono::steady_clock::now() - copyStart).count();
   auto start = std::chrono::steady_clock::now();
   loop.fallback();
-  hostSeconds_[loop.kernel_name] +=
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  double ranSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  hostSeconds_[loop.kernel_name] += ranSeconds;
+  if (std::FILE *log = launchLogFile()) {
+    std::fprintf(log, "H\t%zu\t%.9f\t0\t%s\t%s\n", stats_.numHostLoops - 1,
+                 ranSeconds + std::chrono::duration<double>(start - copyStart).count(),
+                 loop.kernel_name.c_str(), loop.kernel_name.c_str());
+    std::fflush(log);
+  }
   for (const ArgDesc &arg : loop.args)
     if (arg.argtype == OPS_ARG_DAT && arg.acc != OPS_READ)
       invalidateDeviceBuffer(arg.data);

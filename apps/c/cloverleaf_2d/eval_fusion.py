@@ -119,8 +119,8 @@ def main():
         for backend in backends:
             for name in args.variants.split(","):
                 env = dict(variant_env(name), OPS_BACKEND=backend, OPS_MLIR_STATS="1")
-                if args.launch_logs and backend == "cuda" and rep == 0:
-                    env["OPS_MLIR_LAUNCH_LOG"] = os.path.join(args.launch_logs, f"{backend}_{name}.tsv")
+                if args.launch_logs and backend == "cuda":
+                    env["OPS_MLIR_LAUNCH_LOG"] = os.path.join(args.launch_logs, f"{backend}_{name}_{rep}.tsv")
                 p, wall = run(args.exe, args.deck, env, args.threads if backend == "openmp" else 1, args.tmp)
                 row = dict(backend=backend, variant=name, rep=rep, wall_s=wall, rc=p.returncode,
                            **parse(p.stderr, p.stdout))

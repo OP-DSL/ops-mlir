@@ -103,6 +103,46 @@ def svg_scatter(title, groups, xlabel, ylabel, width=640, height=320, xmax=None,
     return "\n".join(out)
 
 
+# ------------------------------------------------------------------ launch logs
+STEPS = 87          # both decks run 87 time steps
+LATE = 0.4          # the last 40 % of the run is the steady-state window
+
+
+def read_launch_log(path):
+    rows = []
+    for line in open(path):
+        f = line.rstrip("\n").split("\t")
+        if f[0] in ("G", "H"):
+            kind, _, sec, nbytes, func, members = f
+        else:                                   # older logs: launches only
+            kind, (_, sec, nbytes, func, members) = "G", f
+        rows.append((kind, float(sec), float(nbytes), func, members.split("+")))
+    return rows
+
+
+def window_ms_per_step(rows):
+    """(GPU launches, host loops) milliseconds per time step over the last 40 % of the run. The first
+    launch of every kernel pays for loading it, so averaging the whole run would charge that one-off
+    cost to the fusion setting that happens to create more distinct kernels."""
+    late = rows[int(len(rows) * (1 - LATE)):]
+    gpu = sum(r[1] for r in late if r[0] == "G")
+    host = sum(r[1] for r in late if r[0] == "H")
+    n = LATE * STEPS
+    return gpu / n * 1e3, host / n * 1e3
+
+
+def window_table(ev, dim):
+    """variant -> list of (gpu ms/step, host ms/step), one per repetition that has a log."""
+    import glob
+    out = collections.defaultdict(list)
+    for path in sorted(glob.glob(f"{ev}/launch_logs_{dim}/cuda_*.tsv")):
+        m = re.fullmatch(r"cuda_(.+?)(?:_\d+)?\.tsv", os.path.basename(path))
+        rows = read_launch_log(path)
+        if rows and any(r[0] == "H" for r in rows):
+            out[m[1]].append(window_ms_per_step(rows))
+    return out
+
+
 # ------------------------------------------------------------------ tables
 def aggregate(rows):
     """variant -> {metric: (min, median)}; repetitions of a variant are rows with the same name."""
@@ -149,6 +189,23 @@ def timing_section(w, dim, ev, outdir, tag, imgs):
             w(f"| {v} | {a['launches']} | {f('kernel_s')} | {f('host_s')} | {f('host_copy_s')} | {f('steady_s')} | "
               f"{a['kernel_s'][0] / base['kernel_s'][0] - 1:+.1%} (kernel) | {a['compile_s']:.0f} | {a['qa']:.3e} |")
         w("")
+    win = window_table(ev, dim)
+    if win:
+        reps = max(len(v) for v in win.values())
+        w(f"**CUDA (A100): time per time step in the steady-state window** (last {LATE:.0%} of the run; "
+          f"{'minimum (median) of ' + str(reps) + ' repetitions' if reps > 1 else 'one run'})\n")
+        w("| variant | GPU launches ms/step | host loops ms/step | total ms/step | vs off |")
+        w("|---|---:|---:|---:|---:|")
+        base = None
+        for v in sorted(win, key=variant_key):
+            tot = [g + h for g, h in win[v]]
+            g = sorted(x[0] for x in win[v]); h = sorted(x[1] for x in win[v]); t = sorted(tot)
+            if v == "off":
+                base = (g[0], t[0])
+            fmt = lambda xs: f"{xs[0]:.1f}" + (f" ({xs[len(xs) // 2]:.1f})" if len(xs) > 1 else "")
+            rel = f"{g[0] / base[0] - 1:+.1%} (GPU) / {t[0] / base[1] - 1:+.1%} (total)" if base else ""
+            w(f"| {v} | {fmt(g)} | {fmt(h)} | {fmt(t)} | {rel} |")
+        w("")
     if cuda:
         agg = aggregate(cuda)
         names = sorted([v for v in agg if re.fullmatch(r"max\d+", v) or v == "off"], key=variant_key)
@@ -166,18 +223,18 @@ def launch_histogram(w, dim, ev):
     d = f"{ev}/launch_logs_{dim}"
     if not os.path.isdir(d):
         return
+    import glob
     rows = []
-    for v in ("off", "max2", "max3", "max4", "max8", "max16", "max64"):
-        p = f"{d}/cuda_{v}.tsv"
-        if not os.path.exists(p):
+    for v in ("off", "consecutive", "noguard", "max2", "max3", "max4", "max8", "max16", "max64", "ratio16"):
+        paths = sorted(glob.glob(f"{d}/cuda_{v}_0.tsv")) or sorted(glob.glob(f"{d}/cuda_{v}.tsv"))
+        if not paths:
             continue
         sizes = collections.Counter()
         tsec = collections.defaultdict(float)
-        for line in open(p):
-            f = line.rstrip("\n").split("\t")
-            n = len(f[4].split("+"))
-            sizes[n] += 1
-            tsec[n] += float(f[1])
+        for kind, sec, _, _, members in read_launch_log(paths[0]):
+            if kind == "G":
+                sizes[len(members)] += 1
+                tsec[len(members)] += sec
         rows.append((v, sizes, tsec))
     if not rows:
         return
