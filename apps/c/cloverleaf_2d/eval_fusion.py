@@ -95,6 +95,9 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--tmp", default=None)
     ap.add_argument("--launch-logs", default=None, help="directory for OPS_MLIR_LAUNCH_LOG files")
+    ap.add_argument("--repeat", type=int, default=1,
+                    help="repetitions; the variants are interleaved (round-robin) so that drift on a shared "
+                         "machine hits all of them alike")
     args = ap.parse_args()
     if args.launch_logs:
         os.makedirs(args.launch_logs, exist_ok=True)
@@ -111,20 +114,24 @@ def main():
         print(f"stock   1 thread   wall={wall:.1f}s qa={row['qa']} {'ok' if row['passed'] else 'FAILED'}", flush=True)
         save()
 
-    for backend in [b for b in args.backends.split(",") if b]:
-        for name in args.variants.split(","):
-            env = dict(variant_env(name), OPS_BACKEND=backend, OPS_MLIR_STATS="1")
-            if args.launch_logs and backend == "cuda":
-                env["OPS_MLIR_LAUNCH_LOG"] = os.path.join(args.launch_logs, f"{backend}_{name}.tsv")
-            p, wall = run(args.exe, args.deck, env, args.threads if backend == "openmp" else 1, args.tmp)
-            row = dict(backend=backend, variant=name, wall_s=wall, rc=p.returncode, **parse(p.stderr, p.stdout))
-            if p.returncode != 0 or not row["passed"]:
-                row["failed"] = True
-            results.append(row)
-            print(f"{backend:7s} {name:12s} launches={row.get('launches')} steady={row.get('steady_s', float('nan')):.2f}s "
-                  f"kernel={row.get('kernel_s', float('nan')):.2f}s compile={row.get('compile_s', float('nan')):.1f}s "
-                  f"qa={row['qa']} {'FAILED' if row.get('failed') else 'ok'}", flush=True)
-            save()
+    backends = [b for b in args.backends.split(",") if b]
+    for rep in range(args.repeat):
+        for backend in backends:
+            for name in args.variants.split(","):
+                env = dict(variant_env(name), OPS_BACKEND=backend, OPS_MLIR_STATS="1")
+                if args.launch_logs and backend == "cuda" and rep == 0:
+                    env["OPS_MLIR_LAUNCH_LOG"] = os.path.join(args.launch_logs, f"{backend}_{name}.tsv")
+                p, wall = run(args.exe, args.deck, env, args.threads if backend == "openmp" else 1, args.tmp)
+                row = dict(backend=backend, variant=name, rep=rep, wall_s=wall, rc=p.returncode,
+                           **parse(p.stderr, p.stdout))
+                if p.returncode != 0 or not row["passed"]:
+                    row["failed"] = True
+                results.append(row)
+                print(f"{backend:7s} {name:12s} rep={rep} launches={row.get('launches')} "
+                      f"kernel={row.get('kernel_s', float('nan')):.2f}s host={row.get('host_s', 0):.2f}s "
+                      f"copy={row.get('host_copy_s', 0):.2f}s steady={row.get('steady_s', float('nan')):.2f}s "
+                      f"qa={row['qa']} {'FAILED' if row.get('failed') else 'ok'}", flush=True)
+                save()
 
 
 if __name__ == "__main__":

@@ -104,8 +104,24 @@ def svg_scatter(title, groups, xlabel, ylabel, width=640, height=320, xmax=None,
 
 
 # ------------------------------------------------------------------ tables
+def aggregate(rows):
+    """variant -> {metric: (min, median)}; repetitions of a variant are rows with the same name."""
+    out = {}
+    for v in dict.fromkeys(r["variant"] for r in rows):
+        rs = [r for r in rows if r["variant"] == v]
+        if any(r.get("failed") for r in rs):
+            out[v] = dict(failed=True, n=len(rs))
+            continue
+        a = dict(n=len(rs), launches=rs[0]["launches"], compile_s=min(r["compile_s"] for r in rs), qa=rs[0]["qa"])
+        for key in ("kernel_s", "host_s", "host_copy_s", "steady_s"):
+            xs = sorted(r.get(key, 0.0) for r in rs)
+            a[key] = (xs[0], xs[len(xs) // 2])
+        out[v] = a
+    return out
+
+
 def timing_section(w, dim, ev, outdir, tag, imgs):
-    cuda = load(f"{ev}/clover_large_cuda_{dim}.json")
+    cuda = load(f"{ev}/clover_repeat_{dim}.json") or load(f"{ev}/clover_large_cuda_{dim}.json")
     omp = load(f"{ev}/clover_large_openmp_{dim}.json")
     stock = load(f"{ev}/clover_large_stock_{dim}.json")
     if not (cuda or omp):
@@ -119,25 +135,27 @@ def timing_section(w, dim, ev, outdir, tag, imgs):
     for name, rows in (("CUDA (A100)", cuda), ("OpenMP (16 threads)", omp)):
         if not rows:
             continue
-        base = next((r for r in rows if r["variant"] == "off"), rows[0])
-        w(f"**{name}**\n")
-        w("| variant | launches | kernel s | host-fallback s | steady state s | vs off | compile s | QA |")
-        w("|---|---:|---:|---:|---:|---:|---:|---|")
-        for r in sorted(rows, key=lambda r: variant_key(r["variant"])):
-            if r.get("failed"):
-                w(f"| {r['variant']} | FAILED | | | | | | |")
+        agg = aggregate(rows)
+        base = agg.get("off") or next(iter(agg.values()))
+        reps = max(a["n"] for a in agg.values())
+        w(f"**{name}**" + (f" -- {reps} interleaved repetitions: minimum (median)\n" if reps > 1 else "\n"))
+        w("| variant | launches | kernel s | host loops s | host copies s | GPU+host s | vs off | compile s | QA |")
+        w("|---|---:|---:|---:|---:|---:|---:|---:|---|")
+        for v, a in sorted(agg.items(), key=lambda kv: variant_key(kv[0])):
+            if a.get("failed"):
+                w(f"| {v} | FAILED | | | | | | | |")
                 continue
-            w(f"| {r['variant']} | {r['launches']} | {r['kernel_s']:.2f} | {r['host_s']:.2f} | "
-              f"{r['steady_s']:.2f} | {r['steady_s'] / base['steady_s'] - 1:+.0%} | {r['compile_s']:.0f} | "
-              f"{r['qa']:.3e} |")
+            f = lambda key: (f"{a[key][0]:.2f} ({a[key][1]:.2f})" if a["n"] > 1 else f"{a[key][0]:.2f}")
+            w(f"| {v} | {a['launches']} | {f('kernel_s')} | {f('host_s')} | {f('host_copy_s')} | {f('steady_s')} | "
+              f"{a['kernel_s'][0] / base['kernel_s'][0] - 1:+.1%} (kernel) | {a['compile_s']:.0f} | {a['qa']:.3e} |")
         w("")
     if cuda:
-        sweep = sorted([r for r in cuda if re.fullmatch(r"max\d+", r["variant"]) or r["variant"] == "off"],
-                       key=lambda r: variant_key(r["variant"]))
-        xs = [("1" if r["variant"] == "off" else r["variant"][3:]) for r in sweep]
+        agg = aggregate(cuda)
+        names = sorted([v for v in agg if re.fullmatch(r"max\d+", v) or v == "off"], key=variant_key)
+        xs = [("1" if v == "off" else v[3:]) for v in names]
         svg = svg_lines(f"{dim.upper()} on the A100: loops per kernel", xs,
-                        {"steady state s": [r["steady_s"] for r in sweep],
-                         "launches / 1000": [r["launches"] / 1000 for r in sweep]},
+                        {"GPU kernel s (min)": [agg[v]["kernel_s"][0] for v in names],
+                         "launches / 1000": [agg[v]["launches"] / 1000 for v in names]},
                         "max loops per kernel (OPS_MLIR_FUSION_MAX)", "s  |  thousands of launches")
         fn = f"img/clover_large_sweep_{dim}{tag}.svg"
         open(os.path.join(outdir, fn), "w").write(svg)
