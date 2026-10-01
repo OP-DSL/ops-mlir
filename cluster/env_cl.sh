@@ -37,8 +37,13 @@ export OPS_ROOT=$OPS_CL_ROOT/OPS/ops/c
 export HDF5_INSTALL_PATH=${HDF5_INSTALL_PATH:-/home/shared/software/op-dsl/hdf5-seq}
 
 export PATH=$LLVM_INSTALL_PATH/bin:$CUDA_INSTALL_PATH/bin:$PATH
-# Order matters: gcc-toolset's libstdc++ must win over conda's older one.
-export LD_LIBRARY_PATH=/opt/rh/gcc-toolset-13/root/usr/lib64:$CUDA_INSTALL_PATH/lib64:$LLVM_INSTALL_PATH/lib:$OPS_OMP_LIB_DIR:$HDF5_INSTALL_PATH/lib:${LD_LIBRARY_PATH:-}
+# /lib64 FIRST, on purpose. Linking libpython3.12 from conda puts conda's lib directory
+# in the executable's RUNPATH, so without this the executable loads conda's libgcc_s and
+# libstdc++ instead of the system ones the LLVM libraries were built against. Two
+# libgcc_s copies then disagree about the JIT's registered exception frames and the
+# process aborts in __deregister_frame at exit -- silently and only now and then
+# (about 1 run in 8 on renyi; 0 in 60 with this line).
+export LD_LIBRARY_PATH=/lib64:/opt/rh/gcc-toolset-13/root/usr/lib64:$CUDA_INSTALL_PATH/lib64:$LLVM_INSTALL_PATH/lib:$OPS_OMP_LIB_DIR:$HDF5_INSTALL_PATH/lib:${LD_LIBRARY_PATH:-}
 
 # Python for the embedded xDSL lowering: conda's Python 3.12 (has libpython3.12.so),
 # with the xDSL fork in a venv. The embedded interpreter finds the venv via PYTHONPATH.
