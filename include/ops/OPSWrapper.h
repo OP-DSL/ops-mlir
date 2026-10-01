@@ -24,7 +24,11 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
+#include <memory>
+#include <string>
 #include <type_traits>
+#include <vector>
 
 //===----------------------------------------------------------------------===//
 // ops_par_loop interception
@@ -32,6 +36,46 @@
 // This template overrides the ops_par_loop to capture loop metadata.
 // The captured loops are queued for JIT compilation.
 //===----------------------------------------------------------------------===//
+
+#ifdef OPS_MLIR_STOCK_FALLBACK
+// Built via the shim ops_seq_v2.h (apps/c/cloverleaf_*/shim), which has renamed the
+// stock OPS implementation to ops_par_loop_stock. Each queued loop carries a closure
+// that runs it with that implementation, for loops the JIT cannot compile.
+namespace ops_mlir {
+
+template <typename KernelFn, std::size_t N, std::size_t... I>
+void callStock(KernelFn kernel, const char *name, ops_block block, int dims,
+               int *range, std::array<ops_arg, N> &args, std::index_sequence<I...>) {
+  ops_par_loop_stock(kernel, name, block, dims, range, args[I]...);
+}
+
+template <typename KernelFn, typename... Args>
+std::function<void()> makeStockFallback(KernelFn kernel, const char *name,
+                                        ops_block block, int dims, const int *range,
+                                        const Args &...opsArgs) {
+  // The loop runs later, so read-only globals are copied now: eager execution
+  // would have seen their current values.
+  auto snapshots = std::make_shared<std::vector<std::vector<char>>>();
+  std::array<ops_arg, sizeof...(Args)> args{opsArgs...};
+  snapshots->reserve(args.size());
+  for (ops_arg &a : args) {
+    if (a.argtype == OPS_ARG_GBL && a.acc == OPS_READ && a.data) {
+      snapshots->emplace_back(a.data, a.data + a.elem_size * a.dim);
+      a.data = snapshots->back().data();
+    }
+  }
+  std::array<int, 2 * OPS_MAX_DIM> r{};
+  for (int i = 0; i < 2 * dims; ++i)
+    r[i] = range[i];
+  std::string kname = name;
+  return [=]() mutable {
+    callStock(kernel, kname.c_str(), block, dims, r.data(), args,
+              std::make_index_sequence<sizeof...(Args)>{});
+  };
+}
+
+} // namespace ops_mlir
+#endif
 
 template <typename KernelFn, typename... Args>
 void ops_par_loop(KernelFn kernel, const char *name, ops_block block, int dims,
@@ -44,11 +88,18 @@ void ops_par_loop(KernelFn kernel, const char *name, ops_block block, int dims,
   auto token =
       static_cast<std::uintptr_t>(reinterpret_cast<std::uintptr_t>(kernel));
 
+  std::function<void()> fallback;
+#ifdef OPS_MLIR_STOCK_FALLBACK
+  fallback = ops_mlir::makeStockFallback(kernel, name, block, dims, range,
+                                         opsArgs...);
+#endif
+
   ops_mlir::JITEngine::instance().enqueueParLoop(
-      token, name, block, dims, range, packedArgs.data(), packedArgs.size());
+      token, name, block, dims, range, packedArgs.data(), packedArgs.size(),
+      std::move(fallback));
 }
 
-void compile_and_execute() {
+inline void compile_and_execute() {
   ops_mlir::JITEngine::instance().compile_and_execute();
 }
 
@@ -58,14 +109,14 @@ void ops_register_kernel_constant(const char *name, T *data) {
   ops_mlir::JITEngine::instance().registerKernelConstant(name, data);
 }
 
-void set_kernel_source_file(const std::string &filePath) {
+inline void set_kernel_source_file(const std::string &filePath) {
   ops_mlir::JITEngine::instance().setKernelSourceFile(filePath);
 }
 
 // Runs any queued loops and brings every device-resident dat back to the host.
 // Call before reading `dat->data` directly; the OPS accessors below (fetch,
 // raw pointer, ...) do this on their own.
-void sync_all_host_buffers() {
+inline void sync_all_host_buffers() {
   ops_mlir::JITEngine::instance().hostAccessAll();
 }
 

@@ -136,7 +136,8 @@ public:
 
   void enqueueParLoop(std::uintptr_t kernelToken, const char *kernelName,
                       ops_block block, int dims, const int *range,
-                      const ops_arg *args, std::size_t nargs);
+                      const ops_arg *args, std::size_t nargs,
+                      std::function<void()> fallback = {});
 
   void flush();
 
@@ -157,6 +158,7 @@ public:
     std::size_t numFlushes = 0;  // non-empty queue flushes
     std::size_t numLoops = 0;    // par_loops executed
     std::size_t numLaunches = 0; // generated functions invoked (one per group)
+    std::size_t numHostLoops = 0; // loops run through the stock OPS fallback
     // Wall-clock seconds spent in the runtime (for profiling).
     double compileSeconds = 0;   // planning is cheap; this is IR build + lowering + JIT
     double executeSeconds = 0;   // launches, including the kernels themselves
@@ -181,8 +183,12 @@ public:
   Backend backend() const { return backend_; }
 
   // Needed for GPU backend kernel translation (via KernelIRBuilder) to materialize real MLIR
+  // May be called once per kernel header; a kernel is looked up in all of them.
   void setKernelSourceFile(std::string path) {
-    kernelSourceFile_ = std::move(path);
+    for (const std::string &f : kernelSourceFiles_)
+      if (f == path)
+        return;
+    kernelSourceFiles_.push_back(std::move(path));
   }
 
   // Register extern global kernel constants (e.g. pi, jmax) for translation into MLIR 
@@ -227,6 +233,19 @@ private:
 
   void reportPlan(const ModuleKey &key, const FusionPlan &plan);
   void compile(const FusionPlan &plan);
+
+  // Runs the queue's JIT-compilable stretch (see compile_and_execute).
+  void compileAndExecuteSegment();
+  // Loops with a stock-OPS fallback run on the host when the JIT can't compile
+  // them (OPS_MLIR_HOST=all forces it for every such loop, =none never uses it).
+  bool runsOnHost(const LoopDesc &loop);
+  void runHostLoop(const LoopDesc &loop);
+  bool kernelTranslatable(const std::string &kernelName, int indexRank);
+  void syncHostBufferPtr(std::uintptr_t hostPtr);
+  enum class HostMode { Auto, All, None };
+  HostMode hostMode_ = HostMode::Auto;
+  std::map<std::string, bool> translatable_;
+  std::map<std::string, double> hostSeconds_; // fallback time per kernel
   void execute(mlir::ExecutionEngine &engine, const FusionPlan &plan);
 
   // Name of the generated function for group `gid`; must match
@@ -287,7 +306,7 @@ private:
   std::mutex mutex_;
   std::vector<LoopDesc> queue_;
   FlushCallback flushCallback_;
-  std::string kernelSourceFile_;
+  std::vector<std::string> kernelSourceFiles_;
   std::map<std::string, const void *> kernelConstants_;
 
   std::unordered_map<ModuleKey, std::unique_ptr<mlir::ExecutionEngine>>

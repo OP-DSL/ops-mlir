@@ -5,6 +5,7 @@
 #include "ops_lib_core.h"
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -65,6 +66,11 @@ struct ArgDesc {
 };
 
 struct LoopDesc {
+  // Executes this loop with the stock OPS sequential implementation. Set by the
+  // application wrapper when built with OPS_MLIR_STOCK_FALLBACK; loops the JIT
+  // cannot compile (yet) run through it, in queue order. Empty otherwise.
+  std::function<void()> fallback;
+
   std::string kernel_name;
   std::uintptr_t kernel_token;
 

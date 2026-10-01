@@ -142,6 +142,13 @@ JITEngine::JITEngine() {
 
   installCrashTrace();
 
+  if (const char *host = std::getenv("OPS_MLIR_HOST")) {
+    std::string h = host;
+    hostMode_ = h == "all"    ? HostMode::All
+                : h == "none" ? HostMode::None
+                              : HostMode::Auto;
+  }
+
   if (const char *cap = std::getenv("OPS_MLIR_QUEUE_MAX"))
     queueMax_ = static_cast<std::size_t>(std::strtoull(cap, nullptr, 10));
 }
@@ -150,6 +157,16 @@ JITEngine::~JITEngine() {
   // Safe here specifically because profiler_ is a member subobject, not a
   // separate singleton -- see its declaration's comment (JITEngine.h).
   profiler_.report();
+  if (std::getenv("OPS_MLIR_STATS")) {
+    llvm::errs() << "ops-mlir coverage: " << stats_.numLoops << " loops JIT-compiled, "
+                 << stats_.numHostLoops << " through the stock fallback\n";
+    if (!hostSeconds_.empty()) {
+      llvm::errs() << "ops-mlir fallback kernels (seconds):";
+      for (const auto &[k, t] : hostSeconds_)
+        llvm::errs() << " " << k << "=" << llvm::format("%.3f", t);
+      llvm::errs() << "\n";
+    }
+  }
   if (std::getenv("OPS_MLIR_STATS"))
     llvm::errs() << "ops-mlir stats: " << stats_.numLoops << " loops, "
                  << stats_.numLaunches << " kernel launches, "
@@ -174,13 +191,15 @@ void JITEngine::setFlushCallback(FlushCallback callback) {
 void JITEngine::enqueueParLoop(std::uintptr_t kernelToken,
                                     const char *kernelName, ops_block block,
                                     int dims, const int *range,
-                                    const ops_arg *args, std::size_t nargs) {
+                                    const ops_arg *args, std::size_t nargs,
+                                    std::function<void()> fallback) {
   bool full;
   {
     ScopedSeconds timer(stats_.enqueueSeconds);
     std::lock_guard<std::mutex> lock(mutex_);
     queue_.push_back(
         buildLoopDesc(kernelToken, kernelName, block, dims, range, args, nargs));
+    queue_.back().fallback = std::move(fallback);
     full = queueMax_ && queue_.size() >= queueMax_;
   }
   // Bound the size of a compiled module (and the memory held by the queue).
@@ -495,7 +514,7 @@ void JITEngine::compile(const FusionPlan &plan) {
 
 bool JITEngine::materializeKernelBody(const std::string &kernelName,
                                       int indexRank) {
-  if (kernelSourceFile_.empty()) {
+  if (kernelSourceFiles_.empty()) {
     llvm::errs() << "materializeKernelBody: no kernel source file set "
                     "(call setKernelSourceFile), cannot translate '"
                  << kernelName << "'\n";
@@ -514,11 +533,18 @@ bool JITEngine::materializeKernelBody(const std::string &kernelName,
   }
 
   KernelIRBuilder kernelBuilder(ctx);
-  mlir::func::FuncOp translatedFn = kernelBuilder.generate(
-      kernelSourceFile_, kernelName, indexRank, kernelConstants_, llvm::errs());
+  mlir::func::FuncOp translatedFn;
+  // The kernel may live in any of the registered headers; only the last
+  // attempt reports its diagnostics.
+  for (std::size_t i = 0; i < kernelSourceFiles_.size() && !translatedFn; ++i) {
+    bool last = i + 1 == kernelSourceFiles_.size();
+    translatedFn = kernelBuilder.generate(
+        kernelSourceFiles_[i], kernelName, indexRank, kernelConstants_,
+        last ? static_cast<llvm::raw_ostream &>(llvm::errs()) : llvm::nulls());
+  }
   if (!translatedFn) {
     llvm::errs() << "materializeKernelBody: could not translate '"
-                 << kernelName << "' from " << kernelSourceFile_ << "\n";
+                 << kernelName << "' from the registered kernel sources\n";
     return false;
   }
 
@@ -949,7 +975,90 @@ void JITEngine::execute(mlir::ExecutionEngine &engine, const FusionPlan &plan) {
   this->flush();
 }
 
+// Runs the queue in order. Maximal stretches of JIT-compilable loops are compiled
+// and launched together (and fused); a loop that has to run through the stock OPS
+// fallback is a barrier between stretches.
 void JITEngine::compile_and_execute() {
+  if (queue_.empty())
+    return;
+  std::vector<LoopDesc> all = std::move(queue_);
+  queue_.clear();
+  std::size_t i = 0;
+  while (i < all.size()) {
+    if (runsOnHost(all[i])) {
+      runHostLoop(all[i]);
+      ++i;
+      continue;
+    }
+    std::size_t j = i;
+    while (j < all.size() && !runsOnHost(all[j]))
+      ++j;
+    queue_.assign(std::make_move_iterator(all.begin() + i),
+                  std::make_move_iterator(all.begin() + j));
+    compileAndExecuteSegment();
+    queue_.clear();
+    i = j;
+  }
+}
+
+bool JITEngine::kernelTranslatable(const std::string &kernelName,
+                                   int indexRank) {
+  auto it = translatable_.find(kernelName);
+  if (it != translatable_.end())
+    return it->second;
+  bool ok = false;
+  KernelIRBuilder builder(ctx);
+  for (const std::string &file : kernelSourceFiles_) {
+    mlir::func::FuncOp fn = builder.generate(file, kernelName, indexRank,
+                                             kernelConstants_, llvm::nulls());
+    if (fn) {
+      fn.erase();
+      ok = true;
+      break;
+    }
+  }
+  translatable_[kernelName] = ok;
+  return ok;
+}
+
+bool JITEngine::runsOnHost(const LoopDesc &loop) {
+  if (!loop.fallback || hostMode_ == HostMode::None)
+    return false;
+  if (hostMode_ == HostMode::All)
+    return true;
+  return !kernelTranslatable(loop.kernel_name, loop.dims);
+}
+
+void JITEngine::syncHostBufferPtr(std::uintptr_t hostPtr) {
+#ifdef OPS_ENABLE_CUDA
+  auto it = deviceBuffers_.find(hostPtr);
+  if (it == deviceBuffers_.end() || !it->second.hostDirty)
+    return;
+  cuMemcpyDtoH(reinterpret_cast<void *>(hostPtr), it->second.devPtr,
+               it->second.bytes);
+  it->second.hostDirty = false;
+#else
+  (void)hostPtr;
+#endif
+}
+
+// Runs one loop with the stock OPS implementation, on the host. Its dats must be
+// current on the host first, and any dat it writes makes the device copy stale.
+void JITEngine::runHostLoop(const LoopDesc &loop) {
+  ++stats_.numHostLoops;
+  for (const ArgDesc &arg : loop.args)
+    if (arg.argtype == OPS_ARG_DAT)
+      syncHostBufferPtr(arg.data);
+  auto start = std::chrono::steady_clock::now();
+  loop.fallback();
+  hostSeconds_[loop.kernel_name] +=
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  for (const ArgDesc &arg : loop.args)
+    if (arg.argtype == OPS_ARG_DAT && arg.acc != OPS_READ)
+      invalidateDeviceBuffer(arg.data);
+}
+
+void JITEngine::compileAndExecuteSegment() {
   if (queue_.empty())
     return;
 
