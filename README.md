@@ -131,7 +131,9 @@ volumes and any member smaller than the box reads point-locally.
 
 Design, diagrams and the lowering are described in
 [`docs/loop_fusion.md`](docs/loop_fusion.md); measurements on the Taylor-Green
-vortex are in [`docs/tgv_evaluation.md`](docs/tgv_evaluation.md).
+vortex are in [`docs/tgv_evaluation.md`](docs/tgv_evaluation.md). CloverLeaf 2D and 3D from the OPS
+repository run unmodified through the JIT, with a stock-implementation fallback and a differential
+verifier; see [`docs/cloverleaf.md`](docs/cloverleaf.md).
 
 | Variable | Default | Meaning |
 |---|---|---|

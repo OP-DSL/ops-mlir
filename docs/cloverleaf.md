@@ -130,3 +130,124 @@ size of the environment. The cause was a use-after-free in the fallback closure 
 copies of the read-only globals alive), i.e. in this project and not in OPS or CloverLeaf. With that fixed
 the result is independent of the environment, and `OPS_MLIR_HOST=all` (everything through the stock path)
 equals the stock executable exactly.
+
+## 4. Results
+
+Everything below ran on `renyi` (2× A100-40GB, one used; 16 CPU threads) with the commits listed in
+`git log`; raw data is in `docs/data/clover_a100_qa.txt` and `docs/data/clover_fusion_a100_{2d,3d}.json`.
+Decks: `clover.in_default` (QA problem 1, tiny grid), `clover_bm_short.in` (QA problem 2; 960² cells
+in 2D, 96³ in 3D, 87 steps).
+
+### 4.1 Coverage and correctness
+
+| | loops | JIT-compiled | stock fallback | kernels checked bitwise (`VERIFY`) |
+|---|---:|---:|---:|---:|
+| 2D default | 11 751 | 11 585 (98.6 %) | 166 | 72, none differ |
+| 2D `bm_short` | 13 625 | 13 434 (98.6 %) | 191 | – |
+| 3D default | 45 339 | 45 170 (99.6 %) | 169 | 127, none differ |
+| 3D `bm_short` | 52 577 | 52 383 (99.6 %) | 194 | – |
+
+The loops left on the stock path are the reductions (`calc_dt`'s minimum, `field_summary`, the
+position look-ups) and the one-time grid setup (`initialise_chunk_*`, `generate_chunk`).
+
+CloverLeaf's own QA, every configuration (`docs/data/clover_a100_qa.txt`):
+
+| deck | stock | ops-mlir seq | OpenMP (16) | CUDA (A100) |
+|---|---|---|---|---|
+| 2D default | 2.842e-14 % PASSED | identical | identical | identical |
+| 2D `bm_short` | 8.527e-14 % PASSED | identical | identical | identical |
+| 3D default | 2.842e-14 % PASSED | identical | identical | identical |
+| 3D `bm_short` | 8.527e-14 % PASSED | identical | identical | identical |
+
+"Identical" means the printed 16-digit value is the same as the stock executable's, not just under the
+`1e-3 %` threshold.
+
+### 4.2 Fusion
+
+Variants (`apps/c/cloverleaf_2d/eval_fusion.py`): `off` (`OPS_MLIR_FUSION=0`), `consecutive`
+(only adjacent loops fuse), `dag` (the producer/consumer DAG planner, the default), `dag-latest`
+(late placement), `dag-max32` (up to 32 loops per kernel; default 8). *Steady state* is
+`execute + host-fallback` seconds, so it excludes compilation and the per-loop enqueue cost, neither of
+which fusion changes. Every row reproduced the stock QA value.
+
+**2D, 960², 87 steps** (13 434 loops)
+
+| backend | variant | kernel launches | steady state | vs `off` |
+|---|---|---:|---:|---:|
+| seq | off | 13 434 | 15.1 s | |
+| seq | consecutive | 12 999 (−3 %) | 17.9 s | +18 % |
+| seq | dag | 8 902 (−34 %) | 17.8 s | +18 % |
+| OpenMP | off | 13 434 | 12.6 s | |
+| OpenMP | consecutive | 12 999 | 13.0 s | +3 % |
+| OpenMP | dag | 8 902 (−34 %) | 11.4 s | −9 % |
+| OpenMP | dag-max32 | 8 902 | 11.2 s | −11 % |
+| CUDA A100 | off | 13 434 | 4.76 s | |
+| CUDA A100 | consecutive | 12 999 | 4.70 s | −1 % |
+| CUDA A100 | dag | 8 902 (−34 %) | 4.35 s | −9 % |
+
+**3D, 96³, 87 steps** (52 383 loops)
+
+| backend | variant | kernel launches | steady state | vs `off` |
+|---|---|---:|---:|---:|
+| OpenMP | off | 52 383 | 19.3 s | |
+| OpenMP | consecutive | 52 035 (−1 %) | 19.3 s | 0 % |
+| OpenMP | dag | 28 852 (−45 %) | 14.9 s | −23 % |
+| OpenMP | dag-latest | 28 852 | 14.6 s | −24 % |
+| CUDA A100 | off | 52 383 | 10.3 s | |
+| CUDA A100 | consecutive | 52 035 | 10.2 s | −1 % |
+| CUDA A100 | dag | 28 852 (−45 %) | 9.5 s | −7 % |
+
+What the numbers say:
+
+* **Reordering is what makes CloverLeaf fusable.** Adjacent-only fusion removes 1–3 % of the launches
+  because CloverLeaf's loops alternate between producers and unrelated consumers; the DAG planner,
+  which moves a loop across loops it commutes with, removes 34 % (2D) and 45 % (3D).
+* **The time gain is smaller than the launch gain, and not uniform.** 3D on OpenMP gains the most
+  (−23 %). On the A100 the gain is 7–9 %. In 2D on one thread fusion is *slower* (+18 %) — the fused
+  kernels have more live values and I did not look into why the sequential code is slower, so the cause
+  is unconfirmed; it is a measured regression, not a noise effect (three variants, same result).
+* **The A100 is nowhere near its memory bandwidth here.** 8 902 launches take ≈ 3.9 s, i.e. ≈ 0.44 ms per
+  launch, whereas a 960² loop touching ten double dats moves very roughly 80 MB (≈ 0.05 ms at 1.5 TB/s). The launches are dominated by
+  per-launch costs in the runtime (argument packing, a stream synchronisation after every group, and the
+  host fallbacks' copies), so fusing fewer, larger kernels pays less than it would with a leaner launch
+  path. This is the first thing to fix to make the GPU numbers meaningful.
+* Group size (8 → 32) and placement (earliest/latest) make no measurable difference: the dependences, not
+  the cap, bound the groups here.
+
+### 4.3 Against the stock implementation
+
+For orientation only. The stock sequential `ops_par_loop` is OPS's development path (a generic loop that
+calls the kernel through accessor objects), not OPS's code-generated backends, so it is a weak baseline.
+
+| deck | stock (1 thread) | ops-mlir steady state, seq | OpenMP (16) | CUDA A100 |
+|---|---:|---:|---:|---:|
+| 2D `bm_short` | 45.8 s | 15.1 s | 12.6 s | 4.8 s |
+| 3D `bm_short` | 73.6 s | – | 19.3 s | 10.3 s |
+
+(`off`, i.e. without fusion, to isolate the translation. These exclude the one-off compile time below.)
+
+### 4.4 One-off costs
+
+Compilation is paid once per distinct queue of loops, and CloverLeaf has 7 of them per deck. On renyi
+(final build, from the fusion runs) that is 26–43 s in 2D and 41–86 s in 3D, CUDA being the slow one.
+The first correctness runs on the cluster, before the overhead fixes made while writing this (plan
+cache, memoised xDSL type conversion, symbol cache), spent 100–110 s (2D) and 200 s (3D) compiling.
+Measured locally on 2D `bm_short`, one thread, those fixes took the whole run from 94 s to 39 s
+(xDSL lowering 59 s → 9 s, enqueue 10 s → 2.6 s); on 3D the planner alone had cost 110 s and now costs
+about 0.1 s. The end-to-end wall time of these short decks is still dominated by the fixed compile cost;
+a real CloverLeaf run of thousands of steps would not be.
+
+## 5. Limitations
+
+* **Reductions are not compiled.** They run through the stock implementation, which on the GPU means
+  copying the reduced dats to the host each step.
+* **Data-dependent offsets read every point of the stencil** and select; this is correct for any offset
+  inside the declared stencil but a kernel that indexes outside it would be mistranslated rather than
+  rejected. (The stock code reads whatever is in memory there, so no valid application does it.)
+* **Registered integer constants used as compile-time loop bounds are baked** (they are needed at
+  translation time to unroll). A constant whose value changes during the run would go stale; none in
+  CloverLeaf do.
+* **The GPU launch path is the bottleneck** (see 4.2), so absolute GPU times here say little about the
+  fusion gain achievable with a leaner runtime.
+* **Sequential regression with fusion** (+18 % in 2D) is unexplained.
+* Only the sequential, OpenMP and CUDA backends, in a single process, were exercised; MPI was not tried.

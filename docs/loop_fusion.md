@@ -447,8 +447,8 @@ Measured on the Taylor-Green vortex (RTX 4050 laptop GPU; full data and method i
 
 ## 12. Limitations and future work
 
-* **Reductions** are not lowered by the xDSL pass (they need the xDSL fork's
-  reduction support); the planner already treats them as barriers.
+* **Reductions** are not lowered by the xDSL pass; the planner treats them as barriers.
+  Applications that keep a stock fallback (CloverLeaf) run them through it.
 * **Point-local fusion only.** A stencil consumer cannot join the kernel that
   produces its input: the neighbours of a point are produced by other points.
   Fusing those needs redundant halo computation or tiling with shared memory.
@@ -457,11 +457,13 @@ Measured on the Taylor-Green vortex (RTX 4050 laptop GPU; full data and method i
 * **Greedy placement.** The planner is a heuristic, not an optimal clustering;
   there is no cost model for arithmetic intensity, register pressure (only a
   loop-count cap) or occupancy.
-* **Kernel constants are baked in.** `ops_register_kernel_constant` values are
-  read when the kernel is translated; a cached module keeps the old value if
-  the constant changes later. (Read-only `ops_arg_gbl` values do not have this
-  problem.) The registered pointer's type is also trusted to match the
-  kernel's `extern` declaration.
+* **Kernel constants.** For kernels in the original `KernelIRBuilder` style,
+  `ops_register_kernel_constant` values are read when the kernel is translated; a cached
+  module keeps the old value if the constant changes later. Accessor-style kernels
+  (CloverLeaf, [cloverleaf.md](cloverleaf.md)) do not have this problem: each constant
+  becomes a scalar argument whose value is snapshotted when the loop is enqueued.
+  (Read-only `ops_arg_gbl` values never had it.) The registered pointer's type is
+  trusted to match the kernel's `extern` declaration.
 * **Guarded kernels evaluate a guard per member per point** and add a
   read of the old value; the box-ratio rule bounds the waste but not the
   divergence on GPUs.
