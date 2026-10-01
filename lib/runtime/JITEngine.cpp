@@ -49,6 +49,8 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <chrono>
+#include <xmmintrin.h>
+#include <cmath>
 #include <array>
 #include <cstring>
 #include <memory>
@@ -142,6 +144,8 @@ JITEngine::JITEngine() {
 
   installCrashTrace();
 
+  explain_ = std::getenv("OPS_MLIR_EXPLAIN") != nullptr;
+  verify_ = std::getenv("OPS_MLIR_VERIFY") != nullptr;
   if (const char *host = std::getenv("OPS_MLIR_HOST")) {
     std::string h = host;
     hostMode_ = h == "all"    ? HostMode::All
@@ -160,6 +164,9 @@ JITEngine::~JITEngine() {
   if (std::getenv("OPS_MLIR_STATS")) {
     llvm::errs() << "ops-mlir coverage: " << stats_.numLoops << " loops JIT-compiled, "
                  << stats_.numHostLoops << " through the stock fallback\n";
+    for (const auto &[k, runs] : verifyRuns_)
+      llvm::errs() << "ops-mlir verify: " << k << ": " << verifyBad_[k] << " of " << runs
+                   << " runs differ from the stock result\n";
     if (!hostSeconds_.empty()) {
       llvm::errs() << "ops-mlir fallback kernels (seconds):";
       for (const auto &[k, t] : hostSeconds_)
@@ -496,24 +503,24 @@ void JITEngine::compile(const FusionPlan &plan) {
     return;
   }
 
-  std::vector<std::pair<std::string, int>> kernels;
+  std::vector<const LoopDesc *> kernels;
   for (const LoopDesc &loop : queue_) {
     bool seen = std::any_of(
         kernels.begin(), kernels.end(),
-        [&](const auto &k) { return k.first == loop.kernel_name; });
+        [&](const LoopDesc *k) { return k->kernel_name == loop.kernel_name; });
     if (!seen)
-      kernels.emplace_back(loop.kernel_name, loop.dims);
+      kernels.push_back(&loop);
   }
-  for (const auto &[name, dims] : kernels) {
-    materializeKernelBody(name, dims);
-  }
+  for (const LoopDesc *loop : kernels)
+    materializeKernelBody(*loop);
 
   runBackendLowering(*loweredModule_, backend_);
   module = *loweredModule_;
 }
 
-bool JITEngine::materializeKernelBody(const std::string &kernelName,
-                                      int indexRank) {
+bool JITEngine::materializeKernelBody(const LoopDesc &loop) {
+  const std::string &kernelName = loop.kernel_name;
+  int indexRank = loop.dims;
   if (kernelSourceFiles_.empty()) {
     llvm::errs() << "materializeKernelBody: no kernel source file set "
                     "(call setKernelSourceFile), cannot translate '"
@@ -534,9 +541,15 @@ bool JITEngine::materializeKernelBody(const std::string &kernelName,
 
   KernelIRBuilder kernelBuilder(ctx);
   mlir::func::FuncOp translatedFn;
+  if (loop.fallback) {
+    // accessor-style kernel: its signature follows from the loop's arguments
+    translatedFn = kernelBuilder.generateAccessor(
+        kernelSourceFiles_, kernelName, kernelName, indexRank, kernelArgInfos(loop),
+        kernelConstants_, llvm::errs());
+  }
   // The kernel may live in any of the registered headers; only the last
   // attempt reports its diagnostics.
-  for (std::size_t i = 0; i < kernelSourceFiles_.size() && !translatedFn; ++i) {
+  for (std::size_t i = 0; i < kernelSourceFiles_.size() && !translatedFn && !loop.fallback; ++i) {
     bool last = i + 1 == kernelSourceFiles_.size();
     translatedFn = kernelBuilder.generate(
         kernelSourceFiles_[i], kernelName, indexRank, kernelConstants_,
@@ -990,6 +1003,11 @@ void JITEngine::compile_and_execute() {
       ++i;
       continue;
     }
+    if (verify_ && all[i].fallback && backend_ != Backend::CUDA) {
+      verifyLoop(all[i]);
+      ++i;
+      continue;
+    }
     std::size_t j = i;
     while (j < all.size() && !runsOnHost(all[j]))
       ++j;
@@ -1001,23 +1019,83 @@ void JITEngine::compile_and_execute() {
   }
 }
 
-bool JITEngine::kernelTranslatable(const std::string &kernelName,
-                                   int indexRank) {
-  auto it = translatable_.find(kernelName);
-  if (it != translatable_.end())
-    return it->second;
-  bool ok = false;
-  KernelIRBuilder builder(ctx);
-  for (const std::string &file : kernelSourceFiles_) {
-    mlir::func::FuncOp fn = builder.generate(file, kernelName, indexRank,
-                                             kernelConstants_, llvm::nulls());
-    if (fn) {
-      fn.erase();
-      ok = true;
-      break;
+std::vector<KernelArgInfo> JITEngine::kernelArgInfos(const LoopDesc &loop) {
+  mlir::Builder bld(&ctx);
+  std::vector<KernelArgInfo> out;
+  for (const ArgDesc &a : loop.args) {
+    KernelArgInfo k;
+    k.access = a.acc;
+    if (a.argtype == OPS_ARG_DAT) {
+      k.kind = KernelArgInfo::Kind::Dat;
+      if (a.dat.type == "double")
+        k.elt = bld.getF64Type();
+      else if (a.dat.type == "float")
+        k.elt = bld.getF32Type();
+      const int *offsets = reinterpret_cast<const int *>(a.stencil.stencil);
+      int points = a.stencil.points, dims = a.stencil.dims;
+      if (!offsets || points == 0) {
+        k.points.push_back({0, 0, 0});
+      } else {
+        for (int p = 0; p < points; ++p) {
+          std::array<int, 3> pt = {0, 0, 0};
+          for (int d = 0; d < dims && d < 3; ++d)
+            pt[d] = offsets[p * dims + d];
+          k.points.push_back(pt);
+        }
+      }
+    } else if (a.argtype == OPS_ARG_GBL) {
+      k.kind = a.acc == OPS_READ ? KernelArgInfo::Kind::Gbl : KernelArgInfo::Kind::Reduce;
+      k.dim = a.dim;
+      // OPS records only sizeof(T); the translator checks this against the
+      // kernel's declared parameter type and refuses a mismatch (e.g. int).
+      int bytes = a.dim > 0 ? a.elem_size / a.dim : a.elem_size;
+      if (bytes == 8)
+        k.elt = bld.getF64Type();
+      else if (bytes == 4)
+        k.elt = bld.getF32Type();
+    } else {
+      k.kind = KernelArgInfo::Kind::Idx;
     }
+    out.push_back(std::move(k));
   }
-  translatable_[kernelName] = ok;
+  return out;
+}
+
+std::string JITEngine::argInfoDigest(const std::vector<KernelArgInfo> &infos) {
+  std::string d;
+  for (const KernelArgInfo &k : infos) {
+    d += std::to_string(static_cast<int>(k.kind)) + "/" + std::to_string(k.access) + "/" +
+         std::to_string(k.dim) + "/" + (!k.elt ? "?" : k.elt.isF64() ? "d" : k.elt.isF32() ? "f" : "i") + "/";
+    for (const auto &p : k.points)
+      d += std::to_string(p[0]) + "," + std::to_string(p[1]) + "," + std::to_string(p[2]) + ";";
+    d += "|";
+  }
+  return d;
+}
+
+// True if the loop's kernel can be JIT-compiled. Probing is done once per kernel
+// name; a later loop with the same kernel but different arguments (a different
+// stencil, say) cannot share the one generated function, so it runs on the host.
+bool JITEngine::kernelTranslatable(const LoopDesc &loop) {
+  std::vector<KernelArgInfo> infos = kernelArgInfos(loop);
+  std::string sig = argInfoDigest(infos);
+  auto it = translatable_.find(loop.kernel_name);
+  if (it != translatable_.end())
+    return it->second.ok && it->second.signature == sig;
+
+  std::string reason;
+  llvm::raw_string_ostream os(reason);
+  KernelIRBuilder builder(ctx);
+  mlir::func::FuncOp fn = builder.generateAccessor(
+      kernelSourceFiles_, loop.kernel_name, loop.kernel_name, loop.dims, infos,
+      kernelConstants_, os);
+  bool ok = static_cast<bool>(fn);
+  if (fn)
+    fn.erase();
+  translatable_[loop.kernel_name] = {ok, sig};
+  if (explain_)
+    llvm::errs() << (ok ? "[jit] " : "[host] ") << loop.kernel_name
+                 << (ok ? "\n" : ": " + os.str());
   return ok;
 }
 
@@ -1026,7 +1104,13 @@ bool JITEngine::runsOnHost(const LoopDesc &loop) {
     return false;
   if (hostMode_ == HostMode::All)
     return true;
-  return !kernelTranslatable(loop.kernel_name, loop.dims);
+  // OPS_MLIR_JIT_ONLY=k1,k2: bisection aid -- only these kernels are JIT-compiled.
+  if (const char *only = std::getenv("OPS_MLIR_JIT_ONLY")) {
+    std::string list = std::string(",") + only + ",";
+    if (list.find("," + loop.kernel_name + ",") == std::string::npos)
+      return true;
+  }
+  return !kernelTranslatable(loop);
 }
 
 void JITEngine::syncHostBufferPtr(std::uintptr_t hostPtr) {
@@ -1056,6 +1140,81 @@ void JITEngine::runHostLoop(const LoopDesc &loop) {
   for (const ArgDesc &arg : loop.args)
     if (arg.argtype == OPS_ARG_DAT && arg.acc != OPS_READ)
       invalidateDeviceBuffer(arg.data);
+}
+
+void JITEngine::verifyLoop(LoopDesc &loop) {
+  // Every dat of the OPS instance: a JIT bug that writes out of bounds corrupts a
+  // dat the loop does not even name, which comparing only the loop's own dats misses.
+  struct Buf { std::uintptr_t ptr; std::size_t bytes; bool declaredWritten; std::string name; std::vector<int64_t> size; };
+  std::vector<Buf> bufs;
+  OPS_instance *inst = OPS_instance::getOPSInstance();
+  ops_dat_entry *item;
+  TAILQ_FOREACH(item, &inst->OPS_dat_list, entries) {
+    ops_dat d = item->dat;
+    if (!d || !d->data)
+      continue;
+    Buf buf{reinterpret_cast<std::uintptr_t>(d->data), static_cast<std::size_t>(d->mem), false,
+            d->name ? d->name : "", {}};
+    for (int k = 0; k < d->block->dims; ++k)
+      buf.size.push_back(d->size[k]);
+    bufs.push_back(std::move(buf));
+  }
+  for (const ArgDesc &a : loop.args)
+    if (a.argtype == OPS_ARG_DAT && a.acc != OPS_READ)
+      for (Buf &b : bufs)
+        if (b.ptr == a.data)
+          b.declaredWritten = true;
+
+  std::vector<std::vector<char>> start(bufs.size()), jit(bufs.size());
+  for (size_t i = 0; i < bufs.size(); ++i)
+    start[i].assign(reinterpret_cast<char *>(bufs[i].ptr),
+                    reinterpret_cast<char *>(bufs[i].ptr) + bufs[i].bytes);
+
+  unsigned mxcsrBefore = _mm_getcsr();
+  queue_.assign(1, loop);
+  compileAndExecuteSegment(); // the JIT result lands in the dats
+  queue_.clear();
+  if (_mm_getcsr() != mxcsrBefore)
+    llvm::errs() << "[verify] " << loop.kernel_name << ": MXCSR changed by the JIT run: "
+                 << llvm::format("0x%x", mxcsrBefore) << " -> " << llvm::format("0x%x", _mm_getcsr())
+                 << "\n";
+  for (size_t i = 0; i < bufs.size(); ++i)
+    jit[i].assign(reinterpret_cast<char *>(bufs[i].ptr),
+                  reinterpret_cast<char *>(bufs[i].ptr) + bufs[i].bytes);
+
+  for (size_t i = 0; i < bufs.size(); ++i) // restart from the same data
+    std::memcpy(reinterpret_cast<char *>(bufs[i].ptr), start[i].data(), bufs[i].bytes);
+  loop.fallback();                          // the stock result stays as the truth
+
+  ++verifyRuns_[loop.kernel_name];
+  bool anyBad = false;
+  for (size_t i = 0; i < bufs.size(); ++i) {
+    std::size_t n = bufs[i].bytes / sizeof(double); // CloverLeaf dats are double
+    const double *a = reinterpret_cast<const double *>(jit[i].data());
+    const double *b = reinterpret_cast<const double *>(bufs[i].ptr);
+    std::size_t bad = 0, first = 0;
+    double worst = 0;
+    for (std::size_t k = 0; k < n; ++k) {
+      if (std::memcmp(&a[k], &b[k], sizeof(double)) != 0) { // bitwise: NaN == NaN
+        double d = std::fabs(a[k] - b[k]);
+        if (!bad++)
+          first = k;
+        if (d == d)
+          worst = std::max(worst, d);
+      }
+    }
+    if (!bad)
+      continue;
+    anyBad = true;
+    std::size_t sx = bufs[i].size.empty() ? 1 : static_cast<std::size_t>(bufs[i].size[0]);
+    if (verifyBad_[loop.kernel_name] < 2)
+      llvm::errs() << "[verify] " << loop.kernel_name << ": dat " << bufs[i].name
+                   << (bufs[i].declaredWritten ? "" : " (NOT written by this loop!)") << " differs in "
+                   << bad << " of " << n << " values (max |diff| " << worst << "); first at x="
+                   << first % sx << " y=" << first / sx << " jit=" << a[first] << " stock=" << b[first] << "\n";
+  }
+  if (anyBad)
+    ++verifyBad_[loop.kernel_name];
 }
 
 void JITEngine::compileAndExecuteSegment() {
@@ -1137,6 +1296,19 @@ void JITEngine::compileAndExecuteSegment() {
   if (!engineOrErr) {
     llvm::errs() << "Failed to create ExecutionEngine: "
                   << llvm::toString(engineOrErr.takeError()) << "\n";
+    // Dropping the loops would silently corrupt the run; the stock implementation
+    // still can execute them.
+    if (std::all_of(queue_.begin(), queue_.end(),
+                    [](const LoopDesc &l) { return static_cast<bool>(l.fallback); })) {
+      static bool warned = false;
+      if (!warned) {
+        warned = true;
+        llvm::errs() << "ops-mlir: JIT compilation failed; running these loops "
+                        "through the stock OPS fallback instead\n";
+      }
+      for (const LoopDesc &l : queue_)
+        runHostLoop(l);
+    }
     return;
   }
 

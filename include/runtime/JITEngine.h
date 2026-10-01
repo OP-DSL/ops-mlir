@@ -4,6 +4,7 @@
 #include "IRBuilder.h"
 #include "Core.h"
 #include "runtime/FusionPlanner.h"
+#include "runtime/KernelIRBuilder.h"
 #include "runtime/KernelProfiler.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
@@ -240,11 +241,21 @@ private:
   // them (OPS_MLIR_HOST=all forces it for every such loop, =none never uses it).
   bool runsOnHost(const LoopDesc &loop);
   void runHostLoop(const LoopDesc &loop);
-  bool kernelTranslatable(const std::string &kernelName, int indexRank);
+  // OPS_MLIR_VERIFY=1: run one JIT-compiled loop, then redo it with the stock
+  // implementation from the same starting data and report any difference.
+  void verifyLoop(LoopDesc &loop);
+  bool verify_ = false;
+  std::map<std::string, std::size_t> verifyBad_, verifyRuns_;
+  bool kernelTranslatable(const LoopDesc &loop);
+  // What each argument of an accessor-style kernel means (see KernelArgInfo).
+  std::vector<KernelArgInfo> kernelArgInfos(const LoopDesc &loop);
+  static std::string argInfoDigest(const std::vector<KernelArgInfo> &infos);
   void syncHostBufferPtr(std::uintptr_t hostPtr);
   enum class HostMode { Auto, All, None };
   HostMode hostMode_ = HostMode::Auto;
-  std::map<std::string, bool> translatable_;
+  struct Probe { bool ok; std::string signature; };
+  std::map<std::string, Probe> translatable_; // by kernel name; first signature wins
+  bool explain_ = false;                       // OPS_MLIR_EXPLAIN
   std::map<std::string, double> hostSeconds_; // fallback time per kernel
   void execute(mlir::ExecutionEngine &engine, const FusionPlan &plan);
 
@@ -262,7 +273,7 @@ private:
   // registerCpuKernelSymbols. Returns false (leaving the declaration in
   // place) if the kernel isn't already materialized and translation fails
   // or is unsupported, so callers can fall back to symbol binding.
-  bool materializeKernelBody(const std::string &kernelName, int indexRank);
+  bool materializeKernelBody(const LoopDesc &loop);
 
   // Returns the device buffer mirroring the given host `ops_dat` buffer,
   // allocating it (via cuMemAlloc) on first use. Kernels compiled for the

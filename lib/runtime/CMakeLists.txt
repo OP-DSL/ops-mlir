@@ -7,6 +7,7 @@ add_library(
 	IRBuilder.cpp
 	JITEngine.cpp
 	KernelIRBuilder.cpp
+	AccessorKernel.cpp
 	KernelProfiler.cpp
 	FusionPlanner.cpp
 )

@@ -68,7 +68,9 @@ std::function<void()> makeStockFallback(KernelFn kernel, const char *name,
   for (int i = 0; i < 2 * dims; ++i)
     r[i] = range[i];
   std::string kname = name;
-  return [=]() mutable {
+  // `snapshots` owns the bytes the copied ops_args point at, so the closure must
+  // keep it alive: a plain [=] would not capture it (the body never names it).
+  return [=, snapshots = snapshots]() mutable {
     callStock(kernel, kname.c_str(), block, dims, r.data(), args,
               std::make_index_sequence<sizeof...(Args)>{});
   };
