@@ -170,6 +170,10 @@ JITEngine::~JITEngine() {
       llvm::errs() << "ops-mlir verify: " << k << ": " << verifyBad_[k] << " of " << runs
                    << " runs differ from the stock result\n";
     if (!hostSeconds_.empty()) {
+      double total = 0;
+      for (const auto &kv : hostSeconds_)
+        total += kv.second;
+      llvm::errs() << "ops-mlir fallback total seconds: " << llvm::format("%.3f", total) << "\n";
       llvm::errs() << "ops-mlir fallback kernels (seconds):";
       for (const auto &[k, t] : hostSeconds_)
         llvm::errs() << " " << k << "=" << llvm::format("%.3f", t);
