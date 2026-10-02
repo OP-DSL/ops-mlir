@@ -129,11 +129,13 @@ over the bounding box; each member then only runs where the point is inside its
 own range ("guarded"), provided the box is not larger than the members' summed
 volumes and any member smaller than the box reads point-locally.
 
-Design, diagrams and the lowering are described in
+[`docs/compilation_flow.md`](docs/compilation_flow.md) follows loops of Taylor-Green and CloverLeaf through every
+stage (capture, flush, planning, xDSL, kernel translation, the three backends, execution) with the real IR of each.
+Design, diagrams and the fusion rules are described in
 [`docs/loop_fusion.md`](docs/loop_fusion.md); measurements on the Taylor-Green
 vortex are in [`docs/tgv_evaluation.md`](docs/tgv_evaluation.md). CloverLeaf 2D and 3D from the OPS
-repository run unmodified through the JIT, with a stock-implementation fallback and a differential
-verifier; see [`docs/cloverleaf.md`](docs/cloverleaf.md) and, for the larger decks on the A100 (fusion size,
+repository run unmodified and entirely through the JIT (every loop is compiled; a stock-implementation fallback remains
+for kernels the translator rejects), with a differential verifier; see [`docs/cloverleaf.md`](docs/cloverleaf.md) and, for the larger decks on the A100 (fusion size,
 register pressure, occupancy), [`docs/cloverleaf_large.md`](docs/cloverleaf_large.md).
 
 | Variable | Default | Meaning |

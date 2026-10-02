@@ -1,5 +1,7 @@
 # Lazy execution and loop fusion in ops-mlir
 
+> The whole pipeline, stage by stage with real IR, is in [compilation_flow.md](compilation_flow.md); this document is about the fusion rules.
+
 This document explains how `ops-mlir` turns a stream of `ops_par_loop` calls
 into a small number of fused, JIT-compiled kernels: how it fits into OPS, what
 the runtime does at every step, how loops are analysed, grouped and reordered,
@@ -471,6 +473,8 @@ Measured on the Taylor-Green vortex (RTX 4050 laptop GPU; full data and method i
 * **Guarded kernels evaluate a guard per member per point** and add a
   read of the old value; the box-ratio rule bounds the waste but not the
   divergence on GPUs.
+* **GPU threads past the end of a range redo the last point** instead of being masked; see
+  [compilation_flow.md §14](compilation_flow.md#14-things-found-while-writing-this-and-limits-that-matter).
 * **Hazards inside `stencil.apply`.** Correctness of a fused group relies on the
   planner's point-local guarantee; the stencil dialect's buffer semantics would
   otherwise be ambiguous for in-place updates.
