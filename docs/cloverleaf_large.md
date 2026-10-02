@@ -14,6 +14,35 @@ the CloverLeaf port itself is described in [cloverleaf.md](cloverleaf.md). Raw d
 `docs/data/clover_large/`; drivers: `apps/c/cloverleaf_2d/{eval_fusion,ncu_clover,report_large}.py`,
 `cluster/job_clover_{repeat,ncu,host,large}.sbatch`.
 
+## Update: with every loop on the GPU
+
+The study below was made while `calc_dt_kernel_min`, `calc_dt_kernel_get` and `field_summary_kernel` still ran through the stock
+implementation on the host (and the 1-D coordinate arrays were initialised there too). They are compiled now
+([cloverleaf.md §2.1](cloverleaf.md)), and the same repeated, interleaved CUDA sweep (3 repetitions, nothing else of ours running)
+gives (median per variant, `execute + host-fallback + host-copy` seconds for the whole run, data in
+`docs/data/clover_allgpu/`, earlier numbers in `docs/data/clover_large/clover_repeat_*.json`):
+
+| deck | | launches | GPU kernel s | host s | host copy s | steady s |
+|---|---|---:|---:|---:|---:|---:|
+| 2D 3840² | before, unfused | 13 434 | 5.90 | 7.07 | 1.37 | 14.82 |
+| | **all on GPU, unfused** | 13 625 | 2.01 | 0 | 0 | **2.46** |
+| | all on GPU, `noguard` | 9 179 | 1.92 | 0 | 0 | **2.36** |
+| 3D 256³ | before, unfused | 52 383 | 12.71 | 10.94 | 1.88 | 26.23 |
+| | **all on GPU, unfused** | 52 577 | 4.55 | 0 | 0 | **5.35** |
+| | all on GPU, `noguard` | 29 132 | 4.20 | 0 | 0 | **4.89** |
+
+* Moving the reductions and the setup loops to the GPU is a 6× (2D) and 4.9× (3D) reduction of the run's steady-state time, far
+  more than all the fusion variants together; the GPU kernel time itself also fell (5.9 → 2.0 s, 12.7 → 4.6 s). I did not isolate why;
+  the likely reason is that the earlier figure included synchronisation the host loops forced, but that is not measured.
+* The conclusion about fusion stands, at the new, smaller baseline: the best variant (`noguard`) saves 4 % (2D) and 9 % (3D)
+  of the steady time (4.5 % and 8 % of the kernel time); caps of 3–4 loops give 1–6 %. The launch counts
+  (−33 % / −45 %) are, as before, a much larger relative change than the time. The relative gain is a little larger than before
+  because the denominator shrank.
+* All 21 + 21 runs reproduced a PASSED QA line. The QA value is not bitwise the stock one any more (2D: 4.6e-11 % against stock's 1.6e-11 %, 3D: 7.4e-11 % against 2.3e-13 %), because the reductions sum in a different order; see cloverleaf.md §4.1.
+* The numbers in the sections below that include host-fallback time (`host s`, the 80 % figure, the per-step breakdowns) describe
+  the previous state; the kernel-level results (registers, occupancy, DRAM traffic, plans) are unaffected, since the GPU kernels are
+  the same ones.
+
 ## Summary
 
 1. **Fusion removes a third to a half of the kernels but little of the time.** The DAG planner turns 13 434 launches

@@ -196,7 +196,7 @@ Pointwise: Y = 2*X         ;   Z = Y + 1           RAW on Y, read at offset 0
 
 **Reductions are barriers.** A loop that carries a reduction (`ops_arg_gbl`
 with a non-read access) is never fused and nothing is moved across it.
-(Reductions are not yet lowered at all — see [§12](#12-limitations-and-future-work).)
+(Reductions are lowered for accessor-style kernels — see [cloverleaf.md §2.1](cloverleaf.md) — but fusing them is future work, [§12](#12-limitations-and-future-work).)
 
 ## 5. The planner
 
@@ -417,6 +417,7 @@ strict translator ([§10](#10-testing)).
 | suite | what it proves |
 |---|---|
 | `unittests/FusionPlannerTest` | every legality rule on hand-built loops; interleaved chains (DAG needs 3 kernels where adjacent grouping needs 4); footprint independence; barriers; **randomized oracle**: 4000 random 1D programs × 6 planner configurations — the plan, run with fused at-point semantics in plan order, must produce the same data as program order. Removing the convexity check, or treating RAW or WAR as fusable, makes it fail (verified by mutation). |
+| `tests/e2e/accessor_cases` (double; seq, OpenMP, CUDA) | the accessor-style kernel path CloverLeaf uses: INC/MIN/MAX reductions (several elements, `r = r + e`, two loops into one handle, a single-point loop that assigns), loops that write 1-D arrays indexed along one axis of a 2-D loop and read them back, and a registered array of structs under a loop bounded by a registered constant (including a changed constant re-translating the kernel). Each case also requires that no loop fell back to the stock implementation. |
 | `tests/e2e/fusion_cases` (built for `float` and `double`) | host-reference comparison of every pattern (pointwise chain, stencil RAW with identical and different ranges, Jacobi WAR, boundary setup, multi-output kernels, RW chains, globals, lazy flush, queue cap, module-cache reuse); fused output equals unfused output (bitwise on CPU); exact launch counts; interleaved chains reorder. Run on seq, OpenMP and CUDA, and with fusion off, same-range only, no reordering and latest placement. |
 | `unittests/KernelIRBuilderTest`, `kernel-ir-dump` tests | f32 translation: signatures, literal typing, casts, `sinf`, out-structs |
 | `apps/c/taylor_green_vortex/check_single_precision.py` | no `double`, unsuffixed literal, `M_PI` or bare math call remains in the generated single-precision sources; all 25 kernels translate under `OPS_MLIR_STRICT_FP=1` with no `f64` in the IR; a **negative control** (plain `double`→`float`) must be rejected, so the check cannot pass by being blind |
@@ -447,8 +448,11 @@ Measured on the Taylor-Green vortex (RTX 4050 laptop GPU; full data and method i
 
 ## 12. Limitations and future work
 
-* **Reductions** are not lowered by the xDSL pass; the planner treats them as barriers.
-  Applications that keep a stock fallback (CloverLeaf) run them through it.
+* **Reductions** are lowered (a contribution per point into a scratch field, then a deterministic
+  fold), but the planner still treats them as barriers. In CloverLeaf `calc_dt` has three consecutive
+  loops (`calc_dt_kernel`, `calc_dt_kernel_min`, `calc_dt_kernel_get`) that could share a kernel, and
+  `field_summary` could join the loops before it. The scratch fields would have to be per group,
+  and the fold would then run once per group rather than once per loop.
 * **Point-local fusion only.** A stencil consumer cannot join the kernel that
   produces its input: the neighbours of a point are produced by other points.
   Fusing those needs redundant halo computation or tiling with shared memory.

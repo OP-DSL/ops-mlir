@@ -43,7 +43,7 @@ file, a shim header and a small `main()` wrapper.
         │
         ├─ translatable ──► FusionPlanner ─► ops.par_loop IR ─► xDSL (stencil) ─► MLIR ─► seq | OpenMP | CUDA
         │
-        └─ not translatable (reductions, one-time initialisation)
+        └─ not translatable (none in CloverLeaf any more; any kernel the translator rejects)
                           ──► dats made current on the host, then the stock loop runs, in queue order
 ```
 
@@ -51,7 +51,8 @@ file, a shim header and a small `main()` wrapper.
 translator cannot handle yet runs through the stock implementation, at its place in the queue, so the
 program is always complete and correct, and the report says exactly how much of it is JIT-compiled
 (`OPS_MLIR_STATS=1` prints `coverage: N loops JIT-compiled, M through the stock fallback`).
-`OPS_MLIR_EXPLAIN=1` prints, for each kernel, either `[jit]` or `[host]` with the reason.
+`OPS_MLIR_EXPLAIN=1` prints, for each kernel, either `[jit]` or `[host]` with the reason. CloverLeaf 2D and 3D
+no longer need it: every one of their loops is JIT-compiled (section 2.1).
 
 **Kernel identity.** CloverLeaf labels a dozen different kernels `"update_halo_kernel1"`, so the label
 cannot name the kernel. The wrapper takes the kernel's address (the loop's first argument) and the
@@ -103,14 +104,50 @@ Notes on the less obvious ones:
   one whose offset matches is selected.
 * **Strided stencils** (`S2D_00_STRID2D_X`: a 1-D coordinate array used inside a 2-D loop). The dat
   becomes a *lower-rank field* and every access is a `stencil.access` with an `offset_mapping` onto the
-  loop's axes, which the stencil-to-memref lowering already supports. Such a dat can only be read.
+  loop's axes, which the stencil-to-memref lowering already supports. Writes are covered in 2.1.
 * **Unresolved names.** The kernel header is parsed with the includes the application's own translation
   unit had in front of it (`set_kernel_preamble`) plus stubs for OPS types. If the body still contains
   an unresolved name the kernel is rejected rather than guessed at.
 
-Not supported, so the loop stays on the stock implementation: reductions (`calc_dt`'s minimum,
-`field_summary`), writes through a strided stencil (the one-time `initialise_chunk` loops), and kernels
-that index a struct array through a pointer (`generate_chunk`).
+### 2.1 The last three kinds of loop: reductions, 1-D arrays written, struct arrays
+
+These stayed on the stock implementation in the first version (166 of 11 751 loops in 2D, but on the GPU
+they forced the reduced dats to be copied to the host each step). They are compiled now.
+
+* **Reductions** (`calc_dt_kernel_min`, `calc_dt_kernel_get`, `field_summary_kernel`). A reduction
+  argument is not accumulated in place. The translated kernel starts every reduction element at the
+  operation's identity (0, +max, −max) and returns this point's *contribution* as an extra output,
+  which the generated function stores into a scratch field over the group's iteration box. The
+  runtime fills that field with the identity first, so points a guarded (fused) member does not visit
+  contribute nothing, and afterwards folds it to one value with a small native helper (host: a fixed
+  number of chunks added in order; GPU: a PTX `fill` kernel for the identity and a PTX `red` kernel that runs twice, once
+  with a grid-stride slice per thread and a block fold in shared memory, once as a single block over the
+  per-block results; loaded through the driver API and launched on the same stream) and combines that with the
+  OPS reduction handle (`+`, `min`, `max`). The fold order depends on the box and not on the thread
+  count, so results are deterministic, but it is *not* the sequential order: a sum differs from the
+  stock result in the last bits (the 3D QA line reads 5.7e-14 % where stock has 2.8e-14 %; both far under
+  the 1e-3 % pass level; MIN and MAX are exact). `*r = *r + e` is recognised as an accumulation;
+  any other assignment to an INC argument (`*r = e`) is only equivalent for a loop over one point, so such
+  a loop with more points stays on the host (CloverLeaf has none).
+  The planner still treats a loop with a reduction as a fusion barrier.
+* **Loops that write 1-D arrays** (`initialise_chunk_kernel_x/y/xx/yy/cellx/celly`: `vertexx` is
+  indexed along x only but the loop is 2-D). The stock loop writes each element once per row, the same value
+  each time. The generated function iterates over the axes the dats have and visits every element once.
+  That is only the same if nothing in the loop depends on the dropped axes, which the runtime checks: every dat
+  of the loop is indexed along the same axes, they are only `WRITE`n or `READ`, no reduction, and the
+  translator reports that the kernel never reads `idx[k]` of a dropped axis. The planner does not fuse loops
+  whose dats span different axes.
+* **Registered arrays of structs** (`generate_chunk_kernel` reads `states[i].energy` inside
+  `for (i = 1; i < number_of_states; ...)`). The loop is unrolled with the registered `number_of_states`
+  (a translation-time constant), and each `states[i].field` with constant `i` becomes a scalar parameter whose
+  value is read from the registered array when the loop is enqueued. The elements are only known while the
+  body is emitted, so the translator runs twice: the first pass finds them, the second has them in its signature.
+  A constant folded into the code like this is part of the compiled module's cache key, and changing it
+  re-translates the kernel (tested in `tests/e2e/accessor_cases.cpp`).
+
+Single-point loops (`calc_dt_kernel_get` runs over one cell) need one more thing on the GPU: canonicalisation
+removes a one-iteration `scf.parallel`, so nothing was left to map to a kernel and the body ran on the host
+against device pointers (a segmentation fault). The mapping pass now wraps such a function in a one-thread launch.
 
 ## 3. Correctness: how it is checked
 
@@ -120,7 +157,8 @@ that index a struct array through a pointer (`generate_chunk`).
 2. **A differential verifier** (`OPS_MLIR_VERIFY=1`). Every loop that the JIT compiles is run twice
    from the same state — once JIT-compiled, once through the stock implementation — and *all* dats of
    the OPS instance are compared bit for bit (an out-of-bounds write corrupts a dat the loop does not
-   even name). The stock result is kept, so the run continues unharmed, and the report counts the
+   even name). Reduction handles are compared too (sums to 1e-12 relative, min/max exactly). The stock
+   result is kept, so the run continues unharmed, and the report counts the
    mismatches per kernel (`ops-mlir verify: <kernel>: 0 of 75 runs differ`).
    It found two real bugs: a strided stencil that the lowering mis-indexed, and an `if`
    whose body was parsed without its enumerators and silently read as 0.
@@ -140,27 +178,30 @@ in 2D, 96³ in 3D, 87 steps).
 
 ### 4.1 Coverage and correctness
 
-| | loops | JIT-compiled | stock fallback | kernels checked bitwise (`VERIFY`) |
+Every loop of both applications is JIT-compiled (`docs/data/clover_a100_qa_allgpu.txt`; the first version of this
+section, with 98.6–99.6 % coverage, is superseded):
+
+| | loops | JIT-compiled | stock fallback | kernels checked bitwise (`VERIFY`, seq/OpenMP) |
 |---|---:|---:|---:|---:|
-| 2D default | 11 751 | 11 585 (98.6 %) | 166 | 72, none differ |
-| 2D `bm_short` | 13 625 | 13 434 (98.6 %) | 191 | – |
-| 3D default | 45 339 | 45 170 (99.6 %) | 169 | 127, none differ |
-| 3D `bm_short` | 52 577 | 52 383 (99.6 %) | 194 | – |
+| 2D default | 11 751 | 11 751 | 0 | 82, none differ |
+| 2D `bm_short` | 13 625 | 13 625 | 0 | – |
+| 3D default | 45 339 | 45 339 | 0 | 140, none differ |
+| 3D `bm_short` | 52 577 | 52 577 | 0 | – |
 
-The loops left on the stock path are the reductions (`calc_dt`'s minimum, `field_summary`, the
-position look-ups) and the one-time grid setup (`initialise_chunk_*`, `generate_chunk`).
-
-CloverLeaf's own QA, every configuration (`docs/data/clover_a100_qa.txt`):
+CloverLeaf's own QA, every configuration (A100 for CUDA):
 
 | deck | stock | ops-mlir seq | OpenMP (16) | CUDA (A100) |
 |---|---|---|---|---|
 | 2D default | 2.842e-14 % PASSED | identical | identical | identical |
-| 2D `bm_short` | 8.527e-14 % PASSED | identical | identical | identical |
-| 3D default | 2.842e-14 % PASSED | identical | identical | identical |
-| 3D `bm_short` | 8.527e-14 % PASSED | identical | identical | identical |
+| 2D `bm_short` | 8.527e-14 % PASSED | 1.164e-11 % PASSED | 1.164e-11 % | 1.168e-11 % |
+| 3D default | 2.842e-14 % PASSED | 5.684e-14 % | 5.684e-14 % | 4.263e-14 % |
+| 3D `bm_short` | 8.527e-14 % PASSED | 8.697e-12 % | 8.697e-12 % | 8.697e-12 % |
 
-"Identical" means the printed 16-digit value is the same as the stock executable's, not just under the
-`1e-3 %` threshold.
+The QA values are no longer all identical to stock's, because reductions are now folded in a fixed
+parallel order instead of the sequential one. The differences are in the last digits of a sum over up to
+10⁶ cells (a relative 1e-11 on the kinetic-energy check), 8 orders of magnitude below the 1e-3 % pass level;
+every per-loop comparison of the dats themselves is still bit-exact. (Before this change the QA lines were
+identical because those loops ran through the stock code.)
 
 ### 4.2 Fusion
 
@@ -244,14 +285,16 @@ a real CloverLeaf run of thousands of steps would not be.
 
 ## 5. Limitations
 
-* **Reductions are not compiled.** They run through the stock implementation, which on the GPU means
-  copying the reduced dats to the host each step.
+* **Reductions are folded in a different order than the sequential loop adds them** (deterministic, but
+  not bitwise equal to stock for sums; min/max are exact), see 2.1 and the QA table.
+* **Reduction loops are fusion barriers** and the fold runs once per loop.
+* **`*r = e` on an INC reduction** over more than one point stays on the stock path (none in CloverLeaf).
 * **Data-dependent offsets read every point of the stencil** and select; this is correct for any offset
   inside the declared stencil but a kernel that indexes outside it would be mistranslated rather than
   rejected. (The stock code reads whatever is in memory there, so no valid application does it.)
 * **Registered integer constants used as compile-time loop bounds are baked** (they are needed at
-  translation time to unroll). A constant whose value changes during the run would go stale; none in
-  CloverLeaf do.
+  translation time to unroll). The value is part of the module key and a change re-translates the kernel,
+  but only if it changes between flushes, not between a loop's enqueue and its flush.
 * **The GPU launch path is the bottleneck** (see 4.2), so absolute GPU times here say little about the
   fusion gain achievable with a leaner runtime.
 * **Sequential regression with fusion** (+18 % in 2D) is unexplained.

@@ -124,7 +124,7 @@ only where no value has to travel between different points: a non-zero-offset
 read of something an earlier member wrote (RAW), or a write to something an
 earlier member reads at a non-zero offset (WAR, e.g. the Jacobi
 `apply_stencil` / `copy` pair), keeps two loops in separate kernels. Loops with
-reductions never fuse or move. Loops with different ranges fuse into one launch
+reductions never fuse or move (they are compiled, but each is its own kernel). Loops with different ranges fuse into one launch
 over the bounding box; each member then only runs where the point is inside its
 own range ("guarded"), provided the box is not larger than the members' summed
 volumes and any member smaller than the box reads point-locally.
