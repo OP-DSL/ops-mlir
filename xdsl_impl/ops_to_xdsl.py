@@ -99,12 +99,21 @@ def _convert_ir_text(text: str) -> str:
     ctx.load_dialect(func.Func)
 
     module = Parser(ctx, text).parse_module()
-    pipeline = PassPipeline([
-        OPSToStencilPass(),
-        ConvertStencilToLLMLIRPass(),
-    ])
-
-    pipeline.apply(ctx, module)
+    import os
+    if os.environ.get("OPS_MLIR_DUMP_STENCIL"):
+        # the IR between the two passes: stencil.apply / stencil.access, before it becomes loops
+        PassPipeline([OPSToStencilPass()]).apply(ctx, module)
+        import sys
+        print("=== STENCIL IR (after ops-to-stencil) ===", file=sys.stderr)
+        Printer(stream=sys.stderr).print_op(module)
+        print(file=sys.stderr)
+        PassPipeline([ConvertStencilToLLMLIRPass()]).apply(ctx, module)
+    else:
+        pipeline = PassPipeline([
+            OPSToStencilPass(),
+            ConvertStencilToLLMLIRPass(),
+        ])
+        pipeline.apply(ctx, module)
     module.verify()
 
     from io import StringIO

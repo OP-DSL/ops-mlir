@@ -176,6 +176,61 @@ void caseLines(Env &e) {
   finish("lines_written_over_fewer_axes", ok, detail);
 }
 
+// An in-place update repeated many times: a point visited by more than one GPU thread (threads past
+// the end of the range) would be updated more than once.
+void caseInPlaceUpdate(Env &e) {
+  ops_dat X = newDat(e, e.block, "iX");
+  const int rounds = 200;
+  begin();
+  ops_par_loop(a_zero, "a_zero", e.block, 2, e.full, ops_arg_dat(X, 1, e.s00, "double", OPS_WRITE));
+  for (int r = 0; r < rounds; ++r)
+    ops_par_loop(a_incr, "a_incr", e.block, 2, e.interior, ops_arg_dat(X, 1, e.s00, "double", OPS_RW));
+  compile_and_execute();
+  sync_all_host_buffers();
+  const double *x = (const double *)X->data;
+  int bad = 0;
+  char detail[200] = "";
+  for (int j = 0; j < NY; ++j)
+    for (int i = 0; i < NX; ++i)
+      if (x[(j + 1) * X->size[0] + (i + 1)] != rounds) {
+        if (!bad++)
+          std::snprintf(detail, sizeof detail, "first at (%d,%d): %g, expected %d", i, j,
+                        x[(j + 1) * X->size[0] + (i + 1)], rounds);
+      }
+  finish("in_place_update_applied_once", bad == 0, std::to_string(bad) + " points wrong; " + detail);
+}
+
+// Two queues with the same kernels, ranges and dat shapes but a different pattern of which dat is
+// which: the second must not reuse the first one's plan or compiled module.
+void caseAliasingPattern(Env &e) {
+  ops_dat A = newDat(e, e.block, "aA"), B = newDat(e, e.block, "aB"), C = newDat(e, e.block, "aC"),
+          D = newDat(e, e.block, "aD");
+  double one = 1.0, seven = 7.0;
+  auto set = [&](ops_dat d, double *v) {
+    ops_par_loop(a_set, "a_set", e.block, 2, e.full, ops_arg_dat(d, 1, e.s00, "double", OPS_WRITE),
+                 ops_arg_gbl(v, 1, "double", OPS_READ));
+  };
+  auto copy = [&](ops_dat from, ops_dat to) {
+    ops_par_loop(a_copy, "a_copy", e.block, 2, e.interior, ops_arg_dat(from, 1, e.s00, "double", OPS_READ),
+                 ops_arg_dat(to, 1, e.s00, "double", OPS_WRITE));
+  };
+  set(A, &one);
+  set(C, &seven);
+  compile_and_execute();
+  begin();
+  copy(A, B); // queue 1: a chain A -> B -> C
+  copy(B, C);
+  compile_and_execute();
+  copy(A, B); // queue 2: same shapes, but the second copy is independent of the first
+  copy(C, D);
+  compile_and_execute();
+  sync_all_host_buffers();
+  auto at = [&](ops_dat d) { return ((const double *)d->data)[(2 + 1) * d->size[0] + 3 + 1]; };
+  // queue 1 leaves C = 1; queue 2 then copies that C into D
+  finish("same_shapes_different_aliasing", at(B) == 1.0 && at(C) == 1.0 && at(D) == 1.0,
+         "B=" + std::to_string(at(B)) + " C=" + std::to_string(at(C)) + " D=" + std::to_string(at(D)));
+}
+
 void caseStates(Env &e) {
   static tstate_type table[3] = {{2.0, 1.0, 1}, {5.0, 7.0, 0}, {0.5, -1.0, 1}};
   tstates = table;
@@ -222,6 +277,8 @@ int main(int argc, const char **argv) {
   ops_partition("");
   caseReductions(e);
   caseLines(e);
+  caseInPlaceUpdate(e);
+  caseAliasingPattern(e);
   caseStates(e);
   std::printf("%d passed, %d failed\n", passes, failures);
   ops_exit();

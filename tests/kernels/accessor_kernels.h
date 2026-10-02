@@ -72,3 +72,20 @@ void a_states(ACC<double> &out) {
       out(0, 0) = out(0, 0) * tstates[s].scale + tstates[s].shift;
   }
 }
+
+// read-modify-write in place: applying it twice at one point is visible
+void a_incr(ACC<double> &x) {
+  x(0, 0) = x(0, 0) + 1.0;
+}
+
+void a_zero(ACC<double> &x) {
+  x(0, 0) = 0.0;
+}
+
+void a_copy(const ACC<double> &in, ACC<double> &out) {
+  out(0, 0) = in(0, 0);
+}
+
+void a_set(ACC<double> &x, const double *v) {
+  x(0, 0) = v[0];
+}

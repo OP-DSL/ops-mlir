@@ -44,6 +44,10 @@ public:
                      const std::string &planDigest = "", const std::string &specialization = "") {
     digest_ += "plan:" + planDigest + "\n";
     digest_ += "spec:" + specialization + "\n";
+    // Which arguments are the same dat decides the fusion plan and the generated function's
+    // parameters, so the key carries each dat's slot (order of first appearance in the queue):
+    // two queues that differ only in which dat is which must not share a module.
+    std::map<int, int> slotOf;
     for (const LoopDesc &loop : queue) {
       digest_ += loop.kernel_name;
       digest_ += '|';
@@ -68,6 +72,10 @@ public:
         digest_ += std::to_string(arg.elem_kind);
 
         const DatDesc &dat = arg.dat;
+        if (arg.argtype == OPS_ARG_DAT) {
+          int slot = slotOf.emplace(dat.index, static_cast<int>(slotOf.size())).first->second;
+          digest_ += ";slot:" + std::to_string(slot);
+        }
         digest_ += ";dat:";
         digest_ += std::to_string(dat.dim);
         digest_ += ',';
