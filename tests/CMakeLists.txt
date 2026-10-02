@@ -38,6 +38,23 @@ function(add_ops_e2e_test target backend)
     FAIL_REGULAR_EXPRESSION "\\[FAIL\\]")
 endfunction()
 
+# Accessor-style kernels (reductions, loops over fewer axes, array constants), as CloverLeaf
+# writes them. Double precision; the stock OPS implementation is the fallback the shim keeps.
+add_executable(accessor_cases e2e/accessor_cases.cpp)
+target_include_directories(accessor_cases BEFORE PRIVATE
+  ${CMAKE_SOURCE_DIR}/apps/c/cloverleaf_2d/shim)
+target_include_directories(accessor_cases PRIVATE ${CMAKE_SOURCE_DIR}/include ${OPS_ROOT}/include)
+target_compile_definitions(accessor_cases PRIVATE
+  OPS_TEST_ACCESSOR_KERNELS="${CMAKE_CURRENT_SOURCE_DIR}/kernels/accessor_kernels.h")
+target_link_libraries(accessor_cases PRIVATE
+  OPSRuntime MLIROPSDialect
+  ${mlir_dialect_libs} ${mlir_conversion_libs} ${mlir_extension_libs}
+  MLIRRegisterAllPasses MLIRIR MLIRPass MLIRSupport
+  ops_seq_local m)
+target_link_options(accessor_cases PRIVATE -no-pie -rdynamic)
+add_ops_e2e_test(accessor_cases seq LABELS cpu)
+add_ops_e2e_test(accessor_cases openmp LABELS cpu)
+
 foreach(prec f64 f32)
   add_ops_e2e(fusion_cases_${prec} e2e/fusion_cases.cpp ${prec})
   add_ops_e2e_test(fusion_cases_${prec} seq LABELS cpu)
@@ -65,4 +82,5 @@ if(OPS_ENABLE_CUDA)
     ENV OPS_MLIR_FUSION_REORDER=0)
   # fp64 on this GPU is correctness-only; opt in with -L gpu-fp64.
   add_ops_e2e_test(fusion_cases_f64 cuda LABELS gpu-fp64)
+  add_ops_e2e_test(accessor_cases cuda LABELS gpu-fp64)
 endif()

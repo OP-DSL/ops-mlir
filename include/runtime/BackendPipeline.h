@@ -77,9 +77,44 @@ public:
     });
     for (mlir::scf::ParallelOp op : targets)
       convert(op);
+
+    // A loop over a single point has no scf.parallel left (canonicalization folds it away), and
+    // its body would run on the host against device pointers: give it a one-thread launch.
+    getOperation().walk([&](mlir::func::FuncOp fn) {
+      if (!fn.getSymName().starts_with("ops_par_loop") || fn.isExternal())
+        return;
+      bool mapped = false;
+      fn.walk([&](mlir::gpu::LaunchOp) { mapped = true; });
+      if (!mapped)
+        wrapInSingleThreadLaunch(fn);
+    });
   }
 
 private:
+  static void wrapInSingleThreadLaunch(mlir::func::FuncOp fn) {
+    mlir::Block &entry = fn.getBody().front();
+    mlir::OpBuilder builder(&entry, entry.begin());
+    mlir::Location loc = fn.getLoc();
+    mlir::Value one = mlir::arith::ConstantIndexOp::create(builder, loc, 1);
+    auto launch = mlir::gpu::LaunchOp::create(builder, loc, one, one, one, one, one, one);
+    mlir::Block *body = &launch.getBody().front();
+    llvm::SmallVector<mlir::Operation *> toMove;
+    bool seenLaunch = false;
+    for (mlir::Operation &op : entry) {
+      if (&op == launch.getOperation()) {
+        seenLaunch = true;
+        continue;
+      }
+      if (seenLaunch && !op.hasTrait<mlir::OpTrait::IsTerminator>())
+        toMove.push_back(&op);
+    }
+    // The constant `one` precedes the launch and stays outside.
+    for (mlir::Operation *op : toMove)
+      op->moveBefore(body, body->end());
+    builder.setInsertionPointToEnd(body);
+    mlir::gpu::TerminatorOp::create(builder, loc);
+  }
+
   void convert(mlir::scf::ParallelOp op) const {
     mlir::OpBuilder builder(op);
     mlir::Location loc = op.getLoc();

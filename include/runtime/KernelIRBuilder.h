@@ -28,6 +28,7 @@ struct KernelArgInfo {
   /// Dat: the stencil's points, in the order they were declared and in OPS's
   /// dimension order (x first), padded with zeros to three dimensions.
   std::vector<std::array<int, 3>> points;
+  bool scaled = false;  // Dat: ... and some stride is neither 0 nor 1 (multigrid)
   bool strided = false; // Dat: the stencil's stride is not 1 in every dimension
   int dim = 1;      // Gbl: number of elements
   mlir::Type elt;   // element type (f32/f64/i32); null if unsupported
@@ -42,6 +43,17 @@ struct KernelConstRef {
   std::string name;
   int64_t offset = 0;
   mlir::Type elt;
+};
+
+/// What translating a kernel revealed about it, beyond the function itself.
+struct KernelTraits {
+  /// Assigns to an INC reduction (`*r = e`) instead of accumulating (`*r += e`).
+  bool assignStyleReduction = false;
+  /// Bit k is set when the kernel reads idx[k] of an ops_arg_idx.
+  unsigned idxAxesRead = 0;
+  /// Registered integer constants the generated code was specialised on (loop bounds, array
+  /// subscripts), with the value it assumed.
+  std::vector<std::pair<std::string, int64_t>> specialized;
 };
 
 class KernelIRBuilder {
@@ -66,7 +78,7 @@ public:
       const std::vector<KernelArgInfo> &args,
       const std::map<std::string, const void *> &constants, llvm::raw_ostream &errs,
       std::vector<KernelConstRef> *constRefs = nullptr,
-      const std::string &preamble = "");
+      const std::string &preamble = "", KernelTraits *traits = nullptr);
 
 private:
   mlir::MLIRContext &context_;

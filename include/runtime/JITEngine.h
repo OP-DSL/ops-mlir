@@ -41,8 +41,9 @@ public:
   // `planDigest` (FusionPlan::digest) keeps modules compiled for different
   // groupings of the same loops apart.
   explicit ModuleKey(const std::vector<LoopDesc> &queue,
-                     const std::string &planDigest = "") {
+                     const std::string &planDigest = "", const std::string &specialization = "") {
     digest_ += "plan:" + planDigest + "\n";
+    digest_ += "spec:" + specialization + "\n";
     for (const LoopDesc &loop : queue) {
       digest_ += loop.kernel_name;
       digest_ += '|';
@@ -253,6 +254,19 @@ private:
 
   void reportPlan(const ModuleKey &key, const FusionPlan &plan);
   void compile(const FusionPlan &plan);
+  std::unique_ptr<mlir::ExecutionEngine> createEngine(mlir::ModuleOp module, std::string &error);
+
+  // Reductions: each reduction element of a launch writes its per-point contribution into a
+  // scratch buffer over the launch's box; a small generated function folds that buffer to one
+  // value on the device, which is then combined into the application's OPS reduction handle.
+  std::map<std::pair<std::size_t, int>, std::uintptr_t> reduceScratch_; // (bytes, slot) -> buffer
+  std::uintptr_t reducePartials_ = 0; // device scratch of the GPU fold
+  std::uintptr_t allocScratch(std::size_t bytes);       // device memory on CUDA, host otherwise
+  std::uintptr_t scratchBuffer(std::size_t bytes, int slot);
+  bool fillReduction(std::uintptr_t buffer, std::size_t n, int elemKind, int access);
+  /// Folds `n` contributions at `buffer` and combines the result into `handle[element]`.
+  bool foldReduction(std::uintptr_t buffer, std::size_t n, int elemKind, int access,
+                     std::uintptr_t handle, int element, int elemSize);
 
   // Runs the queue's JIT-compilable stretch (see compile_and_execute).
   void compileAndExecuteSegment();
@@ -272,7 +286,16 @@ private:
   void syncHostBufferPtr(std::uintptr_t hostPtr);
   enum class HostMode { Auto, All, None };
   HostMode hostMode_ = HostMode::Auto;
-  struct Probe { bool ok; std::string signature; std::vector<KernelConstRef> constRefs; };
+  struct Probe {
+    bool ok;
+    std::string signature;
+    std::vector<KernelConstRef> constRefs;
+    bool assignStyleReduction = false; // see KernelTraits
+    unsigned idxAxesRead = 0;          // see KernelTraits
+    // registered constants folded into the code, with the value each had; the probe is stale
+    // (the constant list may differ) once one of them changes
+    std::vector<std::pair<std::string, int64_t>> specialized;
+  };
   std::map<std::string, Probe> translatable_; // by kernel name; first signature wins
   bool explain_ = false;                       // OPS_MLIR_EXPLAIN
   std::map<std::string, double> hostSeconds_; // fallback time per kernel

@@ -13,6 +13,7 @@
 #include "runtime/BackendPipeline.h"
 #include "runtime/KernelIRBuilder.h"
 #include "runtime/KernelProfiler.h"
+#include "runtime/Reduction.h"
 #include "mlir/InitAllExtensions.h"
 #include "mlir/InitAllPasses.h"
 #include "mlir/Parser/Parser.h"
@@ -53,6 +54,7 @@
 #include <chrono>
 #include <xmmintrin.h>
 #include <cmath>
+#include <limits>
 #include <array>
 #include <cstring>
 #include <memory>
@@ -341,6 +343,18 @@ ArgDesc JITEngine::buildArgDesc(const ops_arg &arg, int elemKind) {
   ArgDesc desc;
   desc.dim = arg.dim;
   desc.elem_size = arg.elem_size;
+  // ops_arg_reduce leaves elem_size uninitialised (its data is the reduction handle): take the
+  // size from the kernel's element kind, or from the handle (size bytes for `dim` elements).
+  if (arg.argtype == OPS_ARG_GBL && arg.acc != OPS_READ && arg.acc != OPS_WRITE && arg.acc != OPS_RW) {
+    switch (elemKind) {
+    case EK_F32: case EK_I32: desc.elem_size = 4; break;
+    case EK_F64: case EK_I64: desc.elem_size = 8; break;
+    default:
+      desc.elem_size = arg.data && arg.dim > 0
+                           ? static_cast<int>(reinterpret_cast<const ops_reduction_core *>(arg.data)->size / arg.dim)
+                           : 8;
+    }
+  }
   desc.data = reinterpret_cast<std::uintptr_t>(arg.data);
   desc.data_d = reinterpret_cast<std::uintptr_t>(arg.data_d);
   desc.acc = arg.acc;
@@ -877,6 +891,8 @@ void haloTransferIntercepted(ops_halo_group group) {
 }
 
 void JITEngine::shutdown() {
+  // Engines first, then what they were built from and with (their optimiser uses the target
+  // machines); all before the process's static destructors tear down LLVM itself.
   engineCache_.clear();
 }
 
@@ -950,6 +966,91 @@ std::string JITEngine::groupFunctionName(const FusedGroup &group,
  * globals of every member loop in order -- the layout convert_group in
  * xdsl_impl/ops_to_stencil.py emits.
 */
+//===----------------------------------------------------------------------===//
+// Reductions (see runtime/Reduction.h)
+//===----------------------------------------------------------------------===//
+
+std::uintptr_t JITEngine::allocScratch(std::size_t bytes) {
+#ifdef OPS_ENABLE_CUDA
+  if (backend_ == Backend::CUDA) {
+    CUdeviceptr p = 0;
+    return cuMemAlloc(&p, bytes) == CUDA_SUCCESS ? static_cast<std::uintptr_t>(p) : 0;
+  }
+#endif
+  void *p = nullptr;
+  return posix_memalign(&p, 64, bytes) == 0 ? reinterpret_cast<std::uintptr_t>(p) : 0;
+}
+
+// OPS_MLIR_DEBUG_CANARY=1 (host backends): reduction scratch buffers get guard bands, checked
+// after each launch, to catch a generated function that writes outside its field.
+static bool canaryEnabled() {
+  static const bool on = std::getenv("OPS_MLIR_DEBUG_CANARY") != nullptr;
+  return on;
+}
+static constexpr std::size_t kGuard = 4096;
+
+std::uintptr_t JITEngine::scratchBuffer(std::size_t bytes, int slot) {
+  std::uintptr_t &buf = reduceScratch_[{bytes, slot}];
+  if (buf)
+    return buf;
+  if (canaryEnabled() && backend_ != Backend::CUDA) {
+    std::uintptr_t base = allocScratch(std::max<std::size_t>(bytes, 8) + 2 * kGuard);
+    if (!base)
+      return 0;
+    std::memset(reinterpret_cast<void *>(base), 0xCD, std::max<std::size_t>(bytes, 8) + 2 * kGuard);
+    return buf = base + kGuard;
+  }
+  return buf = allocScratch(std::max<std::size_t>(bytes, 8));
+}
+
+static void checkCanary(std::uintptr_t buf, std::size_t bytes, const std::string &what) {
+  const unsigned char *lo = reinterpret_cast<const unsigned char *>(buf) - kGuard;
+  const unsigned char *hi = reinterpret_cast<const unsigned char *>(buf) + std::max<std::size_t>(bytes, 8);
+  std::size_t before = 0, after = 0;
+  for (std::size_t i = 0; i < kGuard; ++i) {
+    before += lo[i] != 0xCD;
+    after += hi[i] != 0xCD;
+  }
+  if (before || after)
+    llvm::errs() << "ops-mlir: '" << what << "' wrote outside its reduction buffer: " << before
+                 << " bytes before, " << after << " after (buffer " << bytes << " bytes)\n";
+}
+
+bool JITEngine::fillReduction(std::uintptr_t buffer, std::size_t n, int elemKind, int access) {
+#ifdef OPS_ENABLE_CUDA
+  if (backend_ == Backend::CUDA)
+    return reductionFillCuda(static_cast<CUdeviceptr>(buffer), n, elemKind, access,
+                             reinterpret_cast<CUstream>(ensurePersistentCudaStream()));
+#endif
+  return reductionFillHost(reinterpret_cast<void *>(buffer), n, elemKind, access,
+                           backend_ == Backend::OpenMP);
+}
+
+bool JITEngine::foldReduction(std::uintptr_t buffer, std::size_t n, int elemKind, int access,
+                              std::uintptr_t handle, int element, int elemSize) {
+  alignas(8) char value[8] = {};
+  bool ok;
+#ifdef OPS_ENABLE_CUDA
+  if (backend_ == Backend::CUDA) {
+    if (!reducePartials_) {
+      reducePartials_ = allocScratch(reductionScratchBytes());
+      if (!reducePartials_)
+        return false;
+    }
+    ok = reductionFoldCuda(static_cast<CUdeviceptr>(buffer), n, elemKind, access,
+                           reinterpret_cast<CUstream>(ensurePersistentCudaStream()),
+                           static_cast<CUdeviceptr>(reducePartials_), value);
+  } else
+#endif
+    ok = reductionFoldHost(reinterpret_cast<const void *>(buffer), n, elemKind, access,
+                           backend_ == Backend::OpenMP, value);
+  if (!ok)
+    return false;
+  ops_reduction red = reinterpret_cast<ops_reduction>(handle);
+  return reductionCombine(red->data + static_cast<std::size_t>(element) * static_cast<std::size_t>(elemSize),
+                          value, elemKind, access);
+}
+
 void JITEngine::execute(mlir::ExecutionEngine &engine, const FusionPlan &plan) {
   lastPlan_ = plan;
   for (std::size_t gid = 0; gid < plan.groups.size(); ++gid) {
@@ -1012,14 +1113,71 @@ void JITEngine::execute(mlir::ExecutionEngine &engine, const FusionPlan &plan) {
       }
     }
 
+    // Reduction elements, in loop / argument / element order -- the order in which
+    // ops_to_stencil.py declares their scratch fields. Each gets a buffer over the group's box.
+    struct RedElem { const ArgDesc *arg; int element; std::uintptr_t scratch; };
+    std::vector<RedElem> redElems;
+    // The scratch field is [0, hi) per axis, hi being the box's upper bound relative to the
+    // halo (d_m) of a dat that has that axis -- the same rule ops_to_stencil.py uses.
+    std::size_t boxCount = 1;
+    {
+      const LoopDesc &first = queue_[group.loops.front()];
+      for (int d = 0; d < first.dims; ++d) {
+        int64_t hi = first.range[2 * d + 1], dm = 0;
+        bool haveDm = false;
+        for (std::size_t l : group.loops) {
+          hi = std::max(hi, queue_[l].range[2 * d + 1]);
+          for (const ArgDesc &arg : queue_[l].args) {
+            if (haveDm || arg.argtype != OPS_ARG_DAT || d >= static_cast<int>(arg.dat.d_m.size()))
+              continue;
+            const int *stride = reinterpret_cast<const int *>(arg.stencil.stride);
+            if (!stride || stride[d] != 0) {
+              dm = arg.dat.d_m[d];
+              haveDm = true;
+            }
+          }
+        }
+        boxCount *= static_cast<std::size_t>(std::max<int64_t>(hi - dm, 0));
+      }
+    }
+    for (std::size_t l : group.loops)
+      for (const ArgDesc &arg : queue_[l].args)
+        if (arg.argtype == OPS_ARG_GBL && arg.acc >= OPS_INC && arg.acc <= OPS_MAX)
+          for (int k = 0; k < std::max(arg.dim, 1); ++k)
+            redElems.push_back({&arg, k, 0});
+    std::vector<void *> redPtrs;
+    for (std::size_t i = 0; i < redElems.size(); ++i) {
+      redElems[i].scratch = scratchBuffer(boxCount * static_cast<std::size_t>(redElems[i].arg->elem_size),
+                                          static_cast<int>(i));
+      if (!redElems[i].scratch) {
+        llvm::errs() << "Failed to allocate a reduction buffer for '" << funcName << "'\n";
+        this->flush();
+        return;
+      }
+      redPtrs.push_back(reinterpret_cast<void *>(redElems[i].scratch));
+    }
+
+    for (const RedElem &e : redElems) {
+      int kind = e.arg->elem_kind != EK_Unknown ? e.arg->elem_kind
+                 : e.arg->elem_size == 8       ? EK_F64
+                                               : EK_F32;
+      if (!fillReduction(e.scratch, boxCount, kind, e.arg->acc)) {
+        this->flush();
+        return;
+      }
+    }
+
     llvm::SmallVector<void *> packedArgs;
-    packedArgs.reserve(datPtrs.size() + gblScratch.size());
+    packedArgs.reserve(datPtrs.size() + gblScratch.size() + redPtrs.size());
 
     for (void *&ptr : datPtrs) {
       packedArgs.push_back(&ptr);
     }
     for (std::array<char, 8> &v : gblScratch) {
       packedArgs.push_back(v.data());
+    }
+    for (void *&ptr : redPtrs) {
+      packedArgs.push_back(&ptr);
     }
 
     std::string profileName = queue_[group.loops.front()].kernel_name;
@@ -1053,6 +1211,18 @@ void JITEngine::execute(mlir::ExecutionEngine &engine, const FusionPlan &plan) {
     double launchSeconds = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - launchStart).count();
     profiler_.end(profileName, kernelStart, bytesMoved);
+    if (canaryEnabled() && backend_ != Backend::CUDA)
+      for (const RedElem &e : redElems)
+        checkCanary(e.scratch, boxCount * static_cast<std::size_t>(e.arg->elem_size), funcName);
+    for (const RedElem &e : redElems) {
+      if (boxCount == 0)
+        continue; // nothing was visited: every contribution is the identity
+      int kind = e.arg->elem_kind != EK_Unknown ? e.arg->elem_kind
+                 : e.arg->elem_size == 8       ? EK_F64
+                                               : EK_F32;
+      if (!foldReduction(e.scratch, boxCount, kind, e.arg->acc, e.arg->data, e.element, e.arg->elem_size))
+        llvm::errs() << "ops-mlir: could not reduce into '" << queue_[group.loops.front()].kernel_name << "'\n";
+    }
     if (std::FILE *launchLog = launchLogFile()) {
       std::fprintf(launchLog, "G\t%zu\t%.9f\t%.0f\t%s\t", stats_.numLaunches - 1, launchSeconds, bytesMoved,
                    funcName.c_str());
@@ -1125,8 +1295,11 @@ std::vector<KernelArgInfo> JITEngine::kernelArgInfos(const LoopDesc &loop) {
       int points = a.stencil.points, dims = a.stencil.dims;
       if (const int *stride = reinterpret_cast<const int *>(a.stencil.stride))
         for (int d = 0; d < dims; ++d)
-          if (stride[d] != 1)
+          if (stride[d] != 1) {
             k.strided = true;
+            if (stride[d] != 0)
+              k.scaled = true;
+          }
       if (!offsets || points == 0) {
         k.points.push_back({0, 0, 0});
       } else {
@@ -1166,7 +1339,7 @@ std::string JITEngine::argInfoDigest(const std::vector<KernelArgInfo> &infos) {
   std::string d;
   for (const KernelArgInfo &k : infos) {
     d += std::to_string(static_cast<int>(k.kind)) + "/" + std::to_string(k.access) + "/" +
-         (k.strided ? "s" : "u") +
+         (k.scaled ? "m" : k.strided ? "s" : "u") +
          std::to_string(k.dim) + "/" + (!k.elt ? "?" : k.elt.isF64() ? "d" : k.elt.isF32() ? "f" : "i") + "/";
     for (const auto &p : k.points)
       d += std::to_string(p[0]) + "," + std::to_string(p[1]) + "," + std::to_string(p[2]) + ";";
@@ -1178,24 +1351,35 @@ std::string JITEngine::argInfoDigest(const std::vector<KernelArgInfo> &infos) {
 // True if the loop's kernel can be JIT-compiled. Probing is done once per kernel
 // name; a later loop with the same kernel but different arguments (a different
 // stencil, say) cannot share the one generated function, so it runs on the host.
+
 bool JITEngine::kernelTranslatable(const LoopDesc &loop) {
   std::vector<KernelArgInfo> infos = kernelArgInfos(loop);
   std::string sig = argInfoDigest(infos);
   auto it = translatable_.find(loop.kernel_name);
-  if (it != translatable_.end())
-    return it->second.ok && it->second.signature == sig;
+  if (it != translatable_.end()) {
+    bool stale = false;
+    for (const auto &[name, value] : it->second.specialized)
+      if (auto reg = kernelConstants_.find(name);
+          reg != kernelConstants_.end() && reg->second && *static_cast<const int32_t *>(reg->second) != value)
+        stale = true;
+    if (!stale)
+      return it->second.ok && it->second.signature == sig;
+    translatable_.erase(it);
+  }
 
   std::string reason;
   llvm::raw_string_ostream os(reason);
   KernelIRBuilder builder(ctx);
   std::vector<KernelConstRef> constRefs;
+  KernelTraits traits;
   mlir::func::FuncOp fn = builder.generateAccessor(
       kernelSourceFiles_, loop.kernel_name, loop.kernel_name, loop.dims, infos,
-      kernelConstants_, os, &constRefs, kernelPreamble_);
+      kernelConstants_, os, &constRefs, kernelPreamble_, &traits);
   bool ok = static_cast<bool>(fn);
   if (fn)
     fn.erase();
-  translatable_[loop.kernel_name] = {ok, sig, std::move(constRefs)};
+  translatable_[loop.kernel_name] = {ok, sig, std::move(constRefs), traits.assignStyleReduction, traits.idxAxesRead,
+                                      traits.specialized};
   if (explain_)
     llvm::errs() << (ok ? "[jit] " : "[host] ") << loop.kernel_name
                  << (ok ? "\n" : ": " + os.str());
@@ -1236,7 +1420,46 @@ bool JITEngine::runsOnHost(const LoopDesc &loop) {
     if (list.find("," + loop.kernel_name + ",") == std::string::npos)
       return true;
   }
-  return !kernelTranslatable(loop);
+  if (!kernelTranslatable(loop))
+    return true;
+  // A kernel that assigns to an INC reduction (`*r = e`) instead of accumulating (`*r += e`) is
+  // only equivalent to the parallel fold when the loop visits a single point.
+  if (translatable_[loop.kernel_name].assignStyleReduction) {
+    int64_t volume = 1;
+    for (int d = 0; d < loop.dims; ++d)
+      volume *= std::max<int64_t>(loop.range[2 * d + 1] - loop.range[2 * d], 0);
+    if (volume != 1)
+      return true;
+  }
+  // A loop that writes dats indexed along only some of its dimensions (CloverLeaf's coordinate
+  // arrays) visits each of them once per point of the other dimensions. The generated code
+  // visits them once, which is the same provided the loop depends on nothing along the dropped
+  // dimensions: every dat spans the same axes, they are only written (not accumulated), the
+  // kernel does not read the index along a dropped axis, and nothing is reduced.
+  {
+    const unsigned all = (1u << loop.dims) - 1, axes = datAxes(loop);
+    bool reducedWrite = false, fullWrite = false;
+    for (const ArgDesc &arg : loop.args) {
+      if (arg.argtype != OPS_ARG_DAT || arg.acc == OPS_READ)
+        continue;
+      const int *stride = reinterpret_cast<const int *>(arg.stencil.stride);
+      unsigned own = 0;
+      for (int d = 0; d < arg.stencil.dims; ++d)
+        if (!stride || stride[d] != 0)
+          own |= 1u << d;
+      if (own == all) {
+        fullWrite = true;
+        continue;
+      }
+      reducedWrite = true;
+      if (arg.acc != OPS_WRITE || own != axes)
+        return true;
+    }
+    if (reducedWrite && (fullWrite || hasReduction(loop) ||
+                         (translatable_[loop.kernel_name].idxAxesRead & ~axes)))
+      return true;
+  }
+  return false;
 }
 
 void JITEngine::syncHostBufferPtr(std::uintptr_t hostPtr) {
@@ -1304,11 +1527,27 @@ void JITEngine::verifyLoop(LoopDesc &loop) {
     start[i].assign(reinterpret_cast<char *>(bufs[i].ptr),
                     reinterpret_cast<char *>(bufs[i].ptr) + bufs[i].bytes);
 
+  // Reduction handles: both runs combine their result into the handle, so the stock run must
+  // start from the same value as the JIT run did, and the JIT value is compared afterwards.
+  struct Red { ops_reduction handle; const ArgDesc *arg; std::vector<char> start, jit; };
+  std::vector<Red> reds;
+  for (const ArgDesc &a : loop.args)
+    if (a.argtype == OPS_ARG_GBL && a.acc >= OPS_INC && a.acc <= OPS_MAX && a.data) {
+      ops_reduction handle = reinterpret_cast<ops_reduction>(a.data);
+      reds.push_back({handle, &a, std::vector<char>(handle->data, handle->data + handle->size), {}});
+    }
+
+  // The sticky exception flags (low six bits) change with any floating-point work.
+  constexpr unsigned kMxcsrControl = 0xffc0;
   unsigned mxcsrBefore = _mm_getcsr();
   queue_.assign(1, loop);
   compileAndExecuteSegment(); // the JIT result lands in the dats
   queue_.clear();
-  if (_mm_getcsr() != mxcsrBefore)
+  for (Red &r : reds) {
+    r.jit.assign(r.handle->data, r.handle->data + r.handle->size);
+    std::memcpy(r.handle->data, r.start.data(), r.start.size());
+  }
+  if ((_mm_getcsr() & kMxcsrControl) != (mxcsrBefore & kMxcsrControl))
     llvm::errs() << "[verify] " << loop.kernel_name << ": MXCSR changed by the JIT run: "
                  << llvm::format("0x%x", mxcsrBefore) << " -> " << llvm::format("0x%x", _mm_getcsr())
                  << "\n";
@@ -1322,6 +1561,35 @@ void JITEngine::verifyLoop(LoopDesc &loop) {
 
   ++verifyRuns_[loop.kernel_name];
   bool anyBad = false;
+  for (const Red &r : reds) {
+    // The fold adds in a different order than the loop does, so INC may differ in the last
+    // digits; MIN and MAX are exact.
+    int kind = r.arg->elem_kind != EK_Unknown ? r.arg->elem_kind : r.arg->elem_size == 8 ? EK_F64 : EK_F32;
+    std::size_t elem = static_cast<std::size_t>(std::max(r.arg->elem_size, 1));
+    for (std::size_t off = 0; off + elem <= r.start.size(); off += elem) {
+      double jitValue = 0, stockValue = 0;
+      auto load = [&](const char *src) -> double {
+        switch (kind) {
+        case EK_F32: { float v; std::memcpy(&v, src, 4); return v; }
+        case EK_I32: { int32_t v; std::memcpy(&v, src, 4); return v; }
+        case EK_I64: { int64_t v; std::memcpy(&v, src, 8); return static_cast<double>(v); }
+        default: { double v; std::memcpy(&v, src, 8); return v; }
+        }
+      };
+      jitValue = load(r.jit.data() + off);
+      stockValue = load(r.handle->data + off);
+      double tolerance = r.arg->acc == OPS_INC ? 1e-12 * std::max(std::fabs(stockValue), 1e-300) : 0.0;
+      if (kind == EK_F32)
+        tolerance *= 1e5;
+      if (!(std::fabs(jitValue - stockValue) <= tolerance) && !(jitValue == stockValue)) {
+        anyBad = true;
+        if (verifyBad_[loop.kernel_name] < 2)
+          llvm::errs() << "[verify] " << loop.kernel_name << ": reduction element " << off / elem
+                       << " differs: jit=" << llvm::format("%.17g", jitValue)
+                       << " stock=" << llvm::format("%.17g", stockValue) << "\n";
+      }
+    }
+  }
   for (size_t i = 0; i < bufs.size(); ++i) {
     std::size_t n = bufs[i].bytes / sizeof(double); // CloverLeaf dats are double
     const double *a = reinterpret_cast<const double *>(jit[i].data());
@@ -1353,37 +1621,16 @@ void JITEngine::verifyLoop(LoopDesc &loop) {
     ++verifyBad_[loop.kernel_name];
 }
 
-void JITEngine::compileAndExecuteSegment() {
-  if (queue_.empty())
-    return;
-
-  auto planStart = std::chrono::steady_clock::now();
-  ModuleKey key(queue_);
-  auto planned = planCache_.find(key);
-  if (planned == planCache_.end())
-    planned = planCache_.emplace(key, planFusion(queue_, fusionOptions_)).first;
-  const FusionPlan &plan = planned->second;
-  ++stats_.numFlushes;
-  if (std::getenv("OPS_MLIR_PLAN"))
-    reportPlan(key, plan);
-
-  auto cached = engineCache_.find(key);
-  stats_.planSeconds += std::chrono::duration<double>(
-                            std::chrono::steady_clock::now() - planStart).count();
-  if (cached != engineCache_.end()) {
-    ScopedSeconds timer(stats_.executeSeconds);
-    execute(*cached->second, plan);
-    return;
-  }
-
-  ++stats_.numCompiles;
-  auto compileStart = std::chrono::steady_clock::now();
-  compile(plan);
-
+// Lowered module -> ExecutionEngine with the backend's options (target machine, optimiser, CUDA
+// runtime library and symbols). Null, with the reason in `error`, on failure.
+std::unique_ptr<mlir::ExecutionEngine> JITEngine::createEngine(mlir::ModuleOp module,
+                                                               std::string &error) {
   llvm::Triple targetTriple(llvm::sys::getDefaultTargetTriple());
   std::string targetLookupError;
   const llvm::Target *target =
       llvm::TargetRegistry::lookupTarget(targetTriple, targetLookupError);
+  // The engine's optimiser keeps a pointer to this; it is only used while the module is compiled,
+  // which happens before this function returns (see the lookup at the end).
   std::unique_ptr<llvm::TargetMachine> targetMachine;
   if (!target) {
     llvm::errs() << "Warning: could not look up target for '"
@@ -1411,7 +1658,10 @@ void JITEngine::compileAndExecuteSegment() {
     if (currentPipeline_)
       if (auto err = currentPipeline_->transformLLVMModule(m))
         return err;
-    return optTransformer(m);
+    llvm::Error e = optTransformer(m);
+    if (const char *dump = std::getenv("OPS_MLIR_DUMP_LLVM"); dump && *dump)
+      m->print(llvm::errs(), nullptr); // the optimised LLVM IR that is compiled
+    return e;
   };
   engineOptions.transformer = transformer;
 
@@ -1435,28 +1685,9 @@ void JITEngine::compileAndExecuteSegment() {
   auto engineOrErr = mlir::ExecutionEngine::create(module, engineOptions);
   stats_.engineSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - engineStart).count();
   if (!engineOrErr) {
-    llvm::errs() << "Failed to create ExecutionEngine: "
-                  << llvm::toString(engineOrErr.takeError()) << "\n";
-    llvm::errs() << "  while compiling:";
-    for (const LoopDesc &l : queue_)
-      llvm::errs() << " " << l.kernel_name;
-    llvm::errs() << "\n";
-    // Dropping the loops would silently corrupt the run; the stock implementation
-    // still can execute them.
-    if (std::all_of(queue_.begin(), queue_.end(),
-                    [](const LoopDesc &l) { return static_cast<bool>(l.fallback); })) {
-      static bool warned = false;
-      if (!warned) {
-        warned = true;
-        llvm::errs() << "ops-mlir: JIT compilation failed; running these loops "
-                        "through the stock OPS fallback instead\n";
-      }
-      for (const LoopDesc &l : queue_)
-        runHostLoop(l);
-    }
-    return;
+    error = llvm::toString(engineOrErr.takeError());
+    return nullptr;
   }
-
   auto engine = std::move(*engineOrErr);
 
   // TODO: [For inlining] Kernel are generate from KernelIRBuilder for all target.
@@ -1478,6 +1709,83 @@ void JITEngine::compileAndExecuteSegment() {
           llvm::JITSymbolFlags::Exported};
       return symbolMap;
     });
+  }
+
+  // Compile now rather than at the first call. The engine's optimiser uses the target machine
+  // above, which dies when this function returns, and compiling here also puts the cost where
+  // compile time is reported. (Symbols must be registered first: compiling resolves them.)
+  module.walk([&](mlir::LLVM::LLVMFuncOp f) {
+    if (!f.isExternal() && !f.getName().starts_with("_mlir_")) {
+      if (auto sym = engine->lookupPacked(f.getName()); !sym)
+        llvm::consumeError(sym.takeError());
+      return mlir::WalkResult::interrupt();
+    }
+    return mlir::WalkResult::advance();
+  });
+
+  return engine;
+}
+
+void JITEngine::compileAndExecuteSegment() {
+  if (queue_.empty())
+    return;
+
+  auto planStart = std::chrono::steady_clock::now();
+  // The code is specialised on the values some registered constants have (loop bounds, array
+  // subscripts), so those values are part of the key.
+  std::string specialization;
+  {
+    std::set<std::string> kernels;
+    for (const LoopDesc &loop : queue_)
+      kernels.insert(loop.kernel_name);
+    for (const std::string &kernel : kernels)
+      for (const auto &entry : translatable_[kernel].specialized)
+        specialization += entry.first + "=" + std::to_string(entry.second) + ";";
+  }
+  ModuleKey key(queue_, "", specialization);
+  auto planned = planCache_.find(key);
+  if (planned == planCache_.end())
+    planned = planCache_.emplace(key, planFusion(queue_, fusionOptions_)).first;
+  const FusionPlan &plan = planned->second;
+  ++stats_.numFlushes;
+  if (std::getenv("OPS_MLIR_PLAN"))
+    reportPlan(key, plan);
+
+  auto cached = engineCache_.find(key);
+  stats_.planSeconds += std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - planStart).count();
+  if (cached != engineCache_.end()) {
+    ScopedSeconds timer(stats_.executeSeconds);
+    execute(*cached->second, plan);
+    return;
+  }
+
+  ++stats_.numCompiles;
+  auto compileStart = std::chrono::steady_clock::now();
+  compile(plan);
+
+  std::string engineError;
+  std::unique_ptr<mlir::ExecutionEngine> engine = createEngine(module, engineError);
+  if (!engine) {
+    llvm::errs() << "Failed to create ExecutionEngine: " << engineError << "\n";
+    llvm::errs() << "  while compiling:";
+    for (const LoopDesc &l : queue_)
+      llvm::errs() << " " << l.kernel_name;
+    llvm::errs() << "\n";
+    // Dropping the loops would silently corrupt the run; the stock implementation
+    // still can execute them.
+    if (std::all_of(queue_.begin(), queue_.end(),
+                    [](const LoopDesc &l) { return static_cast<bool>(l.fallback); })) {
+      static bool warned = false;
+      if (!warned) {
+        warned = true;
+        llvm::errs() << "ops-mlir: JIT compilation failed; running these loops "
+                        "through the stock OPS fallback instead\n";
+      }
+      for (const LoopDesc &l : queue_)
+        runHostLoop(l);
+    }
+    return;
   }
 
   mlir::ExecutionEngine &engineRef = *engine;

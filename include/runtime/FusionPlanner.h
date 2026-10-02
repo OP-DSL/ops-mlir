@@ -126,6 +126,9 @@ bool isPointLocal(const StencilDesc &stencil);
 /// are never fused.
 bool hasReduction(const LoopDesc &loop);
 
+/// Bit d is set when a dat of the loop is indexed along OPS dimension d.
+unsigned datAxes(const LoopDesc &loop);
+
 } // namespace ops_mlir
 
 #endif // OPS_MLIR_RUNTIME_FUSION_PLANNER_H

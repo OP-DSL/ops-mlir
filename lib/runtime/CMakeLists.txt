@@ -6,6 +6,7 @@ add_library(
 	OPSRuntime
 	IRBuilder.cpp
 	JITEngine.cpp
+	Reduction.cpp
 	KernelIRBuilder.cpp
 	AccessorKernel.cpp
 	KernelProfiler.cpp

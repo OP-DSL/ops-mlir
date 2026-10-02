@@ -11,11 +11,12 @@ See LICENSE.txt for details.
 """
 
 import ctypes
+import math
 from dataclasses import dataclass
 from xdsl.builder import Builder, InsertPoint
 from xdsl.context import Context
 from xdsl.dialects import arith, func, memref, scf, stencil
-from xdsl.dialects.builtin import IndexType, IntegerAttr, MemRefType, ModuleOp, i32, i64, f32, f64
+from xdsl.dialects.builtin import FloatAttr, IndexType, IntegerAttr, MemRefType, ModuleOp, i32, i64, f32, f64
 from xdsl.ir import Block, Region, SSAValue
 from xdsl.passes import ModulePass
 
@@ -141,6 +142,19 @@ def group_func_name(loops: list[ParLoopOp], loop_indices: list[int], group_id: i
     return f"ops_par_loop_group_{group_id}"
 
 
+_REDUCTIONS = (Access.INC, Access.MIN, Access.MAX)
+
+
+def reduction_identity(access: int, elt, builder) -> SSAValue:
+    """The value that leaves a reduction unchanged: 0 for INC, +max for MIN, -max for MAX."""
+    if elt in (f32, f64):
+        v = {Access.INC: 0.0, Access.MIN: math.inf, Access.MAX: -math.inf}[access]
+        return builder.insert(arith.ConstantOp(FloatAttr(v, elt))).result
+    bits = elt.width.data
+    v = {Access.INC: 0, Access.MIN: (1 << (bits - 1)) - 1, Access.MAX: -(1 << (bits - 1))}[access]
+    return builder.insert(arith.ConstantOp(IntegerAttr(v, elt))).result
+
+
 def convert_group(
     loops: list[ParLoopOp], fn_name: str, module: ModuleOp
 ) -> func.FuncOp:
@@ -177,21 +191,54 @@ def convert_group(
                         f"dat '{a.dat.dat_name.data}' is accessed with stencils of "
                         "different strides in one group"
                     )
-                if len(axes) < ndim and a.acc.data != Access.READ:
+                if len(axes) < ndim and a.acc.data != Access.WRITE and a.acc.data != Access.READ:
                     raise NotImplementedError(
-                        f"dat '{a.dat.dat_name.data}' is written through a strided stencil"
+                        f"dat '{a.dat.dat_name.data}' is accumulated through a strided stencil"
                     )
+
+    # A loop that writes dats indexed along only some of its dimensions iterates over those axes
+    # alone (the runtime only compiles it when nothing depends on the dropped ones): the rest of
+    # the loop would visit the same elements again.
+    ndim_full = ndim
+    written_axes = {dat_axes[a.dat.index.data] for op in loops for a in op.arg_list()
+                    if a.argtype.data == ArgType.DAT and a.acc.data != Access.READ}
+    act = tuple(range(ndim))
+    if any(len(axes) < ndim for axes in written_axes):
+        act = tuple(sorted({ax for axes in dat_axes.values() for ax in axes}))
+        if written_axes != {act}:
+            raise NotImplementedError(
+                "a loop writing a dat indexed along fewer dimensions must have all its dats "
+                "indexed along the same axes"
+            )
+        if any(a.argtype.data == ArgType.GBL and a.acc.data in _REDUCTIONS
+               for op in loops for a in op.arg_list()):
+            raise NotImplementedError("a loop over fewer axes cannot hold a reduction")
+    act_pos = {ax: i for i, ax in enumerate(act)}
+    dat_axes_full = dict(dat_axes)
+    dat_axes = {k: tuple(act_pos[ax] for ax in axes) for k, axes in dat_axes_full.items()}
+    ndim = len(act)
+
+    def project(point):
+        """Offsets of a stencil point along the active axes."""
+        return tuple(point[ax] for ax in act)
 
     # d_m is shared by all dats on a block (see halo_offsets).
     # (a dat indexed along fewer dimensions has an unrelated d_m in the dimensions it lacks)
-    full_rank = [k for k in dat_keys if len(dat_axes[k]) == ndim]
-    if not full_rank:
-        raise NotImplementedError("a loop needs at least one dat with the loop's full rank")
-    d_m = list(reversed(dat_attr[full_rank[0]].d_m_list))
+    # so each axis takes its d_m from a dat that has that axis.
+    d_m_full = [None] * ndim_full
+    for k in dat_keys:
+        for axis in dat_axes_full[k]:
+            if d_m_full[axis] is None:
+                d_m_full[axis] = list(reversed(dat_attr[k].d_m_list))[axis]
+    if any(d_m_full[ax] is None for ax in act):
+        raise NotImplementedError("no dat of the loop spans one of its axes")
+    d_m = [d_m_full[ax] for ax in act]
 
     # Bounding box of the members' (normalized) ranges.
     member_bounds = [
-        normalized_range_bounds(list(op.range.get_values()), d_m, ndim) for op in loops
+        [b for ax, b in enumerate(normalized_range_bounds(
+            list(op.range.get_values()), [v or 0 for v in d_m_full], ndim_full)) if ax in act_pos]
+        for op in loops
     ]
     box = [
         (min(b[d][0] for b in member_bounds), max(b[d][1] for b in member_bounds))
@@ -215,20 +262,36 @@ def convert_group(
                 gbl_args.extend([a] * max(a.dim.data, 1))
     gbl_types = [gbl_elt(a) for a in gbl_args]
 
+    # Reductions. A reduction argument is not accumulated in place: the kernel returns this
+    # point's contribution (starting from the operation's identity) as one more result, and it is
+    # stored in a scratch field over the group's box. The runtime allocates one scratch buffer per
+    # element, passes them after the globals, and folds each into a single value on the device
+    # afterwards (a separate small kernel) before combining it with the OPS reduction handle.
+    red_elems = []   # (member, argument, element), in member / argument / element order
+    for m, op in enumerate(loops):
+        for a in op.arg_list():
+            if a.argtype.data == ArgType.GBL and a.acc.data in _REDUCTIONS:
+                red_elems.extend((m, a, k) for k in range(max(a.dim.data, 1)))
+    red_types = [gbl_elt(a) for _, a, _ in red_elems]
+    # Fields start at 0 like the dats' (the lowering takes the lower bound to be <= 0), so the part
+    # below the box is never written: the runtime fills the buffer with the identity first.
+    red_field_types = [stencil.FieldType([(0, hi) for _, hi in box], t) for t in red_types]
+
     field_types = {
-        key: stencil.FieldType(field_bounds(dat_attr[key], dat_axes[key]), dat_elt(dat_attr[key]))
+        key: stencil.FieldType(field_bounds(dat_attr[key], dat_axes_full[key]), dat_elt(dat_attr[key]))
         for key in dat_keys
     }
 
     fn = func.FuncOp(
         fn_name,
-        (tuple(field_types[k] for k in dat_keys) + tuple(gbl_types), ()),
+        (tuple(field_types[k] for k in dat_keys) + tuple(gbl_types) + tuple(red_field_types), ()),
         visibility="private",
     )
     block = fn.body.block
     fn_builder = Builder(InsertPoint.at_end(block))
     field_of = dict(zip(dat_keys, block.args[: len(dat_keys)]))
-    gbl_block_args = list(block.args[len(dat_keys):])
+    gbl_block_args = list(block.args[len(dat_keys): len(dat_keys) + len(gbl_types)])
+    red_block_args = list(block.args[len(dat_keys) + len(gbl_types):])
 
     # Dats read (READ/RW) by any member, and dats written by any member, in
     # first-use order.
@@ -295,6 +358,7 @@ def convert_group(
             cond = both if cond is None else block_builder.insert(arith.AndIOp(cond, both)).result
         return cond
 
+    red_values: dict[int, SSAValue] = {}  # contribution of each reduction element
     current: dict[int, SSAValue] = {}  # latest value written per dat
     last_results: list[SSAValue] = []
     gbl_cursor = 0
@@ -310,7 +374,7 @@ def convert_group(
             if a.acc.data not in (Access.READ, Access.RW):
                 continue
             key = a.dat.index.data
-            for point in stencil_offsets(a.stencil):
+            for point in map(project, stencil_offsets(a.stencil)):
                 if _is_zero(point) and key in current:
                     access_results.append(current[key])  # forwarded
                 else:
@@ -333,12 +397,20 @@ def convert_group(
                 f"kernel '{kernel_name}' writes dats of different element types; "
                 "all written dats of one loop must share a type."
             )
-        result_elt = next(iter(write_elts)) if write_elts else f64
-        num_results = len(written) or 1
+        member_reds = [(i, e) for i, e in enumerate(red_elems) if e[0] == member]
+        red_elt_set = {red_types[i] for i, _ in member_reds}
+        if len(write_elts | red_elt_set) > 1:
+            raise NotImplementedError(
+                f"kernel '{kernel_name}' writes or reduces values of different element types; "
+                "they must share a type."
+            )
+        result_elt = next(iter(write_elts | red_elt_set)) if (write_elts or red_elt_set) else f64
+        num_results = (len(written) + len(member_reds)) or 1
 
         # Guarded member: run the kernel only where the point is inside the
         # member's range; elsewhere keep the dats' previous values.
-        cond = in_range(member_bounds[member]) if (guarded_members[member] and written) else None
+        cond = (in_range(member_bounds[member])
+                if (guarded_members[member] and (written or member_reds)) else None)
 
         scope_block = Block()
         scope_builder = Builder(InsertPoint.at_end(scope_block))
@@ -348,7 +420,14 @@ def convert_group(
         # ops_global_idx = normalized_loop_idx + d_m  (d_m is negative, e.g. -1)
         idx_buffers = []
         for _ in range(num_idx_args):
-            idx_buffer = scope_builder.insert(memref.AllocaOp.get(i32, shape=[ndim]))
+            idx_buffer = scope_builder.insert(memref.AllocaOp.get(i32, shape=[ndim_full]))
+            for ax in range(ndim_full):
+                if ax not in act_pos:  # a dropped axis: the kernel never reads it
+                    zero_i32 = scope_builder.insert(arith.ConstantOp(IntegerAttr(0, i32)))
+                    pos_const = scope_builder.insert(
+                        arith.ConstantOp(IntegerAttr(ndim_full - 1 - ax, IndexType())))
+                    scope_builder.insert(
+                        memref.StoreOp.get(zero_i32.result, idx_buffer.memref, [pos_const.result]))
             for d in range(ndim):
                 idx_op = scope_builder.insert(
                     stencil.IndexOp.build(
@@ -363,7 +442,7 @@ def convert_group(
                 )
                 idx_i32 = scope_builder.insert(arith.IndexCastOp(idx_op.idx, i32))
                 dim_const = scope_builder.insert(
-                    arith.ConstantOp(IntegerAttr(ndim - 1 - d, IndexType()))
+                    arith.ConstantOp(IntegerAttr(ndim_full - 1 - act[d], IndexType()))
                 )
                 scope_builder.insert(
                     memref.StoreOp.get(idx_i32.result, idx_buffer.memref, [dim_const.result])
@@ -373,7 +452,7 @@ def convert_group(
         call_args = access_results + member_gbl + idx_buffers
         declare_kernel(
             module, kernel_name, [v.type for v in access_results] + [v.type for v in member_gbl],
-            len(idx_buffers), ndim, num_results, result_elt
+            len(idx_buffers), ndim_full, num_results, result_elt
         )
 
         if num_results > 1:
@@ -420,7 +499,11 @@ def convert_group(
             then_builder.insert(alloca_scope)
             then_builder.insert(scf.YieldOp(*alloca_scope.res))
             else_block = Block()
-            Builder(InsertPoint.at_end(else_block)).insert(scf.YieldOp(*olds))
+            else_builder = Builder(InsertPoint.at_end(else_block))
+            # outside the member's range a reduction contributes nothing
+            identities = [reduction_identity(red_elems[i][1].acc.data, red_types[i], else_builder)
+                          for i, _ in member_reds]
+            else_builder.insert(scf.YieldOp(*olds, *identities))
             guarded_op = block_builder.insert(
                 scf.IfOp(cond, [result_elt] * num_results, Region([then_block]), Region([else_block]))
             )
@@ -428,9 +511,11 @@ def convert_group(
         last_results = results
         for a, value in zip(written, results):
             current[a.dat.index.data] = value
+        for (i, _), value in zip(member_reds, results[len(written):]):
+            red_values[i] = value
 
-    if write_keys:
-        returned = [current[k] for k in write_keys]
+    if write_keys or red_elems:
+        returned = [current[k] for k in write_keys] + [red_values[i] for i in range(len(red_elems))]
     else:
         # No dat outputs (e.g. a loop that only feeds a reduction): return the
         # kernel's own result, as the per-loop lowering always did.
@@ -442,8 +527,8 @@ def convert_group(
             operands=[
                 [temp_of_field for temp_of_field in (field_of[k] for k in read_keys)]
                 + gbl_block_args,
-                [field_of[k] for k in write_keys],
-                [],  # reduction operands empty for now
+                [field_of[k] for k in write_keys] + red_block_args,
+                [],  # stencil.apply's own reduction operands are not used: see red_elems
             ],
             regions=[Region([apply_block])],
             result_types=[[]],  # buffer semantic does not return results

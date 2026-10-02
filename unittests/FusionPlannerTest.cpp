@@ -35,6 +35,7 @@ const int kPoint[2] = {0, 0};
 const int kFive[10] = {0, 0, 1, 0, -1, 0, 0, 1, 0, -1};
 const int kUnitStride[2] = {1, 1};
 const int kBroadcast[2] = {1, 0};
+const int kAlongY[2] = {0, 1};
 
 StencilDesc pointStencil() {
   StencilDesc s{};
@@ -186,6 +187,25 @@ int main() {
     std::vector<LoopDesc> q = {loop({datArg(2, OPS_WRITE)}),
                                loop({strided, datArg(3, OPS_WRITE)})};
     check(plan(q) == "0|1", "strided read after write stays split", plan(q));
+  }
+
+  // Loops over dats indexed along different axes iterate over different axes: they never share
+  // a kernel, while two loops over the same axes do.
+  {
+    auto along = [](int dat, int acc, const int *stride) {
+      ArgDesc a = datArg(dat, acc);
+      a.stencil.stride = reinterpret_cast<std::uintptr_t>(stride);
+      return a;
+    };
+    std::vector<LoopDesc> mixed = {loop({along(1, OPS_WRITE, kBroadcast)}),
+                                   loop({along(2, OPS_WRITE, kAlongY)})};
+    check(plan(mixed) == "0|1", "x-only and y-only loops stay split", plan(mixed));
+    std::vector<LoopDesc> same = {loop({along(1, OPS_WRITE, kBroadcast)}),
+                                  loop({along(2, OPS_WRITE, kBroadcast)})};
+    check(plan(same) == "0,1", "loops over the same axes fuse", plan(same));
+    std::vector<LoopDesc> full = {loop({along(1, OPS_WRITE, kBroadcast)}),
+                                  loop({datArg(2, OPS_WRITE)})};
+    check(plan(full) == "0|1", "a 1-D loop and a 2-D loop stay split", plan(full));
   }
 
   // Different ranges: split unless guarded fusion is enabled.

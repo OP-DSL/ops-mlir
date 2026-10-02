@@ -48,7 +48,9 @@
 
 #include <array>
 #include <map>
+#include <memory>
 #include <optional>
+#include <limits>
 #include <set>
 #include <tuple>
 
@@ -94,11 +96,12 @@ std::string accessMacros() {
 
 /// Something a statement can assign to.
 struct Target {
-  enum Kind { None, Local, Output } kind = None;
+  enum Kind { None, Local, Output, Reduce } kind = None;
   const clang::VarDecl *var = nullptr; // Local
-  int arg = -1;                        // Output
+  int arg = -1;                        // Output, Reduce
+  int elem = 0;                        // Reduce: element of the reduction argument
   bool operator<(const Target &o) const {
-    return std::tie(kind, var, arg) < std::tie(o.kind, o.var, o.arg);
+    return std::tie(kind, var, arg, elem) < std::tie(o.kind, o.var, o.arg, o.elem);
   }
 };
 
@@ -126,7 +129,30 @@ public:
         rank(rank), constants(constants), errs(errs), astCtx(decl->getASTContext()) {}
 
   mlir::func::FuncOp run(const std::string &name);
+  /// Constants the body reads that only become known while it is emitted (an array element
+  /// selected by an unrolled loop variable). They cannot be function parameters of this run;
+  /// translate again with them passed to seedConstUses().
+  bool foundNewConstUses() const { return !discovered_.empty(); }
+  struct ConstUse {
+    const clang::VarDecl *var;
+    int64_t offset;
+    mlir::Type elt;
+    mlir::Value value;
+  };
+  std::vector<ConstUse> allConstUses() const {
+    std::vector<ConstUse> all = constUses;
+    all.insert(all.end(), discovered_.begin(), discovered_.end());
+    return all;
+  }
+  void seedConstUses(std::vector<ConstUse> uses) { constUses = std::move(uses); }
+  /// Registered integer constants evalInt() folded into the code, with the value used: the
+  /// generated code is only valid while they keep it.
+  const std::map<std::string, int64_t> &specializedConstants() const { return specialized_; }
   const std::vector<KernelConstRef> &constRefs() const { return constRefList; }
+  /// True if an INC reduction is assigned (`*r = e`) rather than accumulated (`*r += e`): the
+  /// result is then only the same as the sequential one if the loop covers a single point.
+  bool assignStyleReduction() const { return assignStyleReduction_; }
+  unsigned idxAxesRead() const { return idxAxesRead_; }
 
   Target resolveTarget(const clang::Expr *e);
   bool ok() const { return ok_; }
@@ -146,26 +172,33 @@ private:
   // value of every (argument, stencil point) and of every global element
   std::vector<std::vector<mlir::Value>> pointValue;
   std::vector<std::vector<mlir::Value>> gblValue;
-  std::vector<mlir::Value> idxMemref;
+  std::vector<mlir::Value> idxMemref;   // per argument: the memref<rank x i32> of an ops_arg_idx
   llvm::DenseMap<const clang::ParmVarDecl *, int> parmIndex;
 
   struct Env {
     llvm::DenseMap<const clang::VarDecl *, mlir::Value> locals;
     std::vector<mlir::Value> out; // current value of each output argument (or null)
+    // current value of each element of each reduction argument: it starts at the
+    // operation's identity, so at the end it is this point's contribution
+    std::vector<std::vector<mlir::Value>> red;
   } env;
+  bool assignStyleReduction_ = false;
+  unsigned idxAxesRead_ = 0;
   llvm::DenseMap<const clang::VarDecl *, int64_t> constVars; // unrolled loop variables
 
   // Registered constants the body reads, in order of first use, with the function
   // parameter that carries each.
-  struct ConstUse {
-    const clang::VarDecl *var;
-    int64_t offset;
-    mlir::Type elt;
-    mlir::Value value;
-  };
   std::vector<ConstUse> constUses;
+  std::vector<ConstUse> discovered_;
+  std::map<std::string, int64_t> specialized_;
   std::vector<KernelConstRef> constRefList;
   void collectConstUses();
+  /// idx[k] of an ops_arg_idx: the loop index along OPS dimension k (x first).
+  mlir::Value loadIndex(int arg, int k) {
+    idxAxesRead_ |= 1u << k;
+    mlir::Value i = b.create<mlir::arith::ConstantOp>(loc, b.getIndexAttr(k));
+    return b.create<mlir::memref::LoadOp>(loc, idxMemref[arg], mlir::ValueRange{i});
+  }
   /// The (global, byte offset) a `g` or `g.member.member` expression names.
   bool constantRef(const clang::Expr *e, const clang::VarDecl *&var, int64_t &offset,
                    clang::QualType &type);
@@ -191,6 +224,19 @@ private:
     if (t->isIntegerType())
       return b.getIntegerType(astCtx.getTypeSize(t));
     return {};
+  }
+
+  /// The identity of a reduction: 0 for INC, +max for MIN, -max for MAX.
+  mlir::Value identity(int access, mlir::Type t) {
+    if (access == 3)
+      return zeroOf(t);
+    bool isMin = access == 4;
+    if (mlir::isa<mlir::FloatType>(t))
+      return constFloat(t, isMin ? std::numeric_limits<double>::infinity()
+                                 : -std::numeric_limits<double>::infinity());
+    unsigned w = t.getIntOrFloatBitWidth();
+    llvm::APInt v = isMin ? llvm::APInt::getSignedMaxValue(w) : llvm::APInt::getSignedMinValue(w);
+    return b.create<mlir::arith::ConstantOp>(loc, b.getIntegerAttr(t, v));
   }
 
   mlir::Value constFloat(mlir::Type t, double v) {
@@ -239,8 +285,11 @@ private:
           return it->second;
         if (vd->hasGlobalStorage()) {
           auto c = constants.find(vd->getNameAsString());
-          if (c != constants.end() && c->second && vd->getType()->isIntegerType())
-            return *reinterpret_cast<const int32_t *>(c->second);
+          if (c != constants.end() && c->second && vd->getType()->isIntegerType()) {
+            int64_t v = *reinterpret_cast<const int32_t *>(c->second);
+            specialized_[vd->getNameAsString()] = v;
+            return v;
+          }
         }
       }
     }
@@ -288,6 +337,8 @@ private:
     std::vector<const clang::Expr *> offsets;
   };
   bool matchAccess(const clang::Expr *e, AccessRef &out);
+  /// `*r` or `r[k]` on a reduction argument.
+  bool matchReduction(const clang::Expr *e, int &arg, int &elem);
   mlir::Value readAccess(const AccessRef &ref);
   mlir::Value emitCall(const clang::CallExpr *call);
   mlir::Value emitBinary(const clang::BinaryOperator *op);
@@ -327,9 +378,39 @@ bool AssignScan::VisitUnaryOperator(clang::UnaryOperator *op) {
   return true;
 }
 
+bool Translator::matchReduction(const clang::Expr *e, int &arg, int &elem) {
+  e = e->IgnoreParenImpCasts();
+  const clang::Expr *base = nullptr;
+  int k = 0;
+  if (const auto *un = llvm::dyn_cast<clang::UnaryOperator>(e);
+      un && un->getOpcode() == clang::UO_Deref) {
+    base = un->getSubExpr();
+  } else if (const auto *sub = llvm::dyn_cast<clang::ArraySubscriptExpr>(e)) {
+    base = sub->getBase();
+    auto idx = evalInt(sub->getIdx());
+    if (!idx)
+      return false;
+    k = static_cast<int>(*idx);
+  } else {
+    return false;
+  }
+  int a = paramArg(base);
+  if (a < 0 || args[a].kind != KernelArgInfo::Kind::Reduce || k < 0 || k >= args[a].dim)
+    return false;
+  arg = a;
+  elem = k;
+  return true;
+}
+
 Target Translator::resolveTarget(const clang::Expr *e) {
   e = e->IgnoreParenImpCasts();
   Target t;
+  if (int a, k; matchReduction(e, a, k)) {
+    t.kind = Target::Reduce;
+    t.arg = a;
+    t.elem = k;
+    return t;
+  }
   if (const auto *dre = llvm::dyn_cast<clang::DeclRefExpr>(e)) {
     if (const auto *vd = llvm::dyn_cast<clang::VarDecl>(dre->getDecl());
         vd && !llvm::isa<clang::ParmVarDecl>(vd) && !vd->hasGlobalStorage()) {
@@ -357,6 +438,24 @@ bool Translator::constantRef(const clang::Expr *e, const clang::VarDecl *&var,
     var = vd;
     offset = 0;
     type = vd->getType();
+    return true;
+  }
+  if (const auto *sub = llvm::dyn_cast<clang::ArraySubscriptExpr>(e)) {
+    // element `i` of a registered array, with `i` known at translation time
+    auto i = evalInt(sub->getIdx());
+    if (!i || *i < 0 || !constantRef(sub->getBase(), var, offset, type))
+      return false;
+    // A registered array's address is that of its first element, whether the global is declared
+    // as an array or as a pointer to one.
+    clang::QualType elem;
+    if (const clang::ArrayType *array = astCtx.getAsArrayType(type))
+      elem = array->getElementType();
+    else if (type->isPointerType())
+      elem = type->getPointeeType();
+    if (elem.isNull() || elem->isIncompleteType() || offset != 0)
+      return false;
+    offset = *i * astCtx.getTypeSizeInChars(elem).getQuantity();
+    type = elem;
     return true;
   }
   if (const auto *me = llvm::dyn_cast<clang::MemberExpr>(e)) {
@@ -412,7 +511,16 @@ mlir::Value Translator::constantValue(const clang::Expr *e) {
   for (const ConstUse &u : constUses)
     if (u.var == var && u.offset == offset)
       return u.value;
-  return fail("global '" + var->getNameAsString() + "' has an unsupported type");
+  // Not known when the signature was fixed: record it and carry on with a placeholder, the
+  // caller translates again with it as a parameter.
+  mlir::Type elt = scalarType(type);
+  if (!elt || elt.isInteger(1))
+    return fail("global '" + var->getNameAsString() + "' has an unsupported type");
+  for (const ConstUse &u : discovered_)
+    if (u.var == var && u.offset == offset)
+      return b.create<mlir::arith::ConstantOp>(loc, b.getZeroAttr(elt));
+  discovered_.push_back({var, offset, elt, {}});
+  return b.create<mlir::arith::ConstantOp>(loc, b.getZeroAttr(elt));
 }
 
 bool Translator::matchAccess(const clang::Expr *e, AccessRef &out) {
@@ -658,7 +766,11 @@ mlir::Value Translator::emit(const clang::Expr *e) {
   }
   if (const auto *x = llvm::dyn_cast<clang::UnaryOperator>(e)) {
     if (x->getOpcode() == clang::UO_Deref) {
+      if (int ra, rk; matchReduction(x, ra, rk))
+        return env.red[ra][rk];
       int a = paramArg(x->getSubExpr());
+      if (a >= 0 && args[a].kind == KernelArgInfo::Kind::Idx)
+        return loadIndex(a, 0);
       if (a >= 0 && args[a].kind == KernelArgInfo::Kind::Gbl && !gblValue[a].empty())
         return gblValue[a][0];
       return fail("dereference of something other than a global argument");
@@ -693,8 +805,12 @@ mlir::Value Translator::emit(const clang::Expr *e) {
   if (const auto *x = llvm::dyn_cast<clang::ArraySubscriptExpr>(e)) {
     if (AccessRef ref; matchAccess(x, ref))
       return readAccess(ref);
+    if (int ra, rk; matchReduction(x, ra, rk))
+      return env.red[ra][rk];
     int a = paramArg(x->getBase());
     auto idx = evalInt(x->getIdx());
+    if (a >= 0 && idx && args[a].kind == KernelArgInfo::Kind::Idx && *idx >= 0 && *idx < rank)
+      return loadIndex(a, static_cast<int>(*idx));
     if (a >= 0 && idx && args[a].kind == KernelArgInfo::Kind::Gbl && *idx >= 0 &&
         static_cast<size_t>(*idx) < gblValue[a].size())
       return gblValue[a][*idx];
@@ -714,6 +830,8 @@ mlir::Value Translator::current(const Target &t) {
     auto it = env.locals.find(t.var);
     return it == env.locals.end() ? mlir::Value() : it->second;
   }
+  if (t.kind == Target::Reduce)
+    return env.red[t.arg][t.elem];
   return env.out[t.arg];
 }
 
@@ -725,6 +843,8 @@ void Translator::assign(const Target &t, mlir::Value v) {
     env.locals[t.var] = ty ? cast(v, ty) : v;
   } else if (t.kind == Target::Output) {
     env.out[t.arg] = cast(v, args[t.arg].elt);
+  } else if (t.kind == Target::Reduce) {
+    env.red[t.arg][t.elem] = cast(v, args[t.arg].elt);
   }
 }
 
@@ -733,6 +853,18 @@ void Translator::emitAssignment(const clang::BinaryOperator *op) {
   if (t.kind == Target::None) {
     fail("assignment to something other than a local or an output accessor");
     return;
+  }
+  if (t.kind == Target::Reduce && op->getOpcode() == clang::BO_Assign && args[t.arg].access == 3 /*INC*/) {
+    // `*r = *r + e` (or `e + *r`) is an accumulation spelled out; any other assignment replaces
+    // the value and only matches the parallel fold if the loop covers a single point.
+    bool accumulates = false;
+    if (const auto *add = llvm::dyn_cast<clang::BinaryOperator>(op->getRHS()->IgnoreParenImpCasts());
+        add && add->getOpcode() == clang::BO_Add)
+      for (const clang::Expr *side : {add->getLHS(), add->getRHS()})
+        if (int a, k; matchReduction(side->IgnoreParenImpCasts(), a, k) && a == t.arg && k == t.elem)
+          accumulates = true;
+    if (!accumulates)
+      assignStyleReduction_ = true;
   }
   if (t.kind == Target::Output) {
     // only the centre point can be written
@@ -979,15 +1111,17 @@ mlir::func::FuncOp Translator::run(const std::string &name) {
   std::vector<std::pair<int, size_t>> gblSlots;
   std::vector<int> idxSlots;
   mlir::Type outType;
-  int numOutputs = 0;
+  int numOutputs = 0, numReduce = 0;
   for (size_t i = 0; i < args.size(); ++i) {
     const KernelArgInfo &k = args[i];
     switch (k.kind) {
     case KernelArgInfo::Kind::Dat:
       if (!k.elt)
         return fail("dat of unsupported element type"), mlir::func::FuncOp();
-      if (k.strided && k.access != 0)
-        return fail("a dat indexed along fewer dimensions can only be read"),
+      if (k.scaled)
+        return fail("multigrid strides are not supported"), mlir::func::FuncOp();
+      if (k.strided && k.access != 0 && k.access != 1) // READ, WRITE
+        return fail("a dat indexed along fewer dimensions can only be read or written"),
                mlir::func::FuncOp();
       if (k.access == 0 || k.access == 2) // READ, RW
         for (size_t p = 0; p < k.points.size(); ++p) {
@@ -1012,23 +1146,41 @@ mlir::func::FuncOp Translator::run(const std::string &name) {
       }
       break;
     case KernelArgInfo::Kind::Idx:
-      return fail("ops_arg_idx is not supported yet"), mlir::func::FuncOp();
-    case KernelArgInfo::Kind::Reduce:
-      return fail("reductions are not supported yet"), mlir::func::FuncOp();
+      idxSlots.push_back(static_cast<int>(i));
+      break;
+    case KernelArgInfo::Kind::Reduce: {
+      // INC (3), MIN (4), MAX (5). The kernel updates the running value through a pointer;
+      // here it starts at the operation's identity and ends as this point's contribution,
+      // which is an output like a written dat. The runtime folds the contributions of all
+      // points together (and into the application's reduction handle).
+      if (k.access < 3 || k.access > 5)
+        return fail("reduction with an access mode other than INC, MIN or MAX"), mlir::func::FuncOp();
+      if (!k.elt || !(k.elt.isF32() || k.elt.isF64() || k.elt.isInteger(32) || k.elt.isInteger(64)))
+        return fail("reduction of unsupported element type"), mlir::func::FuncOp();
+      if (outType && outType != k.elt)
+        return fail("outputs of different element types"), mlir::func::FuncOp();
+      outType = k.elt;
+      numReduce += k.dim;
+      break;
+    }
     }
   }
-  if (numOutputs == 0)
-    return fail("kernel writes no dat"), mlir::func::FuncOp();
+  if (numOutputs + numReduce == 0)
+    return fail("kernel writes no dat and reduces nothing"), mlir::func::FuncOp();
 
   inputs.insert(inputs.end(), gblInputs.begin(), gblInputs.end());
   for (const ConstUse &u : constUses)
     inputs.push_back(u.elt);
+  for (size_t i = 0; i < idxSlots.size(); ++i)
+    inputs.push_back(mlir::MemRefType::get({rank}, b.getI32Type()));
 
+  // dat outputs first (argument order), then reduction elements (argument order)
+  const int totalOutputs = numOutputs + numReduce;
   std::vector<mlir::Type> results;
-  if (numOutputs == 1) {
+  if (totalOutputs == 1) {
     results.push_back(outType);
   } else {
-    inputs.push_back(mlir::MemRefType::get({numOutputs}, outType));
+    inputs.push_back(mlir::MemRefType::get({totalOutputs}, outType));
   }
   auto fn = mlir::func::FuncOp::create(loc, name, b.getFunctionType(inputs, results));
   fn.setPrivate();
@@ -1052,7 +1204,15 @@ mlir::func::FuncOp Translator::run(const std::string &name) {
     u.value = entry->getArgument(input++);
     constRefList.push_back({u.var->getNameAsString(), u.offset, u.elt});
   }
-  mlir::Value outMemref = numOutputs > 1 ? entry->getArgument(input) : mlir::Value();
+  idxMemref.assign(args.size(), {});
+  for (int a : idxSlots)
+    idxMemref[a] = entry->getArgument(input++);
+  mlir::Value outMemref = totalOutputs > 1 ? entry->getArgument(input) : mlir::Value();
+
+  env.red.assign(args.size(), {});
+  for (size_t i = 0; i < args.size(); ++i)
+    if (args[i].kind == KernelArgInfo::Kind::Reduce)
+      env.red[i].assign(args[i].dim, identity(args[i].access, args[i].elt));
 
   env.out.assign(args.size(), mlir::Value());
   for (size_t i = 0; i < args.size(); ++i) // an RW output starts from its current value
@@ -1078,7 +1238,11 @@ mlir::func::FuncOp Translator::run(const std::string &name) {
       outs.push_back(env.out[i]);
     }
   }
-  if (numOutputs == 1) {
+  for (size_t i = 0; i < args.size(); ++i)
+    if (args[i].kind == KernelArgInfo::Kind::Reduce)
+      for (mlir::Value v : env.red[i])
+        outs.push_back(v);
+  if (totalOutputs == 1) {
     b.create<mlir::func::ReturnOp>(loc, outs);
   } else {
     for (size_t i = 0; i < outs.size(); ++i) {
@@ -1096,7 +1260,8 @@ mlir::func::FuncOp KernelIRBuilder::generateAccessor(
     const std::vector<std::string> &sourceFiles, const std::string &kernelName,
     const std::string &functionName, int indexRank, const std::vector<KernelArgInfo> &args,
     const std::map<std::string, const void *> &constants, llvm::raw_ostream &errs,
-    std::vector<KernelConstRef> *constRefs, const std::string &preamble) {
+    std::vector<KernelConstRef> *constRefs, const std::string &preamble,
+    KernelTraits *traits) {
   for (const std::string &file : sourceFiles) {
     auto code = llvm::MemoryBuffer::getFile(file);
     if (!code)
@@ -1141,10 +1306,23 @@ mlir::func::FuncOp KernelIRBuilder::generateAccessor(
       return {};
     }
 
-    Translator tr(context_, finder.found, args, indexRank, constants, errs);
-    mlir::func::FuncOp fn = tr.run(functionName);
+    auto tr = std::make_unique<Translator>(context_, finder.found, args, indexRank, constants, errs);
+    mlir::func::FuncOp fn = tr->run(functionName);
+    if (fn && tr->foundNewConstUses()) {
+      auto uses = tr->allConstUses();
+      fn.erase();
+      tr = std::make_unique<Translator>(context_, finder.found, args, indexRank, constants, errs);
+      tr->seedConstUses(std::move(uses));
+      fn = tr->run(functionName);
+    }
     if (fn && constRefs)
-      *constRefs = tr.constRefs();
+      *constRefs = tr->constRefs();
+    if (fn && traits) {
+      traits->assignStyleReduction = tr->assignStyleReduction();
+      traits->idxAxesRead = tr->idxAxesRead();
+      for (const auto &[name, value] : tr->specializedConstants())
+        traits->specialized.push_back({name, value});
+    }
     return fn;
   }
   errs << "accessor kernel '" << kernelName << "': definition not found in the registered sources\n";

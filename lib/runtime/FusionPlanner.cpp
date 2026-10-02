@@ -81,6 +81,22 @@ bool isPointLocal(const StencilDesc &st) {
   return true;
 }
 
+// Bit d is set when some dat of the loop is indexed along OPS dimension d. A loop whose dats are
+// all indexed along fewer dimensions than the loop (CloverLeaf's x/y coordinate arrays) iterates
+// over only those axes; it cannot share a kernel with a loop that iterates over others.
+unsigned datAxes(const LoopDesc &loop) {
+  unsigned mask = 0;
+  for (const ArgDesc &arg : loop.args) {
+    if (arg.argtype != OPS_ARG_DAT)
+      continue;
+    const int *stride = reinterpret_cast<const int *>(arg.stencil.stride);
+    for (int d = 0; d < arg.stencil.dims; ++d)
+      if (!stride || stride[d] != 0)
+        mask |= 1u << d;
+  }
+  return mask;
+}
+
 bool hasReduction(const LoopDesc &loop) {
   for (const ArgDesc &arg : loop.args)
     if (arg.argtype == OPS_ARG_GBL && arg.acc != OPS_READ)
@@ -267,7 +283,7 @@ FusionPlan planConsecutive(const std::vector<LoopDesc> &queue,
     FusedGroup &group = plan.groups.back();
     const LoopDesc &first = queue[group.loops.front()];
     bool ok = loop.block == first.block && loop.dims == first.dims &&
-              group.loops.size() < options.maxGroupSize && !hasReduction(first);
+              datAxes(loop) == datAxes(first) && group.loops.size() < options.maxGroupSize && !hasReduction(first);
 
     DatUses nextUses;
     std::vector<int64_t> box;
@@ -503,7 +519,7 @@ FusionPlan planDag(const std::vector<LoopDesc> &queue,
         whyNot.insert("size");
         continue;
       }
-      if (loop.block != first.block || loop.dims != first.dims) {
+      if (loop.block != first.block || loop.dims != first.dims || datAxes(loop) != datAxes(first)) {
         whyNot.insert("block");
         continue;
       }
