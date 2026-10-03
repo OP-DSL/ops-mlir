@@ -137,6 +137,7 @@ vortex are in [`docs/tgv_evaluation.md`](docs/tgv_evaluation.md). CloverLeaf 2D 
 repository run unmodified and entirely through the JIT (every loop is compiled; a stock-implementation fallback remains
 for kernels the translator rejects), with a differential verifier; see [`docs/cloverleaf.md`](docs/cloverleaf.md) and, for the larger decks on the A100 (fusion size,
 register pressure, occupancy), [`docs/cloverleaf_large.md`](docs/cloverleaf_large.md).
+All of these documents also exist in Simplified Technical English (ASD-STE100) in [`docs/ste/`](docs/ste/README.md).
 
 | Variable | Default | Meaning |
 |---|---|---|

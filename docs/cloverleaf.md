@@ -153,7 +153,8 @@ against device pointers (a segmentation fault). The mapping pass now wraps such 
 
 1. **CloverLeaf's own QA.** Each deck has an expected kinetic energy; the program prints
    `Test problem N is within X % of the expected solution` and passes below `1e-3 %`.
-   Every configuration below reproduces the *stock* value of that line.
+   Every configuration below passes. The printed value equals the stock value only where section 4.1 says so:
+   the reductions are now folded in a different order, so the last digits can differ.
 2. **A differential verifier** (`OPS_MLIR_VERIFY=1`). Every loop that the JIT compiles is run twice
    from the same state — once JIT-compiled, once through the stock implementation — and *all* dats of
    the OPS instance are compared bit for bit (an out-of-bounds write corrupts a dat the loop does not
@@ -211,6 +212,10 @@ Variants (`apps/c/cloverleaf_2d/eval_fusion.py`): `off` (`OPS_MLIR_FUSION=0`), `
 `execute + host-fallback` seconds, so it excludes compilation and the per-loop enqueue cost, neither of
 which fusion changes. Every row reproduced the stock QA value.
 
+The measurements of 4.2 and 4.3 are from the first version, in which the reductions and the one-time setup loops
+still ran as stock loops (`host-fallback`). With every loop on the GPU the times are lower; see the update at the top of
+[cloverleaf_large.md](cloverleaf_large.md).
+
 **2D, 960², 87 steps** (13 434 loops)
 
 | backend | variant | kernel launches | steady state | vs `off` |
@@ -248,7 +253,7 @@ What the numbers say:
   kernels have more live values and I did not look into why the sequential code is slower, so the cause
   is unconfirmed; it is a measured regression, not a noise effect (three variants, same result).
 * **The A100 numbers on the 960² / 96³ decks are dominated by things other than the kernels.** The
-  host-fallback reductions (`calc_dt_kernel_min`, `field_summary_kernel`) take more time than all GPU kernels, and a whole-run
+  host-fallback reductions of the first version (`calc_dt_kernel_min`, `field_summary_kernel`) took more time than all GPU kernels, and a whole-run
   "kernel seconds" figure includes a one-off cost of ≈ 0.8 s the first time each compiled module launches. (An earlier
   version of this text blamed ≈ 0.44 ms per-launch overhead; that was wrong. Measured per launch, the steady overhead is
   15–30 µs.) See [cloverleaf_large.md](cloverleaf_large.md), which separates these and uses the larger decks.

@@ -1,22 +1,22 @@
 # From an OPS loop to a running kernel: the ops-mlir compilation flow
 
-This document follows one `ops_par_loop` call through every stage that turns it into machine code,
-and shows the artefact each stage produces. All listings are **real output** of this repository
-(commands in [§13](#13-inspecting-every-stage)), taken from two applications:
+> This is the Simplified Technical English (ASD-STE100) version of [compilation_flow.md](../compilation_flow.md). Code, listings and numbers are the same as in the original.
 
-* **Taylor-Green vortex (TGV)** — an OpenSBLI-generated 3-D Navier–Stokes solver (`apps/c/taylor_green_vortex`),
-  26 loop sites over 25 kernels, written in OPS's older *pointer style* (one scalar argument per stencil point, results
-  through a return value or an out-struct). Shown at `N = 16` (fields of 26×26×28 doubles), sequential backend unless noted.
-* **CloverLeaf 2D** — the unmodified OPS port (`apps/c/cloverleaf_2d`), 82 kernels written with `ACC<T>`
-  *accessors* (`density(0,-1)`), data-dependent control flow, reductions and registered constants. Shown on its
-  tiny default deck (10×2 cells, so fields are 11×20 doubles).
+This document follows one `ops_par_loop` call through every stage that changes it to machine code. It shows the artefact that each stage makes.
+All listings are **real output** of this repository. The commands are in [§13](#13-inspect-each-stage). The listings come from two applications:
 
-The two styles use two different kernel translators (§8), which is why both appear. The fusion planner,
-the xDSL pass and the backends are shared. Companion documents: [loop_fusion.md](loop_fusion.md) (the fusion
-rules in depth), [cloverleaf.md](cloverleaf.md) (the CloverLeaf port and its correctness checks).
+* **Taylor-Green vortex (TGV)**: a 3-D Navier–Stokes solver that OpenSBLI generates (`apps/c/taylor_green_vortex`).
+  It has 26 loop sites and 25 user kernels. It uses the older *pointer style* of OPS. In this style, each stencil point is one scalar argument.
+  The user kernel gives its results through a return value or an out-struct. The listings show `N = 16` (the dats are 26×26×28 doubles) and the `seq` backend, unless the text says different.
+* **CloverLeaf 2D**: the unmodified OPS port (`apps/c/cloverleaf_2d`). It has 82 user kernels. They use `ACC<T>` *accessors* (`density(0,-1)`),
+  control flow that depends on the data, reductions and registered constants. The listings show its small default deck (10×2 cells, so the dats are 11×20 doubles).
 
-Abbreviations in listings: `!F` is the (long) `!stencil.field<[0,26]x[0,26]x[0,28]xf64>` type of the
-dat being discussed, pointer values inside attributes are elided as `<ptr>`, and `…` marks removed lines. `//` comments in the IR listings are annotations added for this document (MLIR's own comments are not printed).
+The two styles need two different translators for user kernels (§8). This is why both appear. The planner, the xDSL pass and the backends are the same for both styles.
+These documents give more information: [loop_fusion.md](loop_fusion.md) (the fusion rules in detail) and [cloverleaf.md](cloverleaf.md) (the CloverLeaf port and the checks of its correctness).
+
+The listings use these short forms. `!F` is the type `!stencil.field<[0,26]x[0,26]x[0,28]xf64>` of the dat that the text discusses. This type is long.
+
+A pointer value in an attribute shows as `<ptr>`. The mark `…` shows removed lines. The `//` comments in the IR listings are notes that the authors added for this document. MLIR does not print comments.
 
 ## 1. The whole flow on one page
 
@@ -37,54 +37,57 @@ flowchart TD
 
 | # | stage | code | in → out | when it runs |
 |---|---|---|---|---|
-| 1 | capture | `ops_par_loop` in `include/ops/OPSWrapper.h`, `JITEngine::enqueueParLoop` | OPS call → `LoopDesc` | every call; microseconds |
-| 2 | flush & segment | `compile_and_execute`, `runsOnHost` | queue → stretches of JIT-able loops | at a host-visible OPS call |
-| 3 | plan | `planFusion` (`FusionPlanner.cpp`), `ModuleKey` | segment → groups of loops | once per distinct queue shape |
-| 4 | IR build | `IRBuilder::buildModule` | groups → `ops.par_loop` ops | on a cache miss |
+| 1 | capture | `ops_par_loop` in `include/ops/OPSWrapper.h`, `JITEngine::enqueueParLoop` | OPS call → `LoopDesc` | every call. It takes microseconds. |
+| 2 | flush and segment | `compile_and_execute`, `runsOnHost` | queue → segments of loops that the JIT can compile | at an OPS call that reads a result on the host |
+| 3 | plan | `planFusion` (`FusionPlanner.cpp`), `ModuleKey` | segment → groups of loops | one time for each different queue shape |
+| 4 | IR build | `IRBuilder::buildModule` | groups → `ops.par_loop` operations | on a cache miss |
 | 5 | xDSL | `xdsl_impl/ops_to_stencil.py`, `ops_to_xdsl.py` | `ops.par_loop` → `func`/`scf.parallel` over `memref` | on a cache miss |
-| 6 | kernel bodies | `KernelIRBuilder.cpp` (pointer style), `AccessorKernel.cpp` (accessor style) | C++ kernel → `func` of scalars | on a cache miss |
-| 7 | backend lowering | `BackendPipeline.h` | + inlining, loops → `scf`/`omp`/`gpu` → LLVM dialect | on a cache miss |
+| 6 | user kernels | `KernelIRBuilder.cpp` (pointer style), `AccessorKernel.cpp` (accessor style) | user kernel in C++ → `func` of scalars | on a cache miss |
+| 7 | lower for the backend | `BackendPipeline.h` | + inline the calls, loops → `scf`/`omp`/`gpu` → LLVM dialect | on a cache miss |
 | 8 | engine | `JITEngine::createEngine` | LLVM dialect → machine code (the GPU fatbin is already part of the module) | on a cache miss |
-| 9 | execute | `JITEngine::execute` | group + dat pointers → launch | every flush |
+| 9 | run | `JITEngine::execute` | group + dat pointers → launch | every flush |
 
-"Cache miss" is the expensive path: stages 4–8 cost seconds (e.g. 2.6 s for the TGV queue below, 28–43 s for
-the six distinct queues of a CloverLeaf run — [§10](#10-stage-8--the-engine-the-caches-and-what-compilation-costs)); a cache hit goes straight from the plan to stage 9.
+A cache miss is the slow path. Stages 4–8 take seconds. For example, they take 2.6 s for the TGV queue below and 28–43 s for the six different queues of a CloverLeaf run
+([§10](#10-stage-8--the-engine-the-caches-and-the-compile-cost)). A cache hit goes directly from the plan to stage 9.
 
-## 2. The loops used as examples
+## 2. The loops that the examples use
 
 | loop | app | what it shows |
 |---|---|---|
-| `Kernel008/010/012/019/025` | TGV | five point-wise loops (`u = ρu/ρ` ×3, pressure, temperature) that fuse into **one kernel with forwarded values** (§5, §7.3, §9) |
-| `Kernel007`, `011/014/015` | TGV | 4-point derivative stencils; three loops fused although one was *moved* ahead of another (§5, §7.4) |
-| `Kernel039` | TGV | `ops_arg_idx` and a five-output out-struct (§7.5, §8.1) |
-| `Kernel040` | TGV | Runge–Kutta update: `OPS_RW` dats and per-stage scalars `rkA`, `rkB` (§7.6) |
-| `ideal_gas_kernel` | CloverLeaf | the simplest accessor kernel, reads an output it just wrote (§8.2) |
-| `revert_kernel` + `accelerate_kernel` | CloverLeaf | fused although their **ranges differ** (a *guarded* member), `dt` read as a registered constant (§5, §7.7) |
-| `advec_cell_kernel3_xdir` | CloverLeaf | data-dependent offsets: `density1(donor,0)` (§8.3) |
+| `Kernel008/010/012/019/025` | TGV | five point-wise loops (`u = ρu/ρ` ×3, pressure, temperature). They fuse into **one generated kernel with forwarded values** (§5, §7.3, §9) |
+| `Kernel007`, `011/014/015` | TGV | 4-point derivative stencils. Three loops fuse, but the planner *moved* one loop before another loop (§5, §7.4) |
+| `Kernel039` | TGV | `ops_arg_idx` and an out-struct with five outputs (§7.5, §8.1) |
+| `Kernel040` | TGV | Runge–Kutta update with `OPS_RW` dats and the scalars `rkA` and `rkB` for each stage (§7.6) |
+| `ideal_gas_kernel` | CloverLeaf | the simplest user kernel in accessor style. It reads an output that it just wrote (§8.2) |
+| `revert_kernel` + `accelerate_kernel` | CloverLeaf | they fuse, but their **ranges are different** (a *guarded* member). The user kernel reads `dt` as a registered constant (§5, §7.7) |
+| `advec_cell_kernel3_xdir` | CloverLeaf | offsets that depend on data: `density1(donor,0)` (§8.3) |
 | `calc_dt_kernel_min` | CloverLeaf | a **reduction** (§7.9, §11.3) |
 | `initialise_chunk_kernel_xx` | CloverLeaf | a 2-D loop that **writes a 1-D array** (§7.8) |
-| `generate_chunk_kernel` | CloverLeaf | `states[i].energy`: an array of structs registered as a constant (§8.4) |
+| `generate_chunk_kernel` | CloverLeaf | `states[i].energy`, an array of structs that the application registers as a constant (§8.4) |
 
 ## 3. Stage 1 — capture
 
 ### 3.1 What the application does
 
-An application that is built for ops-mlir includes `ops/OPSWrapper.h` instead of running the OPS source-to-source
-translator, and tells the runtime where the kernel bodies live and which globals the kernels read:
+An application for ops-mlir includes `ops/OPSWrapper.h` and does not use the OPS source-to-source translator.
+It tells the runtime where the source of the user kernels is and which globals the user kernels read:
 
 ```cpp
 set_kernel_source_file(dir + "/opensbliblock00_kernels.h");   // TGV: where to read kernel C++ from
 ops_register_kernel_constant("gama", &gama);                  // a global the kernels read by name
 ```
 
-CloverLeaf is not touched at all: its build puts `apps/c/cloverleaf_2d/shim/ops_seq_v2.h` first on the include
-path, which (a) renames the stock OPS `ops_par_loop` to `ops_par_loop_stock`, (b) includes the wrapper,
-and (c) turns `ops_decl_const` into "declare to OPS *and* register for the JIT". `main_wrapper.cpp` registers the
-kernel headers and the includes the kernel files rely on (`set_kernel_preamble`).
+CloverLeaf needs no change to its source code. Its build puts `apps/c/cloverleaf_2d/shim/ops_seq_v2.h` first on the include path. This header does three things:
+
+1. It renames the stock OPS `ops_par_loop` to `ops_par_loop_stock`.
+2. It includes the wrapper.
+3. It changes `ops_decl_const` to "declare to OPS *and* register for the JIT".
+
+`main_wrapper.cpp` registers the headers of the user kernels and the headers that these user kernels need (`set_kernel_preamble`).
 
 ### 3.2 What `ops_par_loop` does
 
-Here is a TGV loop, `u0 = rhou0 / rho` over the whole 3-D block including a halo of 2 cells:
+Here is a TGV loop, `u0 = rhou0 / rho`, over the whole 3-D block with a halo of 2 cells:
 
 ```cpp
 int iteration_range_8_block0[] = {-2, block0np0 + 2, -2, block0np1 + 2, -2, block0np2 + 2};
@@ -95,66 +98,76 @@ ops_par_loop(opensbliblock00Kernel008, "opensbliblock00Kernel008", opensbliblock
     ops_arg_dat(u0_B0,    1, stencil_0_00_00_00_3, "double", OPS_WRITE));
 ```
 
-`ops_par_loop` is a C++ template in the wrapper. It does **not** call the kernel. It
+`ops_par_loop` is a C++ template in the wrapper. It does **not** call the user kernel. It does these steps:
 
-1. packs the `ops_arg`s, and takes the **kernel's address** as its identity (`kernel_ptr`). The label string
-   cannot be used: CloverLeaf labels a dozen different kernels `"update_halo_kernel1"`. The runtime resolves the address
-   with `dladdr` (the executables link with `-rdynamic`) to the function name, which is also the name to look up in the kernel source;
-2. deduces the element type of every `ops_arg_gbl` / reduction argument from the kernel's parameter types
-   (OPS records only `sizeof(T)`, which cannot tell `int` from `float`);
-3. in a CloverLeaf build, also stores a **fallback closure** that can run the same loop through the stock OPS implementation;
-4. calls `JITEngine::enqueueParLoop`, which builds a `LoopDesc` (below) and appends it to the queue.
+1. It packs the `ops_arg`s. It takes the **address of the user kernel** as the identity of the loop (`kernel_ptr`).
+   The label string cannot be the identity, because CloverLeaf gives the label `"update_halo_kernel1"` to about 12 different user kernels.
+   The runtime uses `dladdr` to find the function name from the address (the executables link with `-rdynamic`). The runtime also uses this name to find the user kernel in the kernel source.
+2. It finds the element type of every `ops_arg_gbl` argument and every reduction argument from the types of the parameters of the user kernel.
+   OPS records only `sizeof(T)`, and `sizeof(T)` cannot show the difference between `int` and `float`.
+3. In a CloverLeaf build, it also stores a **fallback**. The fallback can run the same loop as a stock loop with the stock OPS code.
+4. It calls `JITEngine::enqueueParLoop`. This function builds a `LoopDesc` (below) and adds it to the queue.
 
 ### 3.3 The `LoopDesc`
 
 | field | content | used by |
 |---|---|---|
-| `kernel_name`, `kernel_token` | resolved function name; address | kernel lookup, module key |
-| `block`, `dims`, `range[2*dims]` | OPS block, dimensionality, `{x0,x1,y0,y1,…}` half-open | everything |
-| `args[i].argtype/acc` | `DAT`, `GBL` (read-only value or reduction), `IDX`; `READ/WRITE/RW/INC/MIN/MAX` | dependence analysis, signature |
-| `args[i].dat` | index, `size`, `base`, `d_m`, `d_p`, `stride`, name, element type, host pointer | field types, `d_m` normalisation, device buffers |
-| `args[i].stencil` | points (offset list), `stride` | `stencil.access` offsets, strided/rank-reduced dats |
-| `args[i].gbl_value` | **bytes of a read-only global, copied now** | scalar arguments at launch |
-| synthetic `gbl` args | current value of every registered constant the kernel reads (CloverLeaf's `dt`, `field.x_max`, `states[i].xmin`, …) | scalar arguments at launch |
-| `fallback` | closure running the stock loop | host loops (§4) |
+| `kernel_name`, `kernel_token` | function name and address | lookup of the user kernel, key |
+| `block`, `dims`, `range[2*dims]` | OPS block, number of dimensions, `{x0,x1,y0,y1,…}` as a half-open range | all stages |
+| `args[i].argtype/acc` | `DAT`, `GBL` (read-only value or reduction) or `IDX` for the type. `READ/WRITE/RW/INC/MIN/MAX` for the access | analysis of dependences, signature |
+| `args[i].dat` | index, `size`, `base`, `d_m`, `d_p`, `stride`, name, element type, host pointer | field types, normalisation of `d_m`, device buffers |
+| `args[i].stencil` | stencil points (the list of offsets), `stride` | `stencil.access` offsets, strided and rank-reduced dats |
+| `args[i].gbl_value` | **the bytes of a read-only global. The runtime copies them now.** | scalar arguments at launch |
+| synthetic `gbl` args | the current value of every registered constant that the user kernel reads (`dt`, `field.x_max`, `states[i].xmin`, … in CloverLeaf) | scalar arguments at launch |
+| `fallback` | the closure that runs the stock loop | stock loops (§4) |
 
-Two details matter for correctness of the laziness:
+Two details keep the delayed run correct:
 
-* **Values are snapshotted at enqueue.** A read-only global (TGV's `rkA[stage]`, `rkB[stage]`) is copied into the `LoopDesc` when the loop is
-  enqueued, and the registered constants a kernel reads are appended as extra read-only globals, also copied now. A host write between the call and the flush
-  therefore cannot leak into an earlier loop (CloverLeaf changes `dt` every step).
-* **Data are not touched.** Dats stay in OPS memory; the descriptor only records their pointer and shape.
+* **The runtime copies the values when the loop enters the queue.** The runtime copies a read-only global (`rkA[stage]` and `rkB[stage]` in TGV) into the `LoopDesc` at this time.
+  The runtime also adds the registered constants that the user kernel reads as more read-only globals, and copies them now.
+  So a write on the host between the call and the flush cannot change an earlier loop (CloverLeaf changes `dt` at every time step).
+* **The runtime does not access the data.** The dats stay in OPS memory. The descriptor records only their pointer and shape.
 
-## 4. Stage 2 — when the queue is flushed, and what a segment is
+## 4. Stage 2 — when the runtime flushes the queue, and what a segment is
 
-The queue is flushed (`compile_and_execute`) when
+The runtime flushes the queue (`compile_and_execute`) in these cases:
 
-* the application asks for a value: `ops_reduction_result` (CloverLeaf's `calc_dt` ends by reading its reductions, so the queue is flushed once per time step there),
-  `ops_dat_get_raw_pointer`, `ops_dat_fetch_data`, `ops_print_dat_to_txtfile`, `ops_timing_output`, `ops_halo_transfer`, `ops_exit`, …
-  The wrapper redefines these as macros that flush first and, on the GPU, copy the dat back from the device;
-* the application calls `compile_and_execute()` itself (TGV does, after each group of loops);
-* the queue reaches `OPS_MLIR_QUEUE_MAX` loops (default 512), to bound module size and memory.
+* The application asks for a value. Examples are `ops_reduction_result`, `ops_dat_get_raw_pointer`, `ops_dat_fetch_data`, `ops_print_dat_to_txtfile`, `ops_timing_output`, `ops_halo_transfer`, `ops_exit`, and more calls.
+  In CloverLeaf, `calc_dt` ends when it reads its reductions, so the queue flushes one time in each time step.
+  The wrapper redefines these calls as macros that flush first. On the GPU, they also copy the dat back from the device.
+* The application calls `compile_and_execute()` itself (TGV does this after each series of loops).
+* The queue reaches `OPS_MLIR_QUEUE_MAX` loops (default 512). This limit keeps the module size and the memory small.
 
-A flush walks the queue in order. A loop whose kernel the translator cannot handle (`runsOnHost`) is run through its
-fallback closure right there, after making its dats current on the host; it is a **barrier**: the loops on either side are
-compiled and fused as separate *segments*. The rules for "cannot handle" are in §8.6; CloverLeaf 2D and 3D have none left
-(`coverage: 11751 loops JIT-compiled, 0 through the stock fallback`), and TGV never has a fallback.
+A flush goes through the queue in order. The translator cannot handle the user kernel of some loops (`runsOnHost`).
+The runtime runs such a loop as a stock loop with its fallback at that point. Before this, it makes the dats of the loop current on the host.
+This loop is a **barrier**. The runtime compiles and fuses the loops before it and the loops after it as different *segments*.
 
-## 5. Stage 3 — planning: which loops share a kernel
+The rules for "cannot handle" are in §8.6. CloverLeaf 2D and 3D now have no such loops (`coverage: 11751 loops JIT-compiled, 0 through the stock fallback`). TGV never has a fallback.
 
-For a segment the runtime builds a `ModuleKey` — a digest of everything that changes the generated code — and looks it
-up in two caches (the plan cache and the compiled-module cache).
+## 5. Stage 3 — plan: which loops share a generated kernel
 
-The key contains, per loop: kernel name, `dims`, `range`, and per argument the access mode, `dim`, element size/kind, the dat's
-shape (`size`, `base`, `d_m`, `d_p`, `stride`, element type), the stencil's offsets and type, **and which dat slot the argument is**
-(slots numbered by first appearance in the queue, so two queues that differ only in *which* dat is which — `copy(A→B); copy(B→C)` versus
-`copy(A→B); copy(C→D)` — get different keys). It does **not** contain host pointers or the values of read-only globals, so a time loop that
-re-enqueues the same loops over the same dats hits the cache every time. Registered integer constants that were folded into the code
-(§8.4) are added by value.
+For a segment, the runtime makes a `ModuleKey`. The key is a digest of everything that changes the generated code.
+The runtime looks up the key in two caches (the plan cache and the compiled-module cache).
 
-On a miss, `planFusion` decides the groups. It builds a dependence DAG over the queue (RAW/WAR/WAW between footprints computed from
-ranges and stencils) and puts loops into one kernel only if no value has to travel *between different grid points* inside the kernel
-(details and proofs-by-test in [loop_fusion.md](loop_fusion.md)). It may **move** a loop earlier past loops it commutes with. TGV's Runge–Kutta stage:
+The key has these items for each loop: the name of the user kernel, `dims` and `range`.
+It has these items for each argument:
+
+* the access mode, `dim`, and the size and kind of the element
+* the shape of the dat (`size`, `base`, `d_m`, `d_p`, `stride`, element type)
+* the offsets and the type of the stencil
+* **which dat slot the argument is**
+
+
+The runtime numbers the slots in the order of first appearance in the queue. So two queues that differ only in *which* dat is which get different keys.
+For example, `copy(A→B); copy(B→C)` and `copy(A→B); copy(C→D)` get different keys.
+
+The key does **not** have the host pointers or the values of the read-only globals. Because of this, a time loop that adds the same loops over the same dats to the queue again gets a cache hit every time.
+The key also has the value of each registered integer constant that the runtime wrote into the code as a number (§8.4).
+
+After a cache miss, `planFusion` decides the groups. It makes a dependence DAG over the queue (RAW, WAR and WAW dependences between footprints that the planner computes from ranges and stencils).
+The planner puts loops in one group only if no value must travel *between different grid points* inside the generated kernel.
+Details and proofs by test are in [loop_fusion.md](loop_fusion.md).
+The planner can **move** a loop to an earlier position, past loops that commute with it. This is the plan for the Runge–Kutta stage of TGV:
 
 ```text
 [plan] 17 loops -> 6 kernels, 3 loops moved, est. traffic 4.11e+06 -> 2.63e+06 bytes (1.56x)
@@ -166,12 +179,13 @@ ranges and stencils) and puts loops into one kernel only if no value has to trav
 [plan]   K4: opensbliblock00Kernel013#8 opensbliblock00Kernel016#11 opensbliblock00Kernel017#12 opensbliblock00Kernel018#13 opensbliblock00Kernel031#14 opensbliblock00Kernel032#15
 ```
 
-* `K0` is the five point-wise loops. They are consecutive, read/write the same points, and the later ones read what the earlier ones wrote at offset 0.
-* `K3 = Kernel011#7 + Kernel014#9 + Kernel015#10`: loop #8 (`Kernel013`, a different range) is skipped over and #9, #10 are pulled forward to join #7. #8 starts the next kernel `K4`.
-  The line "`3 loops moved`" counts such moves. "`new kernel started because: dependence=5 first=1 order=1 range=3`" gives the reasons for each kernel boundary.
-* The estimate "4.11e+06 → 2.63e+06 bytes (1.56×)" is the planner's own traffic model for this queue.
+* `K0` has the five point-wise loops. They are consecutive, and they read and write the same points. The later loops read, at offset 0, what the earlier loops wrote.
+* `K3 = Kernel011#7 + Kernel014#9 + Kernel015#10`. The planner skips loop #8 (`Kernel013`, a different range) and moves #9 and #10 forward to join #7.
+  Loop #8 starts the next generated kernel, `K4`. The line "`3 loops moved`" counts such moves.
+  The line "`new kernel started because: dependence=5 first=1 order=1 range=3`" gives the reasons for each boundary between generated kernels.
+* The estimate "4.11e+06 → 2.63e+06 bytes (1.56×)" comes from the traffic model of the planner for this queue.
 
-CloverLeaf's default deck, first (initialisation) queue and the guarded group:
+This is the first queue (the initialisation) of the default deck of CloverLeaf, with a guarded group:
 
 ```text
 [plan] 35 loops -> 25 kernels, 14 loops moved, est. traffic 2.84e+04 -> 2.91e+04 bytes (0.98x)
@@ -186,28 +200,29 @@ CloverLeaf's default deck, first (initialisation) queue and the guarded group:
 [plan]   K7: update_halo_kernel1_b2#9
 ```
 
-`K6` fuses `initialise_chunk_kernel_volume`, `generate_chunk_kernel` and `ideal_gas_kernel` although their ranges differ — marked **guarded**:
-the kernel iterates over the bounding box and each smaller member only runs where the point is inside its own range (§7.7). The hydro time-step queue
-(156 loops → 104 kernels, 112 loops moved) contains groups such as
+`K6` fuses `initialise_chunk_kernel_volume`, `generate_chunk_kernel` and `ideal_gas_kernel`, but their ranges are different. The plan marks it **guarded**.
+The generated kernel iterates over the box. Each smaller member runs only at the points that are in its own range (§7.7).
+The queue of the hydro time step (156 loops → 104 generated kernels, 112 loops moved) has groups like these:
 
 ```text
 [plan]   K11: update_halo_kernel3_plus_4_a#19 update_halo_kernel2_xvel_plus_4_a#46 update_halo_kernel2_yvel_minus_4_a#54
 [plan]   K12: update_halo_kernel3_plus_2_a#20 update_halo_kernel2_xvel_plus_2_a#47 update_halo_kernel2_yvel_minus_2_a#55
 ```
 
-where three boundary-update loops from queue positions 19, 46 and 54 touch disjoint dats and become one launch.
+Here, three boundary-update loops from the queue positions 19, 46 and 54 use different dats. They become one launch.
 
-How much does fusing `K0` save? Unfused, its five loops issue 13 loads (`rho` is read by each of the five) and 5 stores; fused, `rho` is loaded once and
-`u0, u1, u2, p` stay in registers between members, so the kernel does **5 loads and 5 stores** (§7.3 shows the code). The values are still stored,
-because OPS dats are user-visible.
+How much does fusion save for `K0`? Without fusion, its five loops make 13 loads and 5 stores (each of the five loops reads `rho`).
+With fusion, the generated kernel loads `rho` one time. The values of `u0, u1, u2, p` stay in registers between the members.
+So the generated kernel does **5 loads and 5 stores** (§7.3 shows the code). The generated kernel still stores the values, because the application can read the dats.
 
-## 6. Stage 4 — building the `ops.par_loop` module
+## 6. Stage 4 — build the `ops.par_loop` module
 
-For a cache miss `IRBuilder::buildModule` turns the segment into an MLIR module with one `ops.par_loop` operation per loop,
-in queue order, each carrying its plan group in `fuse_group`. The operation is a thin, lossless carrier of the `LoopDesc` — a
-custom dialect (`ops`, defined in `include/Dialect/OPS` and mirrored for Python in `xdsl_impl/ops_dialect.py`) with no semantics of its own.
-This is TGV's `Kernel008` as printed by `OPS_MLIR_DUMP_LOWERED=1`, decoded (the real text is one 1.2 kB line; `<ptr>` are raw host addresses that
-travel as integers because the IR is only a transport between C++ and Python):
+After a cache miss, `IRBuilder::buildModule` changes the segment to an MLIR module. The module has one `ops.par_loop` operation for each loop, in queue order.
+Each operation has the plan group of its loop in `fuse_group`. The operation is a thin carrier of the `LoopDesc` and it loses no data.
+It is part of a custom dialect (`ops`) that has no semantics of its own. The dialect is in `include/Dialect/OPS`, and `xdsl_impl/ops_dialect.py` is the same dialect for Python.
+
+This is the `ops.par_loop` of `Kernel008` of TGV, as `OPS_MLIR_DUMP_LOWERED=1` prints it, in a decoded form. The real text is one line of 1.2 kB.
+`<ptr>` marks raw host addresses. They go as integers because the IR is only a transport between C++ and Python:
 
 ```mlir
 ops.par_loop {
@@ -225,37 +240,40 @@ ops.par_loop {
     #ops.arg< … "u0_B0"    … acc=1 … > ] }                     // arg 2: OPS_WRITE
 ```
 
-Note the numbers that drive everything below: the dat is `28×26×26` (x fastest) with a halo `d_m = -5` below and `d_p = 7 / 5 / 5`
-above; the loop range `-2…18` is in OPS *global* indices, so relative to the allocation it is `3…23` (§7.2).
+These numbers control all the text below. The dat is `28×26×26` (x is the fastest axis). It has a halo of `d_m = -5` below and `d_p = 7 / 5 / 5` above.
+The range of the loop, `-2…18`, uses OPS *global* indices. Relative to the allocation, the range is `3…23` (§7.2).
 
 ## 7. Stage 5 — xDSL: loops → `stencil` → loops over memrefs
 
 ### 7.1 Mechanics
 
-`JITEngine::runXdslLowering` calls into an **embedded CPython** (the interpreter is started in the `JITEngine` constructor,
-`xdsl_impl/` is put on `sys.path`) with the module as *text* and receives text back: `ops_to_xdsl.convert_ir_text`. Inside, xDSL
-(a fork with reductions, see README) parses the module and runs two passes:
+`JITEngine::runXdslLowering` calls an **embedded CPython**. The `JITEngine` constructor starts the interpreter and puts `xdsl_impl/` on `sys.path`.
+The call is `ops_to_xdsl.convert_ir_text`. It sends the module as *text* and receives text back.
+Inside, xDSL (a fork that has reductions, see the README) parses the module and runs two passes:
 
-1. **`OPSToStencilPass`** (`ops_to_stencil.py`, `convert_group`): every group of `ops.par_loop` ops becomes one `func.func` containing one `stencil.apply`;
-2. **`ConvertStencilToLLMLIRPass`** (xDSL's): `stencil.apply` → `scf.parallel` over `memref`s.
+1. **`OPSToStencilPass`** (`ops_to_stencil.py`, `convert_group`) makes one `func.func` for every group of `ops.par_loop` operations. The `func.func` is the generated kernel and it has one `stencil.apply`.
+2. **`ConvertStencilToLLMLIRPass`** (from xDSL) lowers `stencil.apply` to `scf.parallel` over `memref`s.
 
-Kernel bodies are not part of this stage: each kernel appears as an external declaration `func.func private @kernel(...)` that is a `func.call` in the body
-(§8 fills it in). `OPS_MLIR_DUMP_STENCIL=1` prints the IR between the two passes, `OPS_MLIR_DUMP_LOWERED=1` the result.
-A group function is named `ops_par_loop_group_<g>` for several loops and `ops_par_loop_<kernel>_<queue index>` for a single one; the runtime derives the same name to call it.
+The user kernels are not part of this stage. Each user kernel appears as an external declaration `func.func private @kernel(...)`. In the body, a `func.call` calls it (§8 gives the user kernel code).
 
-### 7.2 Conventions worth knowing
+`OPS_MLIR_DUMP_STENCIL=1` prints the IR between the two passes. `OPS_MLIR_DUMP_LOWERED=1` prints the result.
+The name of a generated kernel is `ops_par_loop_group_<g>` for a group of more than one loop. The name is `ops_par_loop_<kernel>_<queue index>` for a group of one loop. The runtime makes the same name to call it.
 
-* **Axes are reversed**: OPS lists `x` first and `x` is the unit-stride axis; the stencil and `memref` IR lists the slowest axis first, so a 3-D OPS `[x, y, z]` becomes `[z, y, x]`
-  (`memref<26x26x28xf64>` is `z × y × x` with `x` = 28). Offsets are reversed likewise: OPS offset `(-2, 0, 0)` is `stencil.access %f[0, 0, -2]`.
-* **Indices are normalised by `d_m`**: the field is `[0, size)` along each axis, so loop index `i` (OPS global) is element `i − d_m = i + 5` of the buffer.
-  TGV's range `-2…18` becomes the stencil bounds `3…23`; this is the `to <[3, 3, 3], [23, 23, 23]>` at the end of each `stencil.apply`.
-  `ops_arg_idx` undoes this (§7.5).
-* **Signature**: one field per *distinct dat* of the group, in order of first appearance (dats are identified by their OPS index, not by position), then one scalar per read-only global
-  element of every member (including the synthetic constants), then one scratch field per reduction element (§7.9). `JITEngine::execute` packs the arguments in exactly this order.
+### 7.2 Conventions to know
 
-### 7.3 A fused group of point-wise loops: TGV `K0`
+* **The axes are in reverse order.** OPS lists `x` first, and `x` is the axis with unit stride. The stencil IR and the `memref` IR list the slowest axis first.
+  So a 3-D OPS `[x, y, z]` becomes `[z, y, x]` (`memref<26x26x28xf64>` is `z × y × x` with `x` = 28).
+  The offsets are also in reverse order: the OPS offset `(-2, 0, 0)` is `stencil.access %f[0, 0, -2]`.
+* **The runtime normalises the indices with `d_m`.** The field is `[0, size)` along each axis. So the loop index `i` (OPS global) is the element `i − d_m = i + 5` of the buffer.
+  The range `-2…18` of TGV becomes the stencil bounds `3…23`. These are the `to <[3, 3, 3], [23, 23, 23]>` at the end of each `stencil.apply`.
+  `ops_arg_idx` reverses this (§7.5).
+* **Signature.** The generated kernel has one field for each *different dat* of the group, in the order of first appearance. The runtime identifies the dats by their OPS index and not by position.
+  Then it has one scalar for each element of each read-only global of every member (with the synthetic constants).
+  Then it has one scratch buffer for each reduction element (§7.9). `JITEngine::execute` packs the arguments in exactly this order.
 
-The five loops `u0 = ρu0/ρ`, `u1`, `u2`, `p = (γ-1)(ρE − ½ρ|u|²)` and `T = γMa²·p/ρ` (the group of §5), after pass 1:
+### 7.3 A group of point-wise loops: TGV `K0`
+
+The group of §5 has five loops: `u0 = ρu0/ρ`, `u1`, `u2`, `p = (γ-1)(ρE − ½ρ|u|²)` and `T = γMa²·p/ρ`. Here is the generated kernel after pass 1:
 
 ```mlir
   func.func private @ops_par_loop_group_0(%0: !F, %1: !F, %2: !F, %3: !F, %4: !F, %5: !F, %6: !F, %7: !F, %8: !F, %9: !F) {
@@ -291,16 +309,18 @@ The five loops `u0 = ρu0/ρ`, `u1`, `u2`, `p = (γ-1)(ρE − ½ρ|u|²)` and `
   }
 ```
 
-What happened:
+What the pass did:
 
-* **One `stencil.apply`** over the bounding box (all five members have the same range). Its operands are the dats any member reads: ρ (`%0`), ρu₀ (`%1`), ρu₁ (`%3`), ρu₂ (`%5`), ρE (`%7`), and also `u0, u1, u2, p` (`%2, %4, %6, %8`), which later members read at offset 0 (those four are never accessed: the reads are forwarded, see below). Its `outs` are the five written dats. There is **one `stencil.access` per distinct (dat, offset)**:
-  `%19` (ρ) is loaded once and feeds four of the five kernels.
-* **Forwarding**: `Kernel019` needs `u0, u1, u2`, which earlier members of the same group just computed (`%21, %24, %27`). Instead of loading `%2, %4, %6` (the dats being written) it is passed the SSA values.
-  `Kernel025` likewise receives `p` (`%30`). Only a *zero-offset* read of a value written by an earlier member can be forwarded; the planner never fuses a loop that would need a neighbour's freshly written value.
-* The `memref.alloca_scope` wrappers hold per-point scratch (the out-struct of multi-output kernels, the index buffer of `ops_arg_idx`) and keep the call inlinable as one block.
-* `stencil.return` yields the five values; the stencil lowering turns them into stores.
+* **One `stencil.apply`** covers the box (all five members have the same range). Its operands are the dats that a member reads: ρ (`%0`), ρu₀ (`%1`), ρu₁ (`%3`), ρu₂ (`%5`) and ρE (`%7`).
+  Its operands also include `u0, u1, u2, p` (`%2, %4, %6, %8`), which later members read at offset 0. The `stencil.apply` never accesses these four dats, because the pass forwards the reads (see below).
+  Its `outs` are the five dats that the group writes. There is **one `stencil.access` for each different (dat, offset)**. For example, `%19` (ρ) loads one time and feeds four of the five user kernels.
+* **Forwarding.** `Kernel019` needs `u0, u1, u2`, and earlier members of the same group just computed them (`%21, %24, %27`). The call gets these SSA values.
+  It does not load `%2, %4, %6` (the dats that the group writes). `Kernel025` also receives `p` (`%30`).
+  The pass can forward only a *zero-offset* read of a value that an earlier member wrote. The planner never fuses a loop that needs a value that a neighbour just wrote.
+* The `memref.alloca_scope` wrappers hold temporary memory for each point (the out-struct of user kernels with more than one output, the index buffer of `ops_arg_idx`). They also keep the call inlinable as one block.
+* `stencil.return` gives the five values. The pass that lowers the stencil changes them to stores.
 
-After pass 2 (stencil → loops) the same function is a loop nest over plain buffers, with the offsets as index arithmetic:
+After pass 2 (stencil → loops), the same generated kernel is a loop nest over plain buffers. The offsets are index arithmetic:
 
 ```mlir
   func.func private @ops_par_loop_group_0(%0: memref<26x26x28xf64>, %1: memref<26x26x28xf64>, %2: memref<26x26x28xf64>, %3: memref<26x26x28xf64>, %4: memref<26x26x28xf64>, %5: memref<26x26x28xf64>, %6: memref<26x26x28xf64>, %7: memref<26x26x28xf64>, %8: memref<26x26x28xf64>, %9: memref<26x26x28xf64>) {
@@ -361,12 +381,12 @@ After pass 2 (stencil → loops) the same function is a loop nest over plain buf
   }
 ```
 
-Count the memory operations: **5 loads, 5 stores**. The five loops run separately would be 13 loads and 5 stores.
-The `subview`s are identity views the stencil lowering always creates; they disappear in the backend pipeline.
+Count the memory operations: **5 loads, 5 stores**. Five separate loops make 13 loads and 5 stores.
+The `subview`s are identity views that the pass always makes when it lowers the stencil. They disappear in the backend pipeline.
 
-### 7.4 Stencil reads, and two stencils on one dat
+### 7.4 Stencil reads, and more than one stencil on one dat
 
-`Kernel007` is a 4-point derivative `∂u0/∂x` (offsets ±1, ±2 in x), range `0…16 × -2…18 × -2…18`:
+`Kernel007` is a 4-point derivative `∂u0/∂x` (offsets ±1, ±2 in x). Its range is `0…16 × -2…18 × -2…18`:
 
 ```mlir
   func.func private @ops_par_loop_opensbliblock00Kernel007_5(%0: !F, %1: !F) {
@@ -385,7 +405,7 @@ The `subview`s are identity views the stencil lowering always creates; they disa
   }
 ```
 
-The lowered version turns each `stencil.access` into an `addi` on the index and a load (`%15` is the x index, the last one):
+The lowered version changes each `stencil.access` to an `addi` on the index and a load (`%15` is the x index. It is the last index):
 
 ```mlir
   func.func private @ops_par_loop_opensbliblock00Kernel007_5(%0: memref<26x26x28xf64>, %1: memref<26x26x28xf64>) {
@@ -425,8 +445,8 @@ The lowered version turns each `stencil.access` into an `addi` on the index and 
   }
 ```
 
-The group `K3 = Kernel011 + Kernel014 + Kernel015` reads `u2` with an x-stencil (`Kernel011`) *and* a y-stencil (`Kernel015`) and `u1` with a y-stencil (`Kernel014`).
-Several stencils on one dat are fine as long as the dat is only read in the group (alloca scopes omitted):
+The group `K3 = Kernel011 + Kernel014 + Kernel015` reads `u2` with an x-stencil (`Kernel011`) *and* a y-stencil (`Kernel015`). It reads `u1` with a y-stencil (`Kernel014`).
+A group can read a dat with more than one stencil when no member writes the dat (the listing omits the alloca scopes):
 
 ```mlir
   func.func private @ops_par_loop_group_3(%0: !F, %1: !F, %2: !F, %3: !F, %4: !F) {
@@ -452,7 +472,7 @@ Several stencils on one dat are fine as long as the dat is only read in the grou
 
 ### 7.5 `ops_arg_idx`
 
-`Kernel039` (the initial condition) computes from the global grid index, takes no dat input and writes five dats:
+`Kernel039` (the initial condition) computes from the global grid index, has no dat input and writes five dats:
 
 ```cpp
 void opensbliblock00Kernel039(const int *idx, opensbliblock00Kernel039_result *out)
@@ -511,12 +531,12 @@ void opensbliblock00Kernel039(const int *idx, opensbliblock00Kernel039_result *o
   }
 ```
 
-The kernel receives a `memref<3xi32>` holding the **OPS-order** global index `(i, j, k)`: the loop indices are in buffer coordinates, so the lowering adds `d_m` back
-(`i + (-5)`) and stores them *reversed* (loop axis 0 is `z`, OPS dimension 2). All five results come back through one `memref<5xf64>` (the out-struct) and are stored to the five dats.
+The user kernel receives a `memref<3xi32>` that holds the **OPS-order** global index `(i, j, k)`. The loop indices are in buffer coordinates.
+So the pass adds `d_m` back (`i + (-5)`) and stores them in the reverse order (loop axis 0 is `z`, OPS dimension 2). All five results come back through one `memref<5xf64>` (the out-struct). The pass stores them to the five dats.
 
-### 7.6 `OPS_RW` dats and per-stage scalars
+### 7.6 `OPS_RW` dats and scalars for each stage
 
-TGV's Runge–Kutta update `Kernel040` reads and writes ten dats in place and takes `rkA[stage]`, `rkB[stage]`, which change between launches:
+`Kernel040`, the Runge–Kutta update of TGV, reads and writes ten dats in place. It also takes `rkA[stage]` and `rkB[stage]`, which change between launches:
 
 ```cpp
 ops_par_loop(opensbliblock00Kernel040, "opensbliblock00Kernel040", opensbliblock00, 3,
@@ -542,8 +562,8 @@ ops_par_loop(opensbliblock00Kernel040, "opensbliblock00Kernel040", opensbliblock
     } to <[3, 3, 3], [23, 23, 23]>
 ```
 
-The `OPS_RW` dats are inputs *and* outputs of the `stencil.apply` (`%5…%14` appear in both lists). `%15`, `%16` are the two `f64` scalars, copied at enqueue
-(§3.3) and passed by value at launch; since the values are not in the module key, the module compiled for stage 0 serves stages 1 and 2.
+The `OPS_RW` dats are inputs *and* outputs of the `stencil.apply` (`%5…%14` appear in both lists). `%15` and `%16` are the two `f64` scalars. The runtime copies them at enqueue
+(§3.3) and passes them by value at launch. The values are not in the key, so the module that the runtime compiles for stage 0 serves stages 1 and 2.
 
 ### 7.7 Loops with different ranges: guarded members (CloverLeaf `revert_kernel` + `accelerate_kernel`)
 
@@ -554,6 +574,7 @@ ops_par_loop(revert_kernel, "revert_kernel", clover_grid, 2, rangexy_inner,
     ops_arg_dat(energy0,  1, S2D_00, "double", OPS_READ),
     ops_arg_dat(energy1,  1, S2D_00, "double", OPS_WRITE));
 ```
+
 ```cpp
 int rangexy_inner_plus1[] = {x_min, x_max+1, y_min, y_max+1};   // inner range plus 1
 ops_par_loop(accelerate_kernel, "accelerate_kernel", clover_grid, 2, rangexy_inner_plus1,
@@ -570,9 +591,11 @@ ops_par_loop(accelerate_kernel, "accelerate_kernel", clover_grid, 2, rangexy_inn
     ops_arg_dat(viscosity,  1, S2D_00_M10_0M1_M1M1, "double", OPS_READ));
 ```
 
-`revert_kernel` runs over the interior (2×10 cells), `accelerate_kernel` over the interior plus one (3×11 vertices) and reads neighbours at `(-1,0)`, `(0,-1)`, `(-1,-1)`;
-`dt` is a global the kernel names. The planner fuses them into `K5` (guarded) because the smaller loop reads point-locally and the two do not conflict
-(`revert` writes `density1, energy1`; `accelerate` reads `density0`, not `density1`). The fused function iterates over the larger box `[4,4]…[7,15]`:
+`revert_kernel` runs over the interior (2×10 cells). `accelerate_kernel` runs over the interior plus one (3×11 vertices) and reads the neighbours at `(-1,0)`, `(0,-1)`, `(-1,-1)`.
+`dt` is a global that the user kernel names.
+
+The planner fuses them into `K5` (guarded) because the smaller loop reads only at the point itself and the two loops do not conflict.
+`revert_kernel` writes `density1` and `energy1`. `accelerate_kernel` reads `density0`, not `density1`. The generated kernel iterates over the larger box `[4,4]…[7,15]`:
 
 ```mlir
   func.func private @ops_par_loop_group_0(%0: !F, …, %13: !F, %14: f64) {
@@ -626,13 +649,15 @@ ops_par_loop(accelerate_kernel, "accelerate_kernel", clover_grid, 2, rangexy_inn
   }
 ```
 
-* The **box** is the bounding box of the members' ranges. A member whose range is smaller is **guarded**: a predicate `(y ≥ 4 ∧ y < 6) ∧ (x ≥ 4 ∧ x < 14)` built from `stencil.index` and `arith.cmpi`.
-* `stencil.apply` stores every point of its bounds, so outside the member's range the dats must be written back unchanged: the `else` branch yields the **current** values `%42, %43` of `density1` and `energy1`.
-  That is why a guarded write also makes the dat an input of the apply (`%16`, `%18`).
-* The `scf.if` encloses the `alloca_scope` and the call, so the guarded kernel body only executes inside its range.
-* `%14: f64` is `dt`, the synthetic constant argument (§3.3). It is the last of the 23 scalar parameters of `accelerate_kernel`; the other 22 are the stencil points of the 8 dats it reads (4+4+1+2+4+1+2+4).
+* The **box** is the bounding box of the ranges of the members. The generated kernel **guards** a member with a smaller range. The guard is the test `(y ≥ 4 ∧ y < 6) ∧ (x ≥ 4 ∧ x < 14)`.
+  The pass builds the guard from `stencil.index` and `arith.cmpi`.
+* `stencil.apply` stores every point of its bounds. So outside the range of the member, the code must write the dats back with no change.
+  The `else` branch gives the **current** values `%42, %43` of `density1` and `energy1`. For this reason, a guarded write also makes the dat an input of the apply (`%16`, `%18`).
+* The `scf.if` encloses the `alloca_scope` and the call. So the user kernel of the guarded member runs only inside its range.
+* `%14: f64` is `dt`, the synthetic constant argument (§3.3). It is the last of the 23 scalar parameters of `accelerate_kernel`.
+  The other 22 are the stencil points of the 8 dats that it reads (4+4+1+2+4+1+2+4).
 
-Lowered, the guard is plain arithmetic and a conditional:
+After pass 2, the guard is plain arithmetic and a conditional:
 
 ```mlir
   func.func private @ops_par_loop_group_0(%0: memref<11x20xf64>, …, %13: memref<11x20xf64>, %14: f64) {
@@ -692,11 +717,13 @@ Lowered, the guard is plain arithmetic and a conditional:
   }
 ```
 
-### 7.8 Rank-reduced dats: 1-D arrays inside a 2-D loop
+### 7.8 Rank-reduced dats: 1-D arrays in a 2-D loop
 
-CloverLeaf stores its coordinate arrays as 1-D dats of a 2-D block (`xx`, `vertexx`, `cellx` are indexed along x; `yy`, `vertexy`, … along y) and accesses them
-with *strided* stencils (`S2D_00_STRID2D_X` = stride `(1,0)`). A **read** becomes a lower-rank field and an access with an `offset_mapping` onto the loop's axes;
-the `_` marks the axis the dat does not have (`!F1` is a 1-D field type; `generate_chunk_kernel` reads `vertexx` along x and `vertexy` along y):
+CloverLeaf stores its coordinate arrays as 1-D dats of a 2-D block. `xx`, `vertexx` and `cellx` have an index along x. `yy`, `vertexy`, … have an index along y.
+The user kernels access them with *strided* stencils (`S2D_00_STRID2D_X` = stride `(1,0)`).
+
+A **read** becomes a field of lower rank and an access with an `offset_mapping` onto the axes of the loop. The mark `_` shows the axis that the dat does not have.
+`!F1` is a 1-D field type. `generate_chunk_kernel` reads `vertexx` along x and `vertexy` along y:
 
 ```mlir
   func.func private @ops_par_loop_generate_chunk_kernel_0(%0: !F1, %1: !F1, %2: !F, %3: !F, %4: !F, %5: !F, %6: !F1, %7: !F1,
@@ -717,7 +744,7 @@ the `_` marks the axis the dat does not have (`!F1` is a 1-D field type; `genera
     } to <…>
 ```
 
-A **write** is the harder case. This 2-D loop fills a 1-D array, so the stock implementation stores each element once per row (the same value every time):
+A **write** is the harder case. This 2-D loop fills a 1-D array, so the stock implementation stores each element one time in each row (the same value every time):
 
 ```cpp
 int rangefull[] = {-2, x_cells+8, -2, y_cells+8};
@@ -725,13 +752,14 @@ ops_par_loop(initialise_chunk_kernel_xx, "initialise_chunk_kernel_xx", clover_gr
     ops_arg_dat(xx, 1, S2D_00_STRID2D_X, "int", OPS_WRITE),
     ops_arg_idx());
 ```
+
 ```cpp
 void initialise_chunk_kernel_xx(ACC<int> &xx, int *idx) {
   xx(0,0) = idx[0]-2;
 }
 ```
 
-The generated function iterates over the axes the dat has and visits each element once (the dropped axis is not looped over, and the kernel is passed `0` for that component of `idx`):
+The generated kernel iterates over the axes that the dat has and visits each element one time. It does not iterate over the dropped axis, and the user kernel gets `0` for that component of `idx`:
 
 ```mlir
   func.func private @ops_par_loop_initialise_chunk_kernel_xx_0(%0: !stencil.field<[0,20]xi32>) {
@@ -782,9 +810,14 @@ The generated function iterates over the axes the dat has and visits each elemen
   }
 ```
 
-This is only equivalent to the stock loop under conditions that are checked before the loop is accepted (`JITEngine::runsOnHost`): all the loop's dats are indexed along the same axes, they
-are only `OPS_WRITE`/`OPS_READ` (not accumulated), there is no reduction, and the translator reports that the kernel never reads `idx[k]` of a dropped axis.
-The planner additionally never puts loops with different axis sets into one kernel.
+The generated kernel is the same as the stock loop only if four conditions are true. The runtime checks them before it accepts the loop (`JITEngine::runsOnHost`):
+
+* All dats of the loop have an index along the same axes.
+* The dats have only `OPS_WRITE` or `OPS_READ` access (no accumulation).
+* The loop has no reduction.
+* The translator reports that the user kernel never reads `idx[k]` of a dropped axis.
+
+The planner also never puts loops with different axis sets in one group.
 
 ### 7.9 Reductions: `calc_dt_kernel_min`
 
@@ -796,8 +829,8 @@ void calc_dt_kernel_min(const ACC<double> &dt_min /*dt_min is work_array1*/,
 }
 ```
 
-OPS accumulates into a single value, which a parallel loop cannot do. Instead the generated kernel returns this point's **contribution** (starting from the operation's identity) as an additional output,
-which is stored in a **scratch field over the iteration box**; a separate step folds the scratch field (§11.3). In stencil form:
+OPS accumulates into one value, and a parallel loop cannot do this. Instead, the translated user kernel returns the **contribution** of the point (it starts from the identity of the operation) as one more output.
+The generated kernel stores it in a **scratch buffer over the box**. A separate step folds the scratch buffer (§11.3). In the stencil form:
 
 ```mlir
   func.func private @ops_par_loop_calc_dt_kernel_min_0(%0: !F, %1: !F) {
@@ -813,7 +846,7 @@ which is stored in a **scratch field over the iteration box**; a separate step f
   }
 ```
 
-`%1` is the scratch field (`6×14`, the upper bounds of the box, starting at 0); it is the loop's only output. After lowering it looks like any other written dat:
+`%1` is the scratch buffer (`6×14`, the upper bounds of the box, from 0). It is the only output of the loop. After pass 2, it looks like any other dat that the loop writes:
 
 ```mlir
   func.func private @ops_par_loop_calc_dt_kernel_min_0(%0: memref<12x20xf64>, %1: memref<6x14xf64>) {
@@ -839,30 +872,34 @@ which is stored in a **scratch field over the iteration box**; a separate step f
   }
 ```
 
-The kernel `calc_dt_kernel_min(f64) -> f64` is `min(+inf, dt_min(0,0))` — the identity is the starting value of `*dt_min_val` (§8.5).
+The user kernel `calc_dt_kernel_min(f64) -> f64` is `min(+inf, dt_min(0,0))`. The identity is the start value of `*dt_min_val` (§8.5).
 
 ### 7.10 From `stencil.apply` to loops
 
-`ConvertStencilToLLMLIRPass` is a mechanical rewrite: each field becomes a `memref` plus an identity `subview`; `stencil.apply … to <lb, ub>` becomes an `scf.parallel` over `[lb, ub)` with
-unit steps; `stencil.access %f[o…]` becomes `memref.load %f[i+o…]`; `stencil.return` becomes the stores to the `outs`; `stencil.index` becomes the loop index. All loops are `scf.parallel` (no ordering between
-iterations is assumed — that is precisely what the planner's point-locality rule guarantees).
+`ConvertStencilToLLMLIRPass` is a mechanical rewrite. Each field becomes a `memref` and an identity `subview`. `stencil.apply … to <lb, ub>` becomes an `scf.parallel` over `[lb, ub)` with
+unit steps. `stencil.access %f[o…]` becomes `memref.load %f[i+o…]`. `stencil.return` becomes the stores to the `outs`. `stencil.index` becomes the loop index.
 
-## 8. Stage 6 — kernel bodies: C++ → MLIR
+All loops are `scf.parallel`. The pass assumes no order between the iterations. The point-locality rule of the planner makes sure that this is correct.
 
-After stage 5 every kernel is a bodiless declaration. `materializeKernelBody` finds each distinct kernel of the segment, translates its C++ source with a **clang AST walker** (the project links clang's libraries and parses
-the registered kernel files in-process), replaces the declaration with a `func.func` of `arith`/`math`/`memref` operations, and the backend pipeline inlines it (§9). Two translators exist, chosen by whether the loop carries a stock-fallback closure:
+## 8. Stage 6 — user kernel bodies: C++ → MLIR
+
+After stage 5, each user kernel is a declaration with no body. `materializeKernelBody` finds each different user kernel of the segment. It translates the C++ source of the user kernel with a **clang AST walker**. The project links the libraries of clang and parses the registered user kernel files in the same process. `materializeKernelBody` replaces the declaration with a `func.func` of `arith`, `math` and `memref` operations. The backend pipeline inlines this function (§9).
+
+There are two translators. The loop decides which translator the runtime uses. If the loop has a stock fallback closure, the runtime uses the accessor style. If not, it uses the pointer style.
 
 | | pointer style (`KernelIRBuilder.cpp`) | accessor style (`AccessorKernel.cpp`) |
 |---|---|---|
-| used for | TGV (no fallback closure) | CloverLeaf (stock fallback available) |
-| kernel signature | `T k(T a, T b, …)` or `void k(…, result *out)`; `const int *idx` | `void k(const ACC<T> &a, ACC<T> &b, T *gbl, const int *idx)` with `a(dx,dy)` |
-| generated function | `(one scalar per read stencil point…, read-only globals…, idx memrefs…) -> result` or `+ out memref` | `(one scalar per read stencil point…, globals…, constants…, idx memrefs…, out memref)` |
-| control flow | straight-line code and simple conditionals | `if` → selects, unrolled loops, data-dependent offsets, reductions |
-| globals | **baked** as constants at translation time | runtime scalar parameters (value snapshotted at enqueue) |
+| used for | TGV (no fallback closure) | CloverLeaf (a stock fallback exists) |
+| user kernel signature | `T k(T a, T b, …)` or `void k(…, result *out)`, and `const int *idx` | `void k(const ACC<T> &a, ACC<T> &b, T *gbl, const int *idx)` with `a(dx,dy)` |
+| MLIR function | `(one scalar per read stencil point…, read-only globals…, idx memrefs…) -> result` or `+ out memref` | `(one scalar per read stencil point…, globals…, constants…, idx memrefs…, out memref)` |
+| control flow | straight-line code and simple conditionals | `if` becomes `select`, unrolled `for` statements, offsets that depend on data, reductions |
+| globals | **baked** as constants at translation time | scalar parameters at run time (the value is a snapshot from the enqueue) |
+
+To **bake** a value means to write the value as a constant in the IR.
 
 ### 8.1 Pointer style (TGV)
 
-The convention is that of OpenSBLI's generated kernels: the arguments are the stencil points of every read dat in argument order, then the read-only globals, then `idx`; the result is the return value or the fields of an out-struct, in the order of the written dats.
+The convention is the same as for the user kernels that OpenSBLI makes. The arguments are, in this order, the stencil points of each read dat (in the order of the arguments), the read-only globals, and `idx`. The result is the return value, or the values in an out-struct (in the order of the dats that the user kernel writes).
 
 ```cpp
 double opensbliblock00Kernel019(double rhoE_B0, double rho_B0, double u0_B0, double u1_B0, double u2_B0)
@@ -873,7 +910,7 @@ double opensbliblock00Kernel019(double rhoE_B0, double rho_B0, double u0_B0, dou
 }
 ```
 
-translates, with nothing but the AST, to
+The translator needs only the AST. It translates this user kernel to:
 
 ```mlir
 func.func private @opensbliblock00Kernel019(%arg0: f64, %arg1: f64, %arg2: f64, %arg3: f64, %arg4: f64) -> f64 {
@@ -910,8 +947,7 @@ func.func private @opensbliblock00Kernel019(%arg0: f64, %arg1: f64, %arg2: f64, 
 }
 ```
 
-(`(-1 + gama)` shows up as `0 - 1` converted to `f64` plus the **constant** `1.4`: the global `gama` is looked up in the registered-constant table and its current value is written into the IR. The
-backend's canonicaliser folds the lot.) The point-wise kernels are a line each:
+In the IR, `(-1 + gama)` is `0 - 1` with a conversion to `f64`, plus the **constant** `1.4`. The translator looks up the global `gama` in the table of registered constants. It writes the current value of `gama` in the IR. The canonicaliser of the backend simplifies all these operations. The body of a point-wise user kernel is one line:
 
 ```mlir
 func.func private @opensbliblock00Kernel008(%arg0: f64, %arg1: f64) -> f64 {
@@ -920,7 +956,7 @@ func.func private @opensbliblock00Kernel008(%arg0: f64, %arg1: f64) -> f64 {
 }
 ```
 
-and the stencil kernel `Kernel007` is `(u_{x-2}, u_{x-1}, u_{x+1}, u_{x+2}) -> f64` with the constant `invDelta0block0 = 2.546…` baked in:
+The stencil user kernel `Kernel007` has the form `(u_{x-2}, u_{x-1}, u_{x+1}, u_{x+2}) -> f64`. It has the constant `invDelta0block0 = 2.546…` baked in:
 
 ```mlir
 func.func private @opensbliblock00Kernel007(%arg0: f64, %arg1: f64, %arg2: f64, %arg3: f64) -> f64 {
@@ -950,13 +986,21 @@ func.func private @opensbliblock00Kernel007(%arg0: f64, %arg1: f64, %arg2: f64, 
 }
 ```
 
-Consequence of baking: in this translator the value of a registered global is part of the *compiled code*, but not of the module key. Applications whose registered constants change over a run must
-pass those values as `ops_arg_gbl` (TGV's `rkA`, `rkB`, which do change per stage, are passed that way; `dt`, which is constant in TGV, is registered). The accessor translator does not have this restriction.
+A baked value has a consequence.
+
+In this translator, the value of a registered global is part of the *compiled code*. It is not part of the key. An application whose registered constants change during a run must pass these values as `ops_arg_gbl`. TGV passes `rkA` and `rkB` in this way, because they change at each stage. TGV registers `dt`, because `dt` is constant in TGV. The accessor translator does not have this restriction.
 
 ### 8.2 Accessor style (CloverLeaf)
 
-The accessor translator takes the *loop* into account, not just the kernel: its function signature follows from the loop's arguments (`KernelArgInfo`): a parameter for each point of each stencil of each read dat, one per element of
-each read-only global, then one for each **registered constant** the body reads, then one `memref<rank x i32>` per `ops_arg_idx`, and an output `memref` when there is more than one result. For the simplest CloverLeaf kernel:
+The accessor translator uses the *loop*, not only the user kernel. The signature of its function follows from the arguments of the loop (`KernelArgInfo`). The function has these parameters, in this order:
+
+1. One parameter for each point of each stencil of each read dat.
+2. One parameter for each element of each read-only global.
+3. One parameter for each **registered constant** that the body reads.
+4. One `memref<rank x i32>` for each `ops_arg_idx`.
+5. An output `memref`, when there is more than one result.
+
+This is the simplest CloverLeaf user kernel:
 
 ```cpp
 int rangexy_inner[] = {x_min, x_max, y_min, y_max};   // inner range without border
@@ -1017,10 +1061,10 @@ func.func private @ideal_gas_kernel(%arg0: f64, %arg1: f64, %arg2: memref<2xf64>
 }
 ```
 
-Note that `pressure(0,0)` is *read after being assigned* in the C++; the translator tracks the current value of every output accessor and uses `%3`, no memory round trip.
-The kernel is then called by the stencil IR exactly as in §7: `func.call @ideal_gas_kernel(%6, %7, %10)` and two loads from the out-memref.
+The C++ reads `pressure(0,0)` *after the user kernel assigns it*. The translator tracks the current value of each output accessor. It uses `%3`, so there is no round trip through memory.
+The stencil IR calls the user kernel as in §7, with `func.call @ideal_gas_kernel(%6, %7, %10)`. It then does two loads from the out-memref.
 
-`accelerate_kernel` of §7.7 translates to a function with 22 point parameters, the constant `dt` (`%arg22`) and a 3-element output memref (`stepbymass`, `xvel1`, `yvel1`):
+The translator translates `accelerate_kernel` of §7.7 to a function. The function has 22 point parameters, the constant `dt` (`%arg22`) and an output memref of 3 elements (`stepbymass`, `xvel1`, `yvel1`):
 
 ```mlir
 func.func private @accelerate_kernel(%arg0: f64, %arg1: f64, %arg2: f64, %arg3: f64, %arg4: f64, %arg5: f64, %arg6: f64, %arg7: f64, %arg8: f64, %arg9: f64, %arg10: f64, %arg11: f64, %arg12: f64, %arg13: f64, %arg14: f64, %arg15: f64, %arg16: f64, %arg17: f64, %arg18: f64, %arg19: f64, %arg20: f64, %arg21: f64, %arg22: f64, %arg23: memref<3xf64>) {
@@ -1034,9 +1078,9 @@ func.func private @accelerate_kernel(%arg0: f64, %arg1: f64, %arg2: f64, %arg3: 
   …
 ```
 
-### 8.3 Data-dependent control flow
+### 8.3 Control flow that depends on data
 
-`advec_cell_kernel3_xdir` chooses the donor cell from the sign of a flux, then indexes `density1(donor, 0)`:
+`advec_cell_kernel3_xdir` chooses the donor cell from the sign of a flux. Then it indexes `density1(donor, 0)`:
 
 ```cpp
 //pre_vol accessed with: {0,0, -1,0};          (comments in the original source)
@@ -1055,9 +1099,9 @@ diffdw = density1(downwind,0) - density1(donor,0);
 …
 ```
 
-* **`if` becomes `select`.** Both branches are computed (they only use values that are already loaded) and merged; integer division inside a conditional is rejected because it would run speculatively.
-* **Data-dependent offsets** such as `density1(donor,0)` are valid only when `donor` is one of the stencil's declared points. The translator reads *all* the points the stencil declares (they are all parameters)
-  and picks the one whose offset equals `donor` with a chain of `cmpi eq` / `select`:
+* **`if` becomes `select`.** The translator computes both branches and merges them. The branches use only values that the translator already loaded. The translator rejects an integer division in a conditional, because the division then runs speculatively.
+* **Offsets that depend on data**, such as `density1(donor,0)`, are valid only when `donor` is one of the declared points of the stencil. The translator reads *all* the points that the stencil declares. They are all parameters.
+  The translator picks the point with an offset equal to `donor` with a chain of `cmpi eq` and `select`:
 
 ```mlir
   func.func private @advec_cell_kernel3_xdir(%arg0: f64, %arg1: f64, %arg2: f64, %arg3: i32, %arg4: i32, %arg5: f64, %arg6: f64, %arg7: f64, %arg8: f64, %arg9: f64, %arg10: f64, %arg11: f64, %arg12: f64, %arg13: f64, %arg14: f64, %arg15: f64, %arg16: i32, %arg17: memref<2xf64>) {
@@ -1087,17 +1131,17 @@ diffdw = density1(downwind,0) - density1(donor,0);
   …
 ```
 
-  The whole kernel has 55 selects. A kernel that indexes outside its declared stencil would be mistranslated, not rejected.
-* **Loops** with compile-time bounds (`for (int i1 = -1; i1 <= 0; i1++)` in `generate_chunk_kernel`) are unrolled, up to 256 iterations.
-* **`x_max`** in that kernel is `field.x_max`, a member of a registered struct: a constant parameter (`%arg16 : i32` above).
+  The whole user kernel has 55 selects. If a user kernel indexes outside its declared stencil, the translator makes a wrong translation. It does not reject the user kernel.
+* **`for` statements**: the translator unrolls a `for` statement when it knows the bounds at translation time. The limit is 256 iterations. An example is `for (int i1 = -1; i1 <= 0; i1++)` in `generate_chunk_kernel`.
+* **`x_max`** in that user kernel is `field.x_max`, a struct member of a registered struct. It is a constant parameter (`%arg16 : i32` above).
 
 ### 8.4 Registered constants, structs and arrays
 
-A global the kernel reads is looked up in the table filled by `ops_register_kernel_constant` / the shim's `ops_decl_const`. What the translator does depends on how it is used:
+The translator looks up a global that the user kernel reads in a table. `ops_register_kernel_constant` and `ops_decl_const` of the shim fill the table. What the translator does depends on how the user kernel uses the global:
 
-* **Scalar or struct member** (`dt`, `grid.xmin`, `field.x_max`): becomes a **parameter**; the runtime appends a read-only global holding its current value to every loop that uses it, copied at enqueue. Value changes do not recompile.
-* **Array element with a compile-time subscript** (`states[i].energy`, `i` an unrolled loop variable, `states` declared as a pointer): the element's address is the registered base plus `i·sizeof(state_type)` plus the member's offset, and each distinct element is a parameter.
-  The elements are only known while the body is emitted, so the translator runs **twice**: the first pass records the elements it needs, the second has them in its signature. `generate_chunk_kernel` ends up with 18 constant parameters:
+* **Scalar or struct member** (`dt`, `grid.xmin`, `field.x_max`): the global becomes a **parameter**. The runtime appends to each loop that uses the global a read-only global that holds its current value. The runtime copies the value at the enqueue. If the value changes, the runtime does not compile again.
+* **Array element with a subscript that the translator knows at translation time** (`states[i].energy`). Here `i` is the variable of an unrolled `for` statement, and `states` has a pointer type. The address of the element is the registered base, plus `i·sizeof(state_type)`, plus the offset of the member. Each different element is a parameter.
+  The translator knows the elements only when it emits the body. So the translator runs **twice**. The first pass records the elements that it needs. The second pass has them in its signature. In the end, `generate_chunk_kernel` has 18 constant parameters:
 
 ```cpp
 //State 1 is always the background state
@@ -1118,13 +1162,13 @@ for(int i = 1; i<number_of_states; i++) {
 func.func private @generate_chunk_kernel(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, f64, i32, i32, i32, i32, f64, f64, i32, f64, f64, f64, f64, f64, f64, f64, memref<4xf64>)
 ```
 
-  (12 `f64` stencil points of `vertexx`, `vertexy`, `cellx`, `celly`; then the constants; then the 4-element output.)
-* **Integer constants used as loop bounds or array subscripts** (`number_of_states`): needed at translation time to unroll, so they are **baked in**; their value is recorded, added to the module key,
-  and a change invalidates both the kernel probe and the compiled module. (A change *between* enqueue and flush of the same loop is not handled.)
+  The parameters are, in this order: 12 `f64` stencil points of `vertexx`, `vertexy`, `cellx` and `celly`, then the constants, then the output of 4 elements.
+* **Integer constants used as loop bounds or array subscripts** (`number_of_states`): the translator needs them at translation time to unroll. So the translator **bakes** them in. It records their value and adds the value to the key.
+  If the value changes, the kernel probe and the compiled module are not valid. (The translator does not handle a change *between* the enqueue and the flush of the same loop.)
 
 ### 8.5 Reductions
 
-A reduction argument is an extra *output* whose running value starts at the operation's identity (`0` for `OPS_INC`, `+max` for `OPS_MIN`, `-max` for `OPS_MAX`), so the value left in it at the end of the body is this point's contribution:
+A reduction argument is an extra *output*. Its running value starts at the identity of the operation: `0` for `OPS_INC`, `+max` for `OPS_MIN` and `-max` for `OPS_MAX`. So the value that stays in it at the end of the body is the contribution of this point:
 
 ```mlir
 func.func private @calc_dt_kernel_min(%arg0: f64) -> f64 {
@@ -1135,25 +1179,34 @@ func.func private @calc_dt_kernel_min(%arg0: f64) -> f64 {
   }
 ```
 
-`*dt_min_val = MIN(*dt_min_val, x)` with `*dt_min_val = +inf` is `select(+inf < x, +inf, x)`. `*r = *r + e` (and `e + *r`) is recognised as an accumulation. Any other assignment to an `OPS_INC` argument (`*r = e`) is only equal to the parallel fold when the loop visits one point, so
-such a loop with more points is sent to the host.
+With `*dt_min_val = +inf`, the statement `*dt_min_val = MIN(*dt_min_val, x)` becomes `select(+inf < x, +inf, x)`. The translator recognises `*r = *r + e` (and `e + *r`) as an accumulation. Any other assignment to an `OPS_INC` argument (`*r = e`) is equal to the parallel fold only when the loop visits one point.
+So a loop of this type with more points runs on the host.
 
-### 8.6 What is rejected
+### 8.6 What the translator rejects
 
-The accessor translator refuses (with a reason printed under `OPS_MLIR_EXPLAIN=1`, and the loop then runs on the host): unresolved names after parsing the kernel with the application's includes; unsupported statements or types;
-output accessors written at a non-zero offset; multigrid strides; `INC`/`RW` through rank-reduced dats; a conditional store to a dat with no prior value; division inside a conditional; loops without compile-time bounds; unknown globals.
-The pointer-style translator rejects what it cannot express (for example calls to non-math functions) and the loop fails to compile.
+The accessor translator rejects a loop in the cases below. The loop then runs on the host. With `OPS_MLIR_EXPLAIN=1`, the translator prints the reason.
+
+* Names that stay unresolved after the translator parses the user kernel with the includes of the application.
+* Statements or types that the translator does not support.
+* Output accessors that the user kernel writes at an offset that is not zero.
+* Multigrid strides.
+* `INC` or `RW` access through dats of reduced rank.
+* A conditional store to a dat that has no earlier value.
+* A division in a conditional.
+* A `for` statement when the translator does not know the bounds at translation time.
+* Unknown globals.
+
+The pointer-style translator rejects what it cannot express. An example is a call to a function that is not a math function. In this case the loop fails to compile.
 
 ## 9. Stage 7 — backend pipelines
 
-Stage 5 and 6 together give a module of `func.func`s: a group function with `scf.parallel` over `memref`s that `func.call`s the kernel functions. `runBackendLowering` runs one of three MLIR
-pass pipelines on it (`include/runtime/BackendPipeline.h`), chosen by `OPS_BACKEND` (`seq`, `openmp`, `cuda`).
+Stages 5 and 6 together give a module of `func.func`s. The module has a group function. The group function has an `scf.parallel` over `memref`s, and it calls the functions of the user kernels with `func.call`. `runBackendLowering` runs one of three MLIR pass pipelines on the module (`include/runtime/BackendPipeline.h`). `OPS_BACKEND` chooses the pipeline (`seq`, `openmp`, `cuda`).
 
 ### 9.1 Sequential and OpenMP: inline, then loops
 
-Both start the same way: the group functions are made public (so the engine can look them up), the **inliner** pulls each kernel body into the loop, and the canonicaliser / CSE fold what the inlining exposes.
-For TGV `K0`, after inlining and canonicalisation the whole fused kernel is one flat loop body — the `alloca_scope`s are gone, the five calls are 30 arithmetic operations, and the constant expressions in the kernels
-have been folded (`(-1 + gama)` is `0.4`, `0.1·0.1·1.4` is `0.014`, `1/2` is `0.5`):
+Both start in the same way. The runtime makes the group functions public, so that the engine can look them up. The **inliner** puts the body of each user kernel in the loop. The canonicaliser and CSE simplify the code after the inliner runs.
+
+For TGV `K0`, after the inliner and the canonicaliser ran, the whole generated kernel is one flat body of the `scf.parallel`. The `alloca_scope`s are gone. The five calls are 30 arithmetic operations. The canonicaliser replaced the constant expressions in the user kernels with their values. In the result, `(-1 + gama)` is `0.4`, `0.1·0.1·1.4` is `0.014` and `1/2` is `0.5`:
 
 ```mlir
 func.func @ops_par_loop_group_0(%arg0: memref<26x26x28xf64>, %arg1: memref<26x26x28xf64>, %arg2: memref<26x26x28xf64>, %arg3: memref<26x26x28xf64>, %arg4: memref<26x26x28xf64>, %arg5: memref<26x26x28xf64>, %arg6: memref<26x26x28xf64>, %arg7: memref<26x26x28xf64>, %arg8: memref<26x26x28xf64>, %arg9: memref<26x26x28xf64>) {
@@ -1199,7 +1252,7 @@ func.func @ops_par_loop_group_0(%arg0: memref<26x26x28xf64>, %arg1: memref<26x26
 }
 ```
 
-* **Sequential**: `scf.parallel` becomes a sequential loop nest of `cf` branches (`convert-scf-to-cf`; the outer index is `z`, the inner `x`), then everything goes to the LLVM dialect (`convert-cf-to-llvm`, `convert-arith/math/func/memref-to-llvm`):
+* **Sequential**: `convert-scf-to-cf` changes `scf.parallel` to a sequential nest of `cf` branches. The outer index is `z` and the inner index is `x`. Then the pipeline lowers everything to the LLVM dialect with `convert-cf-to-llvm` and `convert-arith/math/func/memref-to-llvm`:
 
 ```mlir
   …
@@ -1226,8 +1279,8 @@ func.func @ops_par_loop_group_0(%arg0: memref<26x26x28xf64>, %arg1: memref<26x26
     …
 ```
 
-  Functions use the *bare pointer* calling convention: a `memref<26x26x28xf64>` argument is a plain `double *`, which is why `execute` can pass the dat pointers directly.
-* **OpenMP**: `convert-scf-to-openmp` instead turns the loop into a parallel worksharing loop over the collapsed 3-D iteration space (the thread count is the usual `OMP_NUM_THREADS`); the
+  Functions use the *bare pointer* calling convention. A `memref<26x26x28xf64>` argument is a plain `double *`. Because of this, `execute` can pass the pointers of the dats directly.
+* **OpenMP**: `convert-scf-to-openmp` turns `scf.parallel` into a parallel worksharing loop over the collapsed 3-D iteration space. `OMP_NUM_THREADS` sets the thread count, as usual. The
   rest of the pipeline is the same:
 
 ```mlir
@@ -1282,7 +1335,7 @@ func.func @ops_par_loop_group_0(%arg0: memref<26x26x28xf64>, %arg1: memref<26x26
 }
 ```
 
-The engine then runs LLVM's `-O3` pipeline with the **host CPU's name and feature string**. On the sequential backend the fused body is auto-vectorised (here with 4-wide `double` vectors):
+The engine then runs the `-O3` pipeline of LLVM with the **name and feature string of the host CPU**. On the sequential backend, the pipeline auto-vectorises the body of the generated kernel (here with vectors of 4 `double` values):
 
 ```llvm
 vector.body:                                      ; preds = %.preheader.i
@@ -1303,10 +1356,10 @@ vector.body:                                      ; preds = %.preheader.i
 
 ### 9.2 CUDA: loops → `gpu.launch` → NVVM → fatbin
 
-The CUDA pipeline has more steps because the kernel bodies must end up as *device* code:
+The CUDA pipeline has more steps, because the bodies of the user kernels must end as *device* code:
 
-1. **`MapParallelToGpuLaunchPass`** (ours): the outermost `scf.parallel` of each function becomes a `gpu.launch` with thread blocks of
-   **32 × 4 × 1** — `x`, the unit-stride axis, is `threadIdx.x`. Grid size is `ceil(trip count / block)` per axis. For the TGV loop (20 points per axis at `N = 16`) the grid is `1 × 5 × 20`:
+1. **`MapParallelToGpuLaunchPass`** (a pass of this project): the outermost `scf.parallel` of each function becomes a `gpu.launch`. The thread blocks are
+   **32 × 4 × 1**. The axis `x` has unit stride and is `threadIdx.x`. The size of the grid is `ceil(trip count / block)` for each axis. For the TGV loop (20 points for each axis at `N = 16`), the grid is `1 × 5 × 20`:
 
 ```mlir
 func.func private @ops_par_loop_group_0(%arg0: memref<26x26x28xf64>, %arg1: memref<26x26x28xf64>, %arg2: memref<26x26x28xf64>, %arg3: memref<26x26x28xf64>, %arg4: memref<26x26x28xf64>, %arg5: memref<26x26x28xf64>, %arg6: memref<26x26x28xf64>, %arg7: memref<26x26x28xf64>, %arg8: memref<26x26x28xf64>, %arg9: memref<26x26x28xf64>) {
@@ -1381,11 +1434,13 @@ func.func private @ops_par_loop_group_0(%arg0: memref<26x26x28xf64>, %arg1: memr
 }
 ```
 
-   The part to read is the index computation: each thread computes `lb + (blockIdx·blockDim + threadIdx)·step` and then **clamps it to `ub − step`** (`arith.minsi`).
-   Threads that fall past the end of the range (here x has 32 threads for 20 points) therefore do not skip the work: they redo the last point and store the same values.
-   This avoids a branch around the body; it is correct whenever the point's outputs depend only on inputs the kernel does not write (item 2 of §14 discusses the exception).
-2. **Outlining**: `gpu-kernel-outlining` moves the body into a `gpu.module` / `gpu.func` and leaves a `gpu.launch_func` in the host function. The `func.call`s to the kernel functions are then **inlined into the
-   `gpu.func`** (an inliner pass nested in the `gpu.module`) so the NVVM math redirection can see them:
+   Read the index computation with care. Each thread computes `lb + (blockIdx·blockDim + threadIdx)·step`. Then it **clamps the result to `ub − step`** (`arith.minsi`).
+
+   Threads that are past the end of the range do not skip the work. In this example, `x` has 32 threads for 20 points. These threads do the last point again and store the same values.
+
+   This makes a branch around the body not necessary. It is correct when the outputs of a point depend only on inputs that the GPU kernel does not write. Item 2 of §14 describes the exception.
+2. **Outline step**: `gpu-kernel-outlining` moves the body into a `gpu.module` / `gpu.func`. It leaves a `gpu.launch_func` in the host function. Then an inliner pass nested in the `gpu.module` inlines the `func.call`s to the functions of the user kernels
+   **into the `gpu.func`**. This lets the NVVM math redirection see them:
 
 ```mlir
 func.func private @ops_par_loop_group_0(%arg0: memref<26x26x28xf64>, %arg1: memref<26x26x28xf64>, %arg2: memref<26x26x28xf64>, %arg3: memref<26x26x28xf64>, %arg4: memref<26x26x28xf64>, %arg5: memref<26x26x28xf64>, %arg6: memref<26x26x28xf64>, %arg7: memref<26x26x28xf64>, %arg8: memref<26x26x28xf64>, %arg9: memref<26x26x28xf64>) {
@@ -1401,7 +1456,7 @@ func.func private @ops_par_loop_group_0(%arg0: memref<26x26x28xf64>, %arg1: memr
 }
 ```
 
-   and, abridged, the device function (index setup and the five kernel calls, shown before their inlining):
+   This is the GPU kernel in a short form. It shows the index setup and the five calls of the user kernels, before the inliner runs:
 
 ```mlir
 gpu.func @ops_par_loop_group_0_kernel(%arg0: index, %arg1: index, %arg2: index, %arg3: memref<26x26x28xf64>, %arg4: memref<26x26x28xf64>, %arg5: memref<26x26x28xf64>, %arg6: memref<26x26x28xf64>, %arg7: memref<26x26x28xf64>, %arg8: memref<26x26x28xf64>, %arg9: memref<26x26x28xf64>, %arg10: memref<26x26x28xf64>, %arg11: memref<26x26x28xf64>, %arg12: memref<26x26x28xf64>) kernel attributes {known_block_size = array<i32: 32, 4, 1>, known_grid_size = array<i32: 1, 5, 20>} {
@@ -1459,62 +1514,71 @@ gpu.func @ops_par_loop_group_0_kernel(%arg0: index, %arg1: index, %arg2: index, 
 }
 ```
 
-3. **Lowering to NVVM**: `scf-to-cf` inside the `gpu.module` (an `scf.if` around an `alloca_scope` — the guarded members of §7.7 — cannot be lowered otherwise), then `convert-gpu-to-nvvm`, then `nvvm-attach-target` with the chip
-   (`sm_89` here, detected through the driver or set with `OPS_GPU_SM`; `OPS_PTXAS_OPTS` adds ptxas flags such as `-maxrregcount`).
-4. **`gpu-module-to-binary`** runs NVPTX code generation and **`ptxas`** at JIT time and embeds a fatbin in the module (NVPTX code generation and `ptxas` are part of the "backend lowering" column of the CUDA rows in §10).
-5. **Host side**: `gpu-to-llvm` turns `gpu.launch_func` into calls of `mgpuModuleLoad`, `mgpuModuleGetFunction`, `mgpuLaunchKernel`, `mgpuStreamSynchronize` from MLIR's `libmlir_cuda_runtime.so`
-   (`OPS_MLIR_CUDA_RUNTIME`). A small LLVM pass (`UseMonoCuStream`) replaces the stream the generated code creates and destroys around each launch by one persistent stream owned by the runtime.
+3. **Lower to NVVM**: `scf-to-cf` runs inside the `gpu.module`. No other pass can lower an `scf.if` around an `alloca_scope` (the members of §7.7 that have a guard). Then `convert-gpu-to-nvvm` runs. Then `nvvm-attach-target` adds the chip
+   (`sm_89` here). The runtime detects the chip through the driver. You can also set the chip with `OPS_GPU_SM`. `OPS_PTXAS_OPTS` adds ptxas flags such as `-maxrregcount`.
+4. **`gpu-module-to-binary`** runs NVPTX code generation and **`ptxas`** at JIT time. It embeds a fatbin in the module. (NVPTX code generation and `ptxas` are part of the "backend lowering" column of the CUDA rows in §10.)
+5. **Host side**: `gpu-to-llvm` turns `gpu.launch_func` into calls of `mgpuModuleLoad`, `mgpuModuleGetFunction`, `mgpuLaunchKernel` and `mgpuStreamSynchronize`. These come from `libmlir_cuda_runtime.so` of MLIR
+   (`OPS_MLIR_CUDA_RUNTIME`). The generated code creates and destroys a stream around each launch. A small LLVM pass (`UseMonoCuStream`) replaces this stream with one persistent stream that the runtime owns.
 
-A function whose loop covers a **single point** (CloverLeaf's `calc_dt_kernel_get` visits one cell) has no `scf.parallel` left after canonicalisation, so there is nothing to map; the pass wraps such a function in a `1×1×1`
-launch. Without that, its body ran on the host against device pointers.
+A group function whose loop covers a **single point** has no `scf.parallel` after the canonicaliser runs. An example is `calc_dt_kernel_get` of CloverLeaf, which visits one cell. So the pass has nothing to map. The pass puts such a function in a `1×1×1`
+launch. Without this, the body of the function ran on the host with device pointers.
 
 | | sequential | OpenMP | CUDA |
 |---|---|---|---|
-| parallel loop becomes | nested `scf.for` | `omp.parallel` / `omp.wsloop` / `omp.loop_nest collapse(n)` | `gpu.launch`, blocks 32×4×1, index clamped to the range |
-| kernel bodies | inlined | inlined | inlined into the `gpu.func` |
-| final code | LLVM O3, host features | LLVM O3, host features, OpenMP runtime | NVPTX + ptxas fatbin; host stubs call `libmlir_cuda_runtime` |
+| the parallel loop becomes | nested `scf.for` | `omp.parallel` / `omp.wsloop` / `omp.loop_nest collapse(n)` | `gpu.launch` with blocks 32×4×1. The code clamps the index to the range. |
+| user kernel bodies | inlined | inlined | inlined in the `gpu.func` |
+| final code | LLVM O3, host features | LLVM O3, host features, OpenMP runtime | NVPTX + ptxas fatbin. Host stubs call `libmlir_cuda_runtime`. |
 | synchronisation | none | implicit barrier | `cuCtxSynchronize` after every launch |
 
-## 10. Stage 8 — the engine, the caches, and what compilation costs
+## 10. Stage 8 — the engine, the caches and the compile cost
 
-`JITEngine::createEngine` creates the LLVM target machine for the host CPU, wraps `makeOptimizingTransformer(O3)` (plus the CUDA stream rewrite) as the engine's transformer, and builds an `mlir::ExecutionEngine`
-from the lowered module (for CUDA it also loads `libmlir_cuda_runtime.so` and registers `ops_mlir_get_persistent_cuda_stream` as a symbol). The first function is looked up immediately, which makes the
-JIT compile now — the cost is accounted where it belongs, and the target machine, which the optimiser keeps a pointer to, is still alive. If compilation fails and every loop of the segment has a fallback closure, the segment runs on the host instead of being
-dropped.
+`JITEngine::createEngine` creates the LLVM target machine for the host CPU. It wraps `makeOptimizingTransformer(O3)` (and the CUDA stream rewrite) as the transformer of the engine. It builds an `mlir::ExecutionEngine`
+from the lowered module. For CUDA, it also loads `libmlir_cuda_runtime.so` and registers `ops_mlir_get_persistent_cuda_stream` as a symbol.
 
-Three caches avoid repeating work:
+The engine looks up the first function immediately. This makes the JIT compile now, so the runtime counts the cost in the correct place. The target machine is still alive. The optimiser keeps a pointer to the target machine.
+If the compile fails and each loop of the segment has a fallback closure, the segment runs on the host. The runtime does not drop the segment.
+
+Three caches make sure that the runtime does not do the same work again:
 
 | cache | key | holds |
 |---|---|---|
-| kernel probe (`translatable_`) | kernel name (+ argument signature, and the values of any integer constants it was specialised on) | whether the accessor translator accepts the kernel, which constants it reads, whether it assigns an `INC` reduction, which `idx` components it reads |
-| plan cache | `ModuleKey` | the fusion plan |
+| kernel probe (`translatable_`) | the name of the user kernel, the argument signature, and the values of any integer constants that the translator baked in | Whether the accessor translator accepts the user kernel. Which constants it reads. Whether it assigns an `INC` reduction. Which `idx` components it reads. |
+| plan cache | `ModuleKey` | the plan |
 | engine cache | `ModuleKey` | the compiled `ExecutionEngine` (all the group functions of the segment) |
 
-Costs, from `OPS_MLIR_STATS=1` (compile time is paid once per distinct queue; everything after that is cache hits):
+`OPS_MLIR_STATS=1` gives these costs. The runtime pays the compile time one time for each different queue. After that, all lookups are cache hits:
 
-| run | modules compiled | compile total | xDSL | kernel bodies (clang) | backend lowering | engine (LLVM) |
+| run | modules compiled | compile total | xDSL | user kernel bodies (clang) | backend lowering | engine (LLVM) |
 |---|---:|---:|---:|---:|---:|---:|
 | TGV N=16, seq, host machine | 2 | 2.64 s | 0.59 s | 1.62 s | 0.04 s | 0.20 s |
 | CloverLeaf 2D default, seq, A100 node CPU | 6 | 28.2 s | 12.6 s | 6.3 s | 1.2 s | 3.6 s |
 | CloverLeaf 2D default, CUDA, A100 | 6 | 43.4 s | 12.2 s | 6.5 s | 16.3 s | 4.8 s |
 | CloverLeaf 3D default, CUDA, A100 | 6 | 79.9 s | 23.0 s | 10.1 s | 26.9 s | 11.8 s |
 
-CloverLeaf's 84 flushes (2D default) use only 6 distinct queue shapes. The "kernel bodies" column is the clang-based translation of every kernel of the module (the parsed AST of each kernel file is cached, so the parse itself is paid once per process); "xDSL" is the Python lowering.
+The 84 flushes of CloverLeaf (2D default) use only 6 different queue shapes. The "kernel bodies" column is the time of the translation with clang of each user kernel of the module. The runtime caches the parsed AST of each user kernel file. So each process does the parse only one time. The "xDSL" column is the time of the Python lowering.
 
-## 11. Stage 9 — execution
+## 11. Stage 9 — run
 
-### 11.1 One flush, one launch per group
+### 11.1 One flush, one launch for each group
 
-`JITEngine::execute` walks the plan's groups in order. For each group it
+`JITEngine::execute` goes through the groups of the plan in order. For each group, it does these steps:
 
-1. collects the **distinct dats** (by OPS dat index, in order of first appearance — the order of the function's memref parameters) and which of them any member writes;
-2. obtains a pointer for each: the OPS host pointer on the CPU backends; on CUDA `ensureDeviceBuffer(host pointer)`, which allocates a device buffer the first time a dat is seen and copies host → device (initially, and again whenever the host copy has been modified since);
-3. appends the read-only scalars (from the snapshots of §3.3) and, for reductions, scratch buffers (§11.3);
-4. calls `ExecutionEngine::invokePacked(name, args)` — the arguments are an array of pointers to the values, which with the bare-pointer convention is exactly the group function's signature;
-5. synchronises (`cuCtxSynchronize` on CUDA), updates the profiler and the launch log, folds reductions, and marks every dat the group wrote **host-dirty** on CUDA.
+1. It collects the **different dats**, by the OPS dat index, in the order of first appearance. This is the order of the memref parameters of the function. It also finds which of these dats any member writes.
+2. It gets a pointer for each dat. On the CPU backends, this is the OPS host pointer. On CUDA, it is `ensureDeviceBuffer(host pointer)`. This function allocates a device buffer the first time that it sees a dat. It copies the dat from the host to the device when it allocates the buffer, and again after each modification of the host copy.
+3. It appends the read-only scalars (from the snapshots of §3.3) and, for reductions, scratch buffers (§11.3).
+4. It calls `ExecutionEngine::invokePacked(name, args)`. The arguments are an array of pointers to the values. With the bare-pointer convention, this array matches the signature of the group function exactly.
+5. It synchronises (`cuCtxSynchronize` on CUDA). It updates the profiler and the launch log. It folds the reductions. On CUDA, it marks each dat that the group wrote as **host-dirty**.
 
-The launch log (`OPS_MLIR_LAUNCH_LOG=file`) has one line per launch: kind (`G` group, `H` host loop), index, seconds, bytes moved according to the traffic model, the function, and the loops fused into it. The first
-seven launches of the TGV run (the initial condition, then one Runge–Kutta stage's queue of §5):
+The launch log (`OPS_MLIR_LAUNCH_LOG=file`) has one line for each launch. Each line has these items, in this order:
+
+* the kind (`G` group, `H` stock loop)
+* the index
+* the time in seconds
+* the bytes moved, according to the traffic model
+* the function
+* the loops in the group
+
+The first 7 launches of the TGV run are the initial condition and then the queue of one Runge–Kutta stage of §5:
 
 ```text
 G	0	0.000339416	703040	ops_par_loop_opensbliblock00Kernel039_0	opensbliblock00Kernel039
@@ -1526,29 +1590,37 @@ G	5	0.000231454	1703936	ops_par_loop_group_4	opensbliblock00Kernel013+opensblibl
 G	6	0.000028666	819200	ops_par_loop_opensbliblock00Kernel040_16	opensbliblock00Kernel040
 ```
 
-### 11.2 Keeping host and device coherent
+### 11.2 How the host and the device stay coherent
 
-Every dat has a device buffer (CUDA only) with two flags: `dirty` (the host copy is newer: copy before the next launch) and `hostDirty` (the device copy is newer: copy back before the host looks).
-A launch sets `hostDirty` on the dats it wrote. Every host-visible OPS call in the wrapper (§4) flushes the queue and copies back the dats it is about to expose; host writes through `ops_dat_set_data` etc. set `dirty`.
-Halo exchanges (`ops_halo_transfer`) flush first. On CUDA, a 3-D exchange between dats of equal element size with the ordinary axis directions (TGV's periodic boundaries) is done as a device-to-device 3-D copy; any other exchange goes through the host.
-Data therefore stays on the GPU between time steps; only what the application inspects crosses the bus.
+Each dat has a device buffer (CUDA only) with two flags. `dirty` means that the host copy is newer, so the runtime copies it before the next launch. `hostDirty` means that the device copy is newer, so the runtime copies it back before the host looks at it.
+
+A launch sets `hostDirty` on the dats that it wrote. Each OPS call in the wrapper (§4) that the host can see flushes the queue. It also copies back the dats that the call will expose. A host write through `ops_dat_set_data` or a similar function sets `dirty`.
+
+A halo exchange (`ops_halo_transfer`) flushes the queue first. On CUDA, an exchange is a device-to-device 3-D copy when three things are true. The exchange is 3-D. The dats have equal element size. The exchange uses the ordinary axis directions (the periodic boundaries of TGV). Any other exchange goes through the host.
+
+Because of this, the data stays on the GPU between time steps. Only the data that the application inspects crosses the bus.
 
 ### 11.3 Reductions at run time
 
-A group with a reduction gets one scratch buffer per reduction element, sized for the group's box, in the order the xDSL pass declared the scratch fields. For `calc_dt_kernel_min` of §7.9 (a box of 6 × 14 points) that is 84 doubles. Per flush:
+A group with a reduction gets one scratch buffer for each reduction element. The size of the buffer is the size of the box of the group. The order of the buffers is the order in which the xDSL pass declared the scratch fields. For `calc_dt_kernel_min` of §7.9, the box is 6 × 14 points, so the buffer has 84 doubles. In each flush, the runtime does these steps:
 
-1. the scratch buffer is filled with the operation's identity (`+inf` here): a host loop on the CPU backends, a PTX `fill` kernel on the GPU. Points a guarded or collapsed kernel never writes keep the identity;
-2. the group function runs and writes this point's contribution to each point it visits;
-3. the buffer is **folded** to one value by a fixed schedule: on the host a fixed number of chunks are added in order and combined in order; on the GPU a PTX `red` kernel (256-thread blocks, a grid-stride slice per thread, a shared-memory fold, up to 2048 blocks)
-   then once more as a single block over the per-block results. The schedule depends only on the box size, never on the number of threads, so the result is deterministic;
-4. the folded value is combined into the OPS reduction handle (`+`, `min`, `max`), where `ops_reduction_result` later finds it.
+1. It fills the scratch buffer with the identity of the operation (`+inf` here). On the CPU backends, code on the host does this. On the GPU, a PTX `fill` GPU kernel does this. Points that a guarded or collapsed generated kernel never writes keep the identity.
+2. The group function runs. For each point that it visits, it writes the contribution of that point.
+3. It **folds** the buffer to one value in a fixed order:
+   * On the host, it adds a fixed number of chunks in order. Then it combines the chunks in order.
+   * On the GPU, a PTX `red` kernel does the fold. It uses blocks of 256 threads and up to 2048 blocks. Each thread folds a grid-stride slice. Each block folds in shared memory.
+     Then a single block does the fold one more time over the results of the blocks.
+   * The order depends only on the size of the box, never on the number of threads. So the result is deterministic.
+4. It combines the folded value into the OPS reduction handle (`+`, `min`, `max`). `ops_reduction_result` later finds the value there.
 
-A sum is not added in the sequential loop's order, so it can differ from the stock result in the last digits (min and max are exact). The helpers are native C++ and PTX (`lib/runtime/Reduction.cpp`) rather than generated MLIR.
+The runtime does not add a sum in the order of the sequential loop. So the sum can be different from the stock result in the last digits. The results of `min` and `max` are exact. The helpers are native C++ and PTX (`lib/runtime/Reduction.cpp`). They are not MLIR that the runtime makes.
 
 ### 11.4 Loops that run on the host
 
-A loop that the accessor translator rejected (none in CloverLeaf any more) is run through its fallback closure: its dats are copied back if they are on the device, the stock OPS loop runs, and the dats it wrote are marked stale on the device. It is a barrier in the queue, so
-fusion never crosses it.
+A loop that the accessor translator rejected runs through its fallback closure. Now, CloverLeaf has no such loop. The runtime copies back the dats of the loop if they are on the device. Then the stock OPS loop runs.
+
+The runtime marks the dats that the loop wrote as stale on the device. The loop is a barrier in the queue, so
+the planner never fuses loops across it.
 
 ## 12. Three complete traces
 
@@ -1556,59 +1628,59 @@ fusion never crosses it.
 
 | stage | artefact |
 |---|---|
-| 1 capture | five `LoopDesc`s, each `range = -2…18` in 3 dims, 3–6 dats; `Kernel019` reads `u0,u1,u2`, which the earlier loops write |
-| 2 flush | `compile_and_execute()` after the loops of the stage (17 loops queued) |
-| 3 plan | 17 loops → 6 kernels, `K0 = #0…#4`, 1.56× less traffic |
-| 4 IR | five `ops.par_loop` with `fuse_group = 0` |
-| 5 xDSL | `ops_par_loop_group_0(10 fields)`: one `stencil.apply`, 5 accesses, 5 forwarded/stored results, bounds `[3,3,3]…[23,23,23]` (§7.3) |
-| 6 kernels | five `func.func` of 2–5 scalars each, constants `gama`, `Minf` baked (§8.1) |
-| 7 backend | seq: flat 30-op loop body, vectorised; OpenMP: `omp.wsloop collapse(3)`; CUDA: `gpu.func`, grid `1×5×20`, block `32×4×1` |
-| 8 engine | one `ExecutionEngine` for all 6 groups, cached under the queue's `ModuleKey` |
-| 9 execute | `invokePacked("ops_par_loop_group_0", [10 dat pointers])`, 5 loads + 5 stores per point |
+| 1 capture | 5 `LoopDesc`s. Each has `range = -2…18` in 3 dimensions and 3–6 dats. `Kernel019` reads `u0,u1,u2`, and the earlier loops write them. |
+| 2 flush | `compile_and_execute()` after the loops of the stage (the queue has 17 loops) |
+| 3 plan | 17 loops → 6 generated kernels, `K0 = #0…#4`, 1.56× less traffic |
+| 4 IR | 5 `ops.par_loop` with `fuse_group = 0` |
+| 5 xDSL | `ops_par_loop_group_0(10 fields)` with 1 `stencil.apply`, 5 accesses, 5 results (forwarded or stored) and bounds `[3,3,3]…[23,23,23]` (§7.3) |
+| 6 user kernels | 5 `func.func`, each with 2–5 scalars. The translator baked in the constants `gama` and `Minf` (§8.1). |
+| 7 backend | seq: one flat body of 30 operations, vectorised. OpenMP: `omp.wsloop collapse(3)`. CUDA: `gpu.func`, grid `1×5×20`, block `32×4×1`. |
+| 8 engine | 1 `ExecutionEngine` for all 6 groups, in the cache with the `ModuleKey` of the queue |
+| 9 run | `invokePacked("ops_par_loop_group_0", [10 dat pointers])`, 5 loads + 5 stores for each point |
 
 **CloverLeaf `calc_dt_kernel_min`**
 
 | stage | artefact |
 |---|---|
-| 1 | `LoopDesc` with one dat arg (`work_array1`, `OPS_READ`) and one reduction arg (`OPS_MIN`, element kind `double`, deduced from the kernel's `double*`) |
-| 2 | queued after the viscosity and `calc_dt_kernel` loops; flushed by the `ops_reduction_result` that ends `calc_dt` |
-| 3 | a reduction loop is a fusion barrier: own group |
-| 5 | `ops_par_loop_calc_dt_kernel_min_0(%0: memref<12x20>, %1: memref<6x14>)` — dat in, scratch field out (§7.9) |
+| 1 | A `LoopDesc` with 1 dat argument (`work_array1`, `OPS_READ`) and 1 reduction argument (`OPS_MIN`, element kind `double`). The element kind comes from the `double*` of the user kernel. |
+| 2 | The loop is in the queue after the viscosity and `calc_dt_kernel` loops. The `ops_reduction_result` call that ends `calc_dt` flushes the queue. |
+| 3 | A reduction loop is a barrier for fusion. It has its own group. |
+| 5 | `ops_par_loop_calc_dt_kernel_min_0(%0: memref<12x20>, %1: memref<6x14>)`. The dat is the input and the scratch field is the output (§7.9). |
 | 6 | `calc_dt_kernel_min(f64) -> f64` = `select(+inf < x, +inf, x)` (§8.5) |
-| 9 | fill scratch with `+inf`; launch; fold 84 values; `min` into the handle |
+| 9 | The runtime fills the scratch buffer with `+inf`. It launches the generated kernel. It folds 84 values. It combines them with `min` into the handle. |
 
 **CloverLeaf `initialise_chunk_kernel_xx`**
 
 | stage | artefact |
 |---|---|
-| 1 | 2-D loop, range `-2…18 × -2…10`; args: `xx` (`OPS_WRITE`, stencil stride `(1,0)`), `ops_arg_idx` |
-| 2 | accepted by `runsOnHost`: all dats along x only, `WRITE`, kernel reads `idx[0]` only |
-| 5 | `ops_par_loop_…_xx_0(%0: memref<20xi32>)`: a **1-D** `scf.parallel` over the 20 elements; `idx[1]` filled with 0 (§7.8) |
-| 6 | `initialise_chunk_kernel_xx(memref<2xi32>) -> i32`: `idx[0] - 2` |
+| 1 | A 2-D loop with range `-2…18 × -2…10`. Its arguments are `xx` (`OPS_WRITE`, stencil stride `(1,0)`) and `ops_arg_idx`. |
+| 2 | `runsOnHost` accepts the loop. All dats go along `x` only. The access is `WRITE`. The user kernel reads only `idx[0]`. |
+| 5 | `ops_par_loop_…_xx_0(%0: memref<20xi32>)` has a **1-D** `scf.parallel` over the 20 elements. `idx[1]` holds 0 (§7.8). |
+| 6 | `initialise_chunk_kernel_xx(memref<2xi32>) -> i32` returns `idx[0] - 2` |
 
-## 13. Inspecting every stage
+## 13. Inspect each stage
 
-All of the following are environment variables of the running application. The shell needs the xDSL environment (`source env_setup`) or the xDSL stage fails with `No module named 'xdsl'`.
+Set the variables below as environment variables of the application when it runs. The shell must have the xDSL environment (`source env_setup`). Without it, the xDSL stage fails with `No module named 'xdsl'`.
 
 | variable | shows | section |
 |---|---|---|
-| `OPS_MLIR_EXPLAIN=1` | for each kernel `[jit]` or `[host]: reason` | §4, §8.6 |
-| `OPS_MLIR_PLAN=1` | for each distinct queue: loops → kernels, loops moved, why kernels were split, traffic estimate | §5 |
-| `OPS_MLIR_DUMP_LOWERED=1` | the `ops.par_loop` module and the module after xDSL (loops over memrefs, kernels still declarations) | §6, §7.3 |
+| `OPS_MLIR_EXPLAIN=1` | for each user kernel, `[jit]` or `[host]: reason` | §4, §8.6 |
+| `OPS_MLIR_PLAN=1` | for each different queue: the loops → generated kernels, the loops that the planner moved, why the planner split groups, the traffic estimate | §5 |
+| `OPS_MLIR_DUMP_LOWERED=1` | the `ops.par_loop` module, and the module after xDSL (loops over memrefs, user kernels still declarations) | §6, §7.3 |
 | `OPS_MLIR_DUMP_STENCIL=1` | the stencil-dialect IR between the two xDSL passes | §7.3 |
-| `OPS_DEBUG_PASS_IR=1` | the module before and after **every** backend pass (very large; includes the translated kernel bodies in the first dump) | §8, §9 |
-| `OPS_MLIR_DUMP_LLVM=1` | the optimised LLVM IR that is compiled | §9.1 |
-| `OPS_MLIR_DUMP_FAILED=1` | the module when backend lowering fails | |
-| `OPS_MLIR_LAUNCH_LOG=file` | one line per launch (function, loops fused, time) | §11.1 |
-| `OPS_MLIR_STATS=1` | loops / launches / flushes / compiles, compile-time breakdown, host-fallback count | §10 |
-| `OPS_MLIR_VERIFY=1` | every JIT loop is re-run through the stock code and **all** dats (and reduction handles) are compared | |
-| `OPS_MLIR_JIT_ONLY=k1,k2` | (accessor path only) only these kernels are JIT-compiled, the rest run on the host (isolates one kernel; the other loops become barriers) | |
-| `OPS_MLIR_HOST=all` | every accessor loop through the stock path | |
-| `OPS_MLIR_DEBUG_CANARY=1` | guard bands around reduction scratch buffers (host backends) | §11.3 |
-| `OPS_MLIR_FUSION=0`, `_FUSION_REORDER=0`, `_FUSION_GUARDED=0`, `_FUSION_MAX=n`, `_FUSION_BOX_RATIO=r`, `_FUSION_PLACEMENT=latest` | the planner's knobs | §5 |
-| `OPS_BACKEND=seq\|openmp\|cuda`, `OPS_GPU_SM`, `OPS_PTXAS_OPTS`, `OPS_MLIR_CUDA_RUNTIME` | backend, CUDA target, ptxas flags, runtime library | §9 |
+| `OPS_DEBUG_PASS_IR=1` | the module before and after **every** backend pass. The output is very large. The first dump shows the bodies of the user kernels after the translation. | §8, §9 |
+| `OPS_MLIR_DUMP_LLVM=1` | the optimised LLVM IR that the engine compiles | §9.1 |
+| `OPS_MLIR_DUMP_FAILED=1` | the module when the backend fails to lower it | |
+| `OPS_MLIR_LAUNCH_LOG=file` | one line for each launch (function, loops in the group, time) | §11.1 |
+| `OPS_MLIR_STATS=1` | the numbers of loops, launches, flushes and compiles. The compile time for each stage. The number of stock loops. | §10 |
+| `OPS_MLIR_VERIFY=1` | the runtime runs each JIT loop again with the stock code. It compares **all** dats (and reduction handles). | |
+| `OPS_MLIR_JIT_ONLY=k1,k2` | Accessor path only. The runtime compiles only these user kernels with the JIT. The other loops run on the host. This isolates one user kernel, and the other loops become barriers. | |
+| `OPS_MLIR_HOST=all` | each accessor loop runs as a stock loop | |
+| `OPS_MLIR_DEBUG_CANARY=1` | canary bands around the scratch buffers of reductions (host backends) | §11.3 |
+| `OPS_MLIR_FUSION=0`, `_FUSION_REORDER=0`, `_FUSION_GUARDED=0`, `_FUSION_MAX=n`, `_FUSION_BOX_RATIO=r`, `_FUSION_PLACEMENT=latest` | the settings of the planner | §5 |
+| `OPS_BACKEND=seq\|openmp\|cuda`, `OPS_GPU_SM`, `OPS_PTXAS_OPTS`, `OPS_MLIR_CUDA_RUNTIME` | the backend, the CUDA target, the ptxas flags, the runtime library | §9 |
 
-The listings of this document were produced with `docs/data/compilation_flow/capture.sh`:
+The listings of this document come from `docs/data/compilation_flow/capture.sh`. These are its commands:
 
 ```bash
 TGV_N=16 TGV_NITER=1 OPS_BACKEND=seq OPS_MLIR_PLAN=1 OPS_MLIR_DUMP_STENCIL=1 OPS_MLIR_DUMP_LOWERED=1 \
@@ -1618,19 +1690,24 @@ OPS_BACKEND=seq OPS_MLIR_JIT_ONLY=revert_kernel,accelerate_kernel OPS_MLIR_PLAN=
     OPS_MLIR_DUMP_STENCIL=1 OPS_MLIR_DUMP_LOWERED=1 build/apps/c/cloverleaf_2d/cloverleaf_2d    # §7.7
 ```
 
-(`cloverleaf_2d` is run in a directory containing a `clover.in`.)
+Run `cloverleaf_2d` in a directory that has a file `clover.in`.
 
-## 14. Things found while writing this, and limits that matter
+## 14. Findings from the work on this document, and limits that matter
 
-1. **The module/plan cache key ignored which dat is which — fixed.** Two queues with identical kernels, ranges, shapes and access modes but a different aliasing pattern (`copy(A→B); copy(B→C)` versus
-   `copy(A→B); copy(C→D)`) shared one cached fusion plan and compiled module, and the second silently skipped a write. The key now carries each dat's slot (§5). The e2e case `same_shapes_different_aliasing` fails without the fix. CloverLeaf's and TGV's results were right throughout, so the pattern does not occur in them (this was not audited exhaustively).
-2. **Overshoot GPU threads redo the last point instead of being masked (§9.2).** Harmless for point-wise functions of unwritten inputs, which is almost everything. For an `OPS_RW` dat updated in place at a point visited by two *warps* — a range whose
-   extent in `y` is not a multiple of the block's 4 (the overshooting threads of `x` share a warp with the real last point and run in lockstep; `z` has block size 1) — the second visit could read the first one's result and apply the update twice. The memory model does not rule this out. It was not observed:
-   `in_place_update_applied_once` repeats an in-place update 200 times on a 37×23 range on the GPU, and all CloverLeaf and TGV QA values are correct. The robust fix is a bounds test around the body; it has not been made because it
-   changes the register use of every kernel and all performance numbers.
-3. **The pointer-style translator bakes registered globals into the IR (§8.1)** without making their value part of the module key. TGV is safe (`dt` is constant, the per-stage values go through `ops_arg_gbl`), but a pointer-style application that changes a
-   registered global in a time loop would keep the first value. The accessor translator passes registered globals as parameters and only bakes the integer ones it needs to unroll, which it does key on.
-4. **Reductions are folded in a different order from the sequential loop** (§11.3): deterministic, not bitwise equal for sums. CloverLeaf's QA value moves from `8.5e-14 %` to `1.2e-11 %` on the larger deck, far under the `1e-3 %` pass level.
-5. **Data-dependent offsets are resolved by selecting among the declared stencil points** (§8.3). A kernel that computes an offset outside its stencil is mistranslated rather than rejected.
-6. **Fusion is point-local only.** A loop that reads a neighbour of something an earlier loop writes never joins that loop's kernel; stencil producer–consumer fusion with redundant halo computation is not implemented ([loop_fusion.md §12](loop_fusion.md)).
-   Reduction loops are fusion barriers.
+1. **The key of the module cache and plan cache ignored which dat is which — fixed.** Two queues had the same user kernels, ranges, shapes and access modes, but a different aliasing pattern (`copy(A→B); copy(B→C)` versus
+   `copy(A→B); copy(C→D)`). They shared one cached plan and one compiled module, and the second queue silently skipped a write. The key now has the slot of each dat (§5). The e2e case `same_shapes_different_aliasing` fails without the fix.
+
+   The results of CloverLeaf and TGV were correct at all times. So this pattern does not occur in them. The writers did not audit this completely.
+2. **Overshoot GPU threads do the last point again. They do not use a mask (§9.2).** This is harmless for point-wise functions of inputs that the group does not write. This is almost all functions.
+
+   The exception is an `OPS_RW` dat that the group updates in place at a point that two *warps* visit. This happens when the extent of the range in `y` is not a multiple of the block size 4. (The overshooting threads of `x` share a warp with the real last point and run in lockstep. `z` has block size 1.)
+   In this case, the second visit can read the result of the first visit and apply the update two times. The memory model does not rule this out.
+
+   Nobody observed this. `in_place_update_applied_once` repeats an in-place update 200 times on a 37×23 range on the GPU, and all CloverLeaf and TGV QA values are correct. The robust fix is a bounds test around the body. Nobody made this fix, because it
+   changes the register use of each GPU kernel and all the performance numbers.
+3. **The pointer-style translator bakes registered globals into the IR (§8.1)** and does not put their value in the key. TGV is safe, because `dt` is constant and the values for each stage go through `ops_arg_gbl`. But if a pointer-style application changes a
+   registered global at each time step, the runtime keeps the first value. The accessor translator passes registered globals as parameters. It bakes only the integer globals that it needs to unroll, and it puts these in the key.
+4. **The runtime folds reductions in a different order from the sequential loop** (§11.3). The result is deterministic, but the sums are not bitwise equal. The QA value of CloverLeaf changes from `8.5e-14 %` to `1.2e-11 %` on the larger deck. This is far under the pass level of `1e-3 %`.
+5. **The translator resolves data-dependent offsets with a selection among the declared stencil points** (§8.3). A user kernel that computes an offset outside its stencil gets a wrong translation. The translator does not reject it.
+6. **Fusion is point-local only.** A loop that reads a stencil point near a point that an earlier loop writes never joins the group of the earlier loop. The runtime does not do producer–consumer fusion of stencils with redundant halo computation ([loop_fusion.md §12](loop_fusion.md)).
+   A reduction loop is a barrier for fusion.
