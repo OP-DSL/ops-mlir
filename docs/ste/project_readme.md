@@ -128,6 +128,7 @@ The document [`docs/compilation_flow.md`](compilation_flow.md) follows loops of 
 The document [`docs/loop_fusion.md`](loop_fusion.md) describes the design, the diagrams and the fusion rules. The document [`docs/tgv_evaluation.md`](tgv_evaluation.md) has measurements on the Taylor-Green vortex.
 
 CloverLeaf 2D and 3D from the OPS repository run without changes. They run fully through the JIT: the runtime compiles every loop. A fallback to the stock implementation remains for the user kernels that the translator rejects. A differential verifier checks the result. See [`docs/cloverleaf.md`](cloverleaf.md). For the larger decks on the A100 (fusion size, register pressure, occupancy), see [`docs/cloverleaf_large.md`](cloverleaf_large.md).
+
 These documents also exist in the original English in [`docs/`](..).
 
 | Variable | Default | Meaning |
