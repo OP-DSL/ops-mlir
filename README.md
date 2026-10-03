@@ -28,7 +28,7 @@ cmake -G Ninja ../llvm \
    -DLLVM_BUILD_EXAMPLES=ON \
    -DLLVM_TARGETS_TO_BUILD="Native;NVPTX;AMDGPU" \
    -DCMAKE_BUILD_TYPE=Release \
-   -DLLVM_ENABLE_ASSERTIONS=ON \
+   -DLLVM_ENABLE_ASSERTIONS=ON
 ninja
 ```
 
@@ -53,10 +53,12 @@ export MLIR_SOURCE_DIR=/path/to/llvm-project/mlir
 export OPS_ROOT=/path/to/OPS/ops/c
 ```
 
-A template is provided in [`env_setup_template`](env_setup_template) — copy/edit it for your
-own paths and `source` it before building:
+A template is provided in [`env_setup_template`](env_setup_template). Copy it to `env_setup`, edit the
+paths in the copy, and `source` it before building:
 
 ```bash
+cp env_setup_template env_setup
+# edit env_setup: set the paths
 source env_setup
 ```
 
@@ -76,7 +78,7 @@ extra env vars or `-D` flags are needed.
 CMake configuration will fail with a clear error if any of the five
 environment variables above are not set.
 
-## 5. Use xDSL Fork
+### 5. Use xDSL Fork
 Needed for OPS reductions.
 
 ```bash
