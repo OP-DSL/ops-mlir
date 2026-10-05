@@ -11,3 +11,8 @@ target_link_libraries(KernelIRBuilderTest
 )
 
 add_test(NAME KernelIRBuilderTest COMMAND KernelIRBuilderTest)
+
+# Pure-C++ planner tests (no JIT / GPU needed).
+add_executable(FusionPlannerTest FusionPlannerTest.cpp)
+target_link_libraries(FusionPlannerTest PRIVATE OPSRuntime)
+add_test(NAME FusionPlannerTest COMMAND FusionPlannerTest)

@@ -13,8 +13,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-// TODO: Support more than just `double` kernel parameters and locals.
-
 #include "runtime/KernelIRBuilder.h"
 
 #include "clang/AST/ASTContext.h"
@@ -28,8 +26,10 @@
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/Builders.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 
+#include <cstdlib>
 #include <map>
 
 namespace ops_mlir {
@@ -61,6 +61,66 @@ private:
   clang::FunctionDecl *found_ = nullptr;
 };
 
+
+/// Floating-point scalar types the translator understands (f32 / f64).
+static bool isFloatingScalar(clang::QualType type) {
+  return type->isSpecificBuiltinType(clang::BuiltinType::Float) ||
+         type->isSpecificBuiltinType(clang::BuiltinType::Double);
+}
+
+/// MLIR type for a clang `float`/`double`; null for anything else.
+static mlir::Type mlirFloatType(mlir::Builder &b, clang::QualType type) {
+  if (type->isSpecificBuiltinType(clang::BuiltinType::Float))
+    return b.getF32Type();
+  if (type->isSpecificBuiltinType(clang::BuiltinType::Double))
+    return b.getF64Type();
+  return {};
+}
+
+static bool involvesF64(mlir::Type type) {
+  if (auto memref = mlir::dyn_cast<mlir::MemRefType>(type))
+    type = memref.getElementType();
+  return type.isF64();
+}
+
+/// A kernel whose interface is single precision must not compute in double:
+/// an unsuffixed literal (`0.5`), a double constant, or a math call that only
+/// has a double overload (`cos(float)` without <cmath>) silently promotes the
+/// expression, costs GPU throughput and changes results. Reports the first
+/// offending op. Returns false (reject the kernel) only when
+/// OPS_MLIR_STRICT_FP is set; otherwise it is a warning.
+static bool checkNoImplicitUpcast(mlir::func::FuncOp fn,
+                                  llvm::StringRef kernelName,
+                                  llvm::raw_ostream &errs) {
+  for (mlir::Type t : fn.getFunctionType().getInputs())
+    if (involvesF64(t))
+      return true;
+  for (mlir::Type t : fn.getFunctionType().getResults())
+    if (involvesF64(t))
+      return true;
+
+  mlir::Operation *offender = nullptr;
+  fn.walk([&](mlir::Operation *op) {
+    if (offender || op == fn.getOperation())
+      return;
+    for (mlir::Type t : llvm::concat<const mlir::Type>(
+             llvm::to_vector(op->getOperandTypes()),
+             llvm::to_vector(op->getResultTypes())))
+      if (involvesF64(t))
+        offender = op;
+  });
+  if (!offender)
+    return true;
+
+  errs << "KernelIRBuilder: " << (std::getenv("OPS_MLIR_STRICT_FP") ? "error" : "warning")
+       << ": kernel '" << kernelName
+       << "' has only single-precision parameters but computes in double ('"
+       << offender->getName().getStringRef()
+       << "'): an unsuffixed literal, a double constant or a double-only math "
+          "call promoted the expression (write 1.0f, declare the constant "
+          "float, call sinf)\n";
+  return !std::getenv("OPS_MLIR_STRICT_FP");
+}
 
 /// Maps a <math.h> function name to the math dialect op that computes it.
 /// Returns null for names outside the supported set.
@@ -107,10 +167,12 @@ static MathOpBuilder lookupMathFunction(llvm::StringRef name) {
 }
 
 
-// TODO: Support more than just `double` kernel parameters and locals.
-static bool isDoubleStructPointer(
+/// A pointer to a struct whose fields are all the same floating type
+/// (float or double); `elementType` receives that type.
+static bool isFloatStructPointer(
     clang::QualType type,
-    llvm::SmallVectorImpl<const clang::FieldDecl *> &outFieldOrder) {
+    llvm::SmallVectorImpl<const clang::FieldDecl *> &outFieldOrder,
+    clang::QualType &elementType) {
   if (!type->isPointerType())
     return false;
   const clang::RecordType *rt = type->getPointeeType()->getAs<clang::RecordType>();
@@ -119,8 +181,13 @@ static bool isDoubleStructPointer(
   const clang::RecordDecl *rd = rt->getDecl();
   outFieldOrder.clear();
   for (const clang::FieldDecl *f : rd->fields()) {
-    if (!f->getType()->isSpecificBuiltinType(clang::BuiltinType::Double))
+    if (!isFloatingScalar(f->getType()))
       return false;
+    if (!outFieldOrder.empty() &&
+        f->getType().getCanonicalType() != elementType.getCanonicalType())
+      return false;
+    if (outFieldOrder.empty())
+      elementType = f->getType();
     outFieldOrder.push_back(f);
   }
   return !outFieldOrder.empty();
@@ -149,21 +216,29 @@ public:
     case clang::CK_LValueToRValue:
     case clang::CK_NoOp:
       return sub;
-    case clang::CK_IntegralToFloating:
-      return builder_.create<mlir::arith::SIToFPOp>(
-          loc_, builder_.getF64Type(), sub);
-    case clang::CK_FloatingCast:
-      // KernelIRBuilder always materializes floating literals/results
-      // as f64 directly (see VisitFloatingLiteral), so a float->double
-      // promotion node has nothing left to do here.
-      return sub;
+    case clang::CK_IntegralToFloating: {
+      mlir::Type dst = mlirFloatType(builder_, expr->getType());
+      if (!dst)
+        return fail(expr, "integer converted to a non-float/double type");
+      return builder_.create<mlir::arith::SIToFPOp>(loc_, dst, sub);
+    }
+    case clang::CK_FloatingCast: {
+      mlir::Type dst = mlirFloatType(builder_, expr->getType());
+      if (!dst || !mlir::isa<mlir::FloatType>(sub.getType()))
+        return fail(expr, "unsupported floating cast (only float/double)");
+      if (dst == sub.getType())
+        return sub;
+      if (dst.getIntOrFloatBitWidth() > sub.getType().getIntOrFloatBitWidth())
+        return builder_.create<mlir::arith::ExtFOp>(loc_, dst, sub);
+      return builder_.create<mlir::arith::TruncFOp>(loc_, dst, sub);
+    }
     default:
       return fail(expr, "unsupported implicit cast");
     }
   }
 
   mlir::Value VisitDeclRefExpr(const clang::DeclRefExpr *expr) {
-    // Covers both kernel parameters and local `double` variables declared
+    // Covers both kernel parameters and local float/double variables declared
     // earlier in the body -- both get seeded into `values_` (params up
     // front, locals as their DeclStmt is walked; see StmtEmitter).
     auto it = values_.find(expr->getDecl());
@@ -189,9 +264,12 @@ public:
   }
 
   mlir::Value VisitFloatingLiteral(const clang::FloatingLiteral *expr) {
+    mlir::Type type = mlirFloatType(builder_, expr->getType());
+    if (!type)
+      return fail(expr, "floating literal of unsupported type");
     double value = expr->getValueAsApproximateDouble();
     return builder_.create<mlir::arith::ConstantOp>(
-        loc_, builder_.getF64FloatAttr(value));
+        loc_, builder_.getFloatAttr(type, value));
   }
 
   mlir::Value VisitIntegerLiteral(const clang::IntegerLiteral *expr) {
@@ -237,6 +315,10 @@ public:
         callee && callee->getDeclName().isIdentifier();
     MathOpBuilder mathOp =
         hasSimpleName ? lookupMathFunction(callee->getName()) : nullptr;
+    // sinf/expf/... are the single-precision spellings of the same ops; the
+    // math dialect ops are polymorphic over f32/f64.
+    if (!mathOp && hasSimpleName && callee->getName().ends_with("f"))
+      mathOp = lookupMathFunction(callee->getName().drop_back());
     if (!mathOp) {
       return fail(expr, "call to unsupported function '" +
                             (callee ? callee->getNameAsString() : "<unknown>") +
@@ -321,6 +403,11 @@ private:
       return builder_.create<mlir::arith::ConstantOp>(
           loc_, builder_.getF64FloatAttr(value));
     }
+    if (type->isSpecificBuiltinType(clang::BuiltinType::Float)) {
+      float value = *reinterpret_cast<const float *>(addr);
+      return builder_.create<mlir::arith::ConstantOp>(
+          loc_, builder_.getF32FloatAttr(value));
+    }
     if (type->isSpecificBuiltinType(clang::BuiltinType::Int)) {
       int32_t value = *reinterpret_cast<const int32_t *>(addr);
       return builder_.create<mlir::arith::ConstantOp>(
@@ -328,7 +415,7 @@ private:
     }
     return fail(nullptr, "global '" + var->getNameAsString() +
                              "' has an unsupported type (only extern "
-                             "double/int globals can be baked in)");
+                             "float/double/int globals can be baked in)");
   }
 
   mlir::OpBuilder &builder_;
@@ -339,9 +426,8 @@ private:
   bool ok_ = true;
 };
 
-// TODO: Support more than just `double` kernel parameters and locals.
 /// Walks the body of a `void` out-pointer kernel: a sequence of
-///   double <name> = <expr>;             (locals, evaluated once and cached)
+///   float|double <name> = <expr>;             (locals, evaluated once and cached)
 ///   <out>-><field> = <expr>;             (stores into the out-pointer's memref)
 /// in source order. Unlike ExprEmitter's single-`return <expr>;` kernels,
 /// these have multiple statements and must thread newly-declared locals
@@ -374,7 +460,7 @@ public:
         visitAssign(bin);
       } else {
         fail(stmt, "unsupported statement in a multi-statement kernel body "
-                    "(only `double x = <expr>;` locals and `out->field = "
+                    "(only `float|double x = <expr>;` locals and `out->field = "
                     "<expr>;` stores are supported)");
       }
     }
@@ -386,8 +472,8 @@ private:
       if (!ok_)
         return;
       const auto *var = llvm::dyn_cast<clang::VarDecl>(d);
-      if (!var || !var->getType()->isSpecificBuiltinType(clang::BuiltinType::Double)) {
-        fail(declStmt, "local variable declarations must be `double`");
+      if (!var || !isFloatingScalar(var->getType())) {
+        fail(declStmt, "local variable declarations must be `float` or `double`");
         return;
       }
       if (!var->hasInit()) {
@@ -505,16 +591,15 @@ mlir::func::FuncOp KernelIRBuilder::generate(
   }
 
   // Two supported kernel shapes:
-  //  - `double kernel(...)`: a single `return <expr>;` (one write).
-  //  - `void kernel(..., Result *out)`: a sequence of `double x = <expr>;`
+  //  - `float|double kernel(...)`: a single `return <expr>;` (one write).
+  //  - `void kernel(..., Result *out)`: a sequence of `float|double x = <expr>;`
   //     locals and `out->field = <expr>;` stores (more than one write) --
   //     see opensbliblock00Kernel039's out-pointer comment for why.
   bool isVoidReturn = decl->getReturnType()->isVoidType();
-  bool isDoubleReturn =
-      decl->getReturnType()->isSpecificBuiltinType(clang::BuiltinType::Double);
-  if (!isVoidReturn && !isDoubleReturn) {
+  bool isFloatReturn = isFloatingScalar(decl->getReturnType());
+  if (!isVoidReturn && !isFloatReturn) {
     errs << "KernelIRBuilder: '" << kernelName
-        << "' must return double (single write) or void (multi-write, via "
+        << "' must return float/double (single write) or void (multi-write, via "
            "an out-pointer parameter)\n";
     return nullptr;
   }
@@ -525,17 +610,19 @@ mlir::func::FuncOp KernelIRBuilder::generate(
   llvm::SmallVector<mlir::Type, 4> paramTypes;
   const clang::ParmVarDecl *outParam = nullptr;
   llvm::SmallVector<const clang::FieldDecl *, 8> outFields;
+  clang::QualType outElementType;
   for (const clang::ParmVarDecl *param : decl->parameters()) {
     clang::QualType type = param->getType();
     llvm::SmallVector<const clang::FieldDecl *, 8> fields;
-    if (type->isSpecificBuiltinType(clang::BuiltinType::Double)) {
-      paramTypes.push_back(builder.getF64Type());
+    clang::QualType fieldType;
+    if (isFloatingScalar(type)) {
+      paramTypes.push_back(mlirFloatType(builder, type));
     } else if (type->isPointerType() &&
               type->getPointeeType()->isSpecificBuiltinType(
                   clang::BuiltinType::Int)) {
       paramTypes.push_back(
           mlir::MemRefType::get({indexRank}, builder.getI32Type()));
-    } else if (isDoubleStructPointer(type, fields)) {
+    } else if (isFloatStructPointer(type, fields, fieldType)) {
       if (outParam) {
         errs << "KernelIRBuilder: '" << kernelName
             << "' has more than one out-pointer parameter\n";
@@ -543,12 +630,14 @@ mlir::func::FuncOp KernelIRBuilder::generate(
       }
       outParam = param;
       outFields = std::move(fields);
+      outElementType = fieldType;
       paramTypes.push_back(mlir::MemRefType::get(
-          {static_cast<int64_t>(outFields.size())}, builder.getF64Type()));
+          {static_cast<int64_t>(outFields.size())},
+          mlirFloatType(builder, fieldType)));
     } else {
       errs << "KernelIRBuilder: unsupported parameter type for '"
-          << kernelName << "' (only double, const int*, and a pointer to a "
-                            "struct of doubles are supported)\n";
+          << kernelName << "' (only float, double, const int*, and a pointer "
+                            "to a struct of one floating type are supported)\n";
       return nullptr;
     }
   }
@@ -560,8 +649,11 @@ mlir::func::FuncOp KernelIRBuilder::generate(
     return nullptr;
   }
 
+  mlir::Type scalarResult =
+      isFloatReturn ? mlirFloatType(builder, decl->getReturnType())
+                    : mlir::Type{};
   mlir::TypeRange resultTypes =
-      isDoubleReturn ? mlir::TypeRange{builder.getF64Type()} : mlir::TypeRange{};
+      isFloatReturn ? mlir::TypeRange{scalarResult} : mlir::TypeRange{};
   auto funcType = builder.getFunctionType(paramTypes, resultTypes);
   auto funcOp = mlir::func::FuncOp::create(loc, kernelName, funcType);
   funcOp.setPrivate();
@@ -580,7 +672,7 @@ mlir::func::FuncOp KernelIRBuilder::generate(
     return nullptr;
   }
 
-  if (isDoubleReturn) {
+  if (isFloatReturn) {
     // Kernels in this codebase with a single write are a single
     // `return <expr>;` -- anything richer is out of scope for this shape
     // (use the void out-pointer shape instead for multiple writes/locals).
@@ -602,6 +694,10 @@ mlir::func::FuncOp KernelIRBuilder::generate(
     }
 
     builder.create<mlir::func::ReturnOp>(loc, result);
+    if (!checkNoImplicitUpcast(funcOp, kernelName, errs)) {
+      funcOp.erase();
+      return nullptr;
+    }
     return funcOp;
   }
 
@@ -614,6 +710,10 @@ mlir::func::FuncOp KernelIRBuilder::generate(
   }
 
   builder.create<mlir::func::ReturnOp>(loc);
+  if (!checkNoImplicitUpcast(funcOp, kernelName, errs)) {
+    funcOp.erase();
+    return nullptr;
+  }
   return funcOp;
 }
 

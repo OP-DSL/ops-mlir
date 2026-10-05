@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 300" font-family="sans-serif" font-size="12">
+<rect width="640" height="300" fill="white"/>
+<text x="320.0" y="22" text-anchor="middle" font-size="14" font-weight="bold">single precision, CUDA, 256³</text>
+<line x1="70" x2="620" y1="205.0" y2="205.0" stroke="#ddd"/>
+<text x="64" y="209.0" text-anchor="end">0</text>
+<line x1="70" x2="620" y1="163.75" y2="163.75" stroke="#ddd"/>
+<text x="64" y="167.75" text-anchor="end">6.96</text>
+<line x1="70" x2="620" y1="122.5" y2="122.5" stroke="#ddd"/>
+<text x="64" y="126.5" text-anchor="end">13.9</text>
+<line x1="70" x2="620" y1="81.25" y2="81.25" stroke="#ddd"/>
+<text x="64" y="85.25" text-anchor="end">20.9</text>
+<line x1="70" x2="620" y1="40.0" y2="40.0" stroke="#ddd"/>
+<text x="64" y="44.0" text-anchor="end">27.8</text>
+<text x="14" y="122.5" transform="rotate(-90 14 122.5)" text-anchor="middle">ms / iteration</text>
+<rect x="87.41666666666667" y="61.52173913043478" width="56.833333333333336" height="143.47826086956522" fill="#4c78a8"/>
+<text x="115.83333333333334" y="56.52173913043478" text-anchor="middle">24.2</text>
+<line x1="115.83333333333334" x2="115.83333333333334" y1="60.95831176673568" y2="62.08516649413388" stroke="#333"/>
+<text x="115.83333333333334" y="221" text-anchor="middle">unfused</text>
+<rect x="179.08333333333334" y="83.44795979986196" width="56.833333333333336" height="121.55204020013804" fill="#bab0ac"/>
+<text x="207.5" y="78.44795979986196" text-anchor="middle">20.5</text>
+<line x1="207.5" x2="207.5" y1="83.09507634575569" y2="83.80084325396824" stroke="#333"/>
+<text x="207.5" y="221" text-anchor="middle">adjacent</text>
+<text x="207.5" y="235" text-anchor="middle">same-range</text>
+<rect x="270.74999999999994" y="83.18107315389923" width="56.833333333333336" height="121.81892684610077" fill="#bab0ac"/>
+<text x="299.16666666666663" y="78.18107315389923" text-anchor="middle">20.5</text>
+<line x1="299.16666666666663" x2="299.16666666666663" y1="82.96163302277432" y2="83.40051328502415" stroke="#333"/>
+<text x="299.16666666666663" y="221" text-anchor="middle">adjacent</text>
+<text x="299.16666666666663" y="235" text-anchor="middle">guarded</text>
+<rect x="362.41666666666663" y="86.73363095238095" width="56.833333333333336" height="118.26636904761905" fill="#bab0ac"/>
+<text x="390.8333333333333" y="81.73363095238095" text-anchor="middle">19.9</text>
+<line x1="390.8333333333333" x2="390.8333333333333" y1="86.49936378536921" y2="86.96789811939269" stroke="#333"/>
+<text x="390.8333333333333" y="221" text-anchor="middle">DAG</text>
+<text x="390.8333333333333" y="235" text-anchor="middle">same-range</text>
+<rect x="454.0833333333333" y="86.59722222222221" width="56.833333333333336" height="118.40277777777779" fill="#54a24b"/>
+<text x="482.5" y="81.59722222222221" text-anchor="middle">20</text>
+<line x1="482.5" x2="482.5" y1="86.4430210489993" y2="86.75142339544513" stroke="#333"/>
+<text x="482.5" y="221" text-anchor="middle">DAG</text>
+<text x="482.5" y="235" text-anchor="middle">guarded</text>
+<rect x="545.7500000000001" y="86.56163733609384" width="56.833333333333336" height="118.43836266390616" fill="#bab0ac"/>
+<text x="574.1666666666667" y="81.56163733609384" text-anchor="middle">20</text>
+<line x1="574.1666666666667" x2="574.1666666666667" y1="86.38667831262939" y2="86.73659635955829" stroke="#333"/>
+<text x="574.1666666666667" y="221" text-anchor="middle">DAG</text>
+<text x="574.1666666666667" y="235" text-anchor="middle">guarded</text>
+<text x="574.1666666666667" y="249" text-anchor="middle">latest</text>
+</svg>

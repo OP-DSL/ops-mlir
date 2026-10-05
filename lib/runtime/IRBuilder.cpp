@@ -28,7 +28,8 @@ IRBuilder::IRBuilder(mlir::MLIRContext *ctx) : ctx_(ctx) {
   ctx_->getOrLoadDialect<ops_mlir::ops::OPSDialect>();
 }
 
-mlir::ModuleOp IRBuilder::buildModule(const std::vector<LoopDesc> &loops) {
+mlir::ModuleOp IRBuilder::buildModule(const std::vector<LoopDesc> &loops,
+                                      const std::vector<int64_t> *groupIds) {
   if (loops.empty()) {
     auto loc = mlir::UnknownLoc::get(ctx_);
     return mlir::ModuleOp::create(loc);
@@ -37,8 +38,9 @@ mlir::ModuleOp IRBuilder::buildModule(const std::vector<LoopDesc> &loops) {
   auto loc = mlir::UnknownLoc::get(ctx_);
   auto module = mlir::ModuleOp::create(loc);
 
-  for (const auto &loop : loops) {
-    auto *op = buildParLoopOp(loop);
+  for (std::size_t i = 0; i < loops.size(); ++i) {
+    const auto &loop = loops[i];
+    auto *op = buildParLoopOp(loop, groupIds ? &(*groupIds)[i] : nullptr);
     if (!op) {
       llvm::errs() << "Failed to build ops.par_loop for: " << loop.kernel_name
                    << "\n";
@@ -57,7 +59,8 @@ std::string IRBuilder::moduleToString(mlir::ModuleOp module) {
   return result;
 }
 
-mlir::Operation *IRBuilder::buildParLoopOp(const LoopDesc &loop) {
+mlir::Operation *IRBuilder::buildParLoopOp(const LoopDesc &loop,
+                                           const int64_t *groupId) {
   auto loc = mlir::UnknownLoc::get(ctx_);
   mlir::OpBuilder builder(ctx_);
 
@@ -106,6 +109,10 @@ mlir::Operation *IRBuilder::buildParLoopOp(const LoopDesc &loop) {
     opState.attributes.push_back({mlir::StringAttr::get(ctx_, "block_dims"),
                                   builder.getI32IntegerAttr(ndim)});
   }
+  if (groupId) {
+    opState.attributes.push_back({mlir::StringAttr::get(ctx_, "fuse_group"),
+                                  builder.getI64IntegerAttr(*groupId)});
+  }
 
   return builder.create(opState);
 }
@@ -124,7 +131,8 @@ mlir::Attribute IRBuilder::buildArgAttr(const ArgDesc &arg) {
       static_cast<int64_t>(arg.data_d),
       arg.acc,
       arg.argtype,
-      arg.opt);
+      arg.opt,
+      arg.elem_kind);
 }
 
 ops_mlir::ops::DatAttr IRBuilder::buildDatAttr(const DatDesc &dat) {

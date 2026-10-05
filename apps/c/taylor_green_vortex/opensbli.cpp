@@ -9,6 +9,7 @@
 
 #include "io.h"
 #include "opensbliblock00_kernels.h"
+#include "diagnostics.h"
 // #include "reductions.h" // uses ACC<double> + ops_arg_reduce; ops_arg_reduce is not modeled by ops_to_stencil.py yet
 
 FILE *f0 = fopen("block0_output.log", "a");
@@ -27,16 +28,20 @@ int main(int argc, char **argv) {
   // Set restart to 1 to restart the simulation from HDF5 file
   restart = 0;
   // User defined constant values
-  block0np0 = 128;
-  block0np1 = 128;
-  block0np2 = 128;
+  // TGV_N overrides the grid size (default 128^3), TGV_NITER the step count.
+  const int grid_n = getenv("TGV_N") ? atoi(getenv("TGV_N")) : 128;
+  block0np0 = grid_n;
+  block0np1 = grid_n;
+  block0np2 = grid_n;
   Delta0block0 = 2 * M_PI / block0np0;
   Delta1block0 = 2 * M_PI / block0np1;
   Delta2block0 = 2 * M_PI / block0np2;
-  niter = 5000;
+  niter = getenv("TGV_NITER") ? atoi(getenv("TGV_NITER")) : 5000;
   double rkB[] = {(1.0 / 3.0), (15.0 / 16.0), (8.0 / 15.0)};
   double rkA[] = {0, (-5.0 / 9.0), (-153.0 / 128.0)};
-  dt = 0.003385;
+  // The time step is tuned for 128^3; scale it with the grid spacing so other
+  // TGV_N values stay inside the CFL limit (exactly 0.003385 at the default).
+  dt = 0.003385 * (128.0 / grid_n);
   write_output_file = 10000;
   HDF5_timing = 0;
   filter_frequency = 25;
@@ -179,6 +184,7 @@ int main(int argc, char **argv) {
                  iter + 1, dt, simulation_time,
                  (elapsed_inner_end - elapsed_inner_start) / 100);
       ops_NaNcheck(rho_B0);
+      ops_mlir::reportWindow(iter + 1);
       ops_timers(&inner_start, &elapsed_inner_start);
     }
 
@@ -616,6 +622,8 @@ int main(int argc, char **argv) {
   ops_printf("-----------------------------------------\n");
   ops_printf("Total Wall time %lf\n", elapsed_end0 - elapsed_start0);
 
+  // TGV_DIAG=1 prints field statistics, TGV_DUMP=<prefix> writes raw fields.
+  tgv_diagnostics(rho_B0, rhou0_B0, rhou1_B0, rhou2_B0, rhoE_B0);
   HDF5_IO_Write_0_opensbliblock00(opensbliblock00, rho_B0, rhou0_B0, rhou1_B0,
                                   rhou2_B0, rhoE_B0, HDF5_timing);
   ops_timing_output(std::cout);
