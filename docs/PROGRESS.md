@@ -255,3 +255,30 @@ loads the cached object (no lowering, no compile) and produces the same results.
   unrolling of component loops), reductions (accumulate, min, max, test-then-assign, assign style, mixed kinds rejected),
   multi-component, boundary writes at non-zero offsets, idx + constants, data-dependent offsets, struct-array constants with dynamic
   index, unsupported constructs with reasons, unresolved names. `REQUIRES: ops-headers` (`OPS_SRC`, passed by `scripts/ci.sh`).
+
+## P2.3 translator `--jit` (in OPS, branch feature/jit-executor)
+
+- `ops_translator/ops-translator --jit`: the C++ `mpi_openmp` and `cuda` templates (HIP shares the CUDA ones) declare
+  `extern const struct ops_jit_artifact ops_jit_artifact_<kernel>;` and call `create_kerneldesc_and_enque_jit(..., &artifact)`;
+  the generated `ops_init_backend()` calls `ops_jit_init()` (C linkage, a strong reference: D13); without `--jit` nothing changes.
+- `jit_kernels.json` (in the directory of the generated code): per unique kernel its source file, `ndim`, the distinct argument patterns
+  (kind, access, type, dim, multigrid, strides) and the consistent parameter `kinds` for the importer.
+
+## P2.4 `ops_add_jit_artifacts`
+
+- `cmake/OpsJitArtifacts.cmake` (+ `OpsJitEmbed.cmake`, run with `cmake -P`): reads `jit_kernels.json`, runs `ops-kernel-import` per
+  kernel with the include directories and definitions of the consuming target (written by `file(GENERATE)` to an args file, one flag
+  per line; `ops-kernel-import --args-file`), and generates `ops_jit_artifacts.cpp` with one `extern const ops_jit_artifact
+  ops_jit_artifact_<k>` per kernel (status 1 + the manifest with the reason for kernels that could not be imported). Each import has a
+  `DEPFILE` written by the importer (every file the translation unit read, `--depfile`), so editing a kernel header re-imports and
+  recompiles only what changed; the generated file is rewritten only when its content changes.
+
+## P2.5 apps wiring
+
+- `apps/CMakeLists.txt` (separate project, `scripts/build_apps.sh`) against an installed OPS (`find_package(OPS)`: OPS::ops_seq, ops_mpi,
+  ops_cuda, ops_mpi_cuda, hdf5 variants if the OPS install has them) and an ops-mlir build (`bin/ops-kernel-import`, `lib/libopsjit.so`).
+  `cmake/OpsApps.cmake: ops_jit_add_app` mirrors OPS build_ops_c_sample (copy sources, translate with `--jit` at configure time, glob
+  the generated files) and builds `<app>_jit`, `_jit_mpi`, `_jit_cuda`, `_jit_mpi_cuda` with `-DOPS_LAZY`; the artifacts are imported once per
+  application. The tests are OPS own `cmake_test.sh` + `runtests.cmake` (label `jit-app`).
+- `libopsjit` exists as a stub (`ops/lib/Runtime/Init.cpp`, `ops/include/ops_jit.h`): `ops_jit_init()` only reads `OPS_JIT`. Phase 3 fills it.
+- Applications: laplace2d (step7), poisson, CloverLeaf 2D/3D, TeaLeaf, mblock, multiDim, lowdim, TGV_mixed DP/SP/SPDP (HDF5).
