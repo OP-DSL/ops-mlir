@@ -5,6 +5,8 @@
 /build/
 /build-*/
 *.cmake
+!cmake/*.cmake
+!*/CMakeLists.txt
 CMakeFiles/
 CMakeCache.txt
 
