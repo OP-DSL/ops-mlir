@@ -27,6 +27,12 @@ add_library(OPDSLCache STATIC
 target_include_directories(OPDSLCache PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(OPDSLCache PUBLIC LLVMSupport)
 
+# The CUDA launch shim (the mgpu* symbols of gpu-to-llvm code). An object library: the symbols are only ever called by
+# JIT-compiled code, so a static archive would drop them; targets that need them link the objects.
+add_library(OPDSLGpu OBJECT lib/GPU/GpuShim.cpp)
+target_include_directories(OPDSLGpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+set_target_properties(OPDSLGpu PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_library(OPDSLTestMain STATIC unittests/TestMain.cpp)
 target_include_directories(OPDSLTestMain PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
