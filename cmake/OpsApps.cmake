@@ -5,6 +5,7 @@
 #                   [OTHERS <regex>...]    sources that need no code generation
 #                   [EXTRA <regex>...]     sources the helper must ignore
 #                   [HDF5]                 link the HDF5 builds of the OPS libraries
+#                   [INPUT_COPY <from> <to>]  copy an input file to the name the app reads (CloverLeaf: clover_bm_short.in -> clover.in)
 #                   [NO_SEQ_TEST]          no ctest for the sequential build (too slow: CloverLeaf, like in OPS)
 #                   [TRANSLATOR_FLAGS <flags>...] [IMPORTER_FLAGS <flags>...]
 #                   [TEST_SCRIPT <cmake_test.sh>])
@@ -44,7 +45,7 @@ function(_ops_jit_add_test exe_target script mode tmp)
 endfunction()
 
 function(ops_jit_add_app name)
-  cmake_parse_arguments(ARG "HDF5;NO_SEQ_TEST" "SOURCE_DIR;TEST_SCRIPT" "ODD;OTHERS;EXTRA;TRANSLATOR_FLAGS;IMPORTER_FLAGS" ${ARGN})
+  cmake_parse_arguments(ARG "HDF5;NO_SEQ_TEST" "SOURCE_DIR;TEST_SCRIPT" "ODD;OTHERS;EXTRA;TRANSLATOR_FLAGS;IMPORTER_FLAGS;INPUT_COPY" ${ARGN})
   set(tmp "${CMAKE_CURRENT_BINARY_DIR}/${name}_tmp")
   file(REMOVE_RECURSE "${tmp}")
   file(MAKE_DIRECTORY "${tmp}")
@@ -58,6 +59,11 @@ function(ops_jit_add_app name)
   file(GLOB inputs "${ARG_SOURCE_DIR}/*.in")
   if(inputs)
     file(COPY ${inputs} DESTINATION "${tmp}")
+  endif()
+  if(ARG_INPUT_COPY)
+    list(GET ARG_INPUT_COPY 0 copy_from)
+    list(GET ARG_INPUT_COPY 1 copy_to)
+    file(COPY_FILE "${tmp}/${copy_from}" "${tmp}/${copy_to}")
   endif()
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${cpp} ${heads})
 
