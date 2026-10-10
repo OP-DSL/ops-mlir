@@ -48,7 +48,19 @@ else
   export MPI_INSTALL_PATH=${MPI_INSTALL_PATH:-}      # optional locally; MPI runs are tested on the cluster
   export HDF5_INSTALL_PATH=${HDF5_INSTALL_PATH:-}
   export HDF5_SEQ_INSTALL_PATH=${HDF5_SEQ_INSTALL_PATH:-}
+  # LLVM's CMake exports require the ZLIB::ZLIB target. This WSL image has the zlib runtime but no
+  # development files (zlib.h, libz.so) and no sudo: hand CMake the runtime library directly (no header
+  # is needed, nothing here includes zlib.h).
+  if [ ! -f /usr/include/zlib.h ] && [ -e /usr/lib/x86_64-linux-gnu/libz.so.1 ]; then
+    OPSJIT_CMAKE_ARGS="${OPSJIT_CMAKE_ARGS:-} -DZLIB_INCLUDE_DIR=/usr/include -DZLIB_LIBRARY=/usr/lib/x86_64-linux-gnu/libz.so.1"
+  fi
+  # Same for zstd (see the OPSJIT_ZSTD_LIBRARY shim in the top-level CMakeLists.txt).
+  if [ ! -f /usr/include/zstd.h ] && [ -e /usr/lib/x86_64-linux-gnu/libzstd.so.1 ]; then
+    OPSJIT_CMAKE_ARGS="${OPSJIT_CMAKE_ARGS:-} -DOPSJIT_ZSTD_LIBRARY=/usr/lib/x86_64-linux-gnu/libzstd.so.1"
+  fi
 fi
+# Extra CMake arguments needed on this host when configuring against the pinned LLVM (word-split on use).
+export OPSJIT_CMAKE_ARGS=${OPSJIT_CMAKE_ARGS:-}
 
 if [ ! -x "$LLVM_INSTALL_PATH/bin/clang" ]; then
   echo "scripts/env.sh: no clang in LLVM_INSTALL_PATH=$LLVM_INSTALL_PATH" >&2

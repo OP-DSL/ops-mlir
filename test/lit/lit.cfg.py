@@ -1,0 +1,22 @@
+# lit configuration of the ops-mlir test suite (loaded through the generated lit.site.cfg.py).
+import os
+
+import lit.formats
+
+config.name = "OPS-MLIR"
+config.test_format = lit.formats.ShTest(execute_external=False)
+config.suffixes = [".mlir", ".test", ".cpp", ".h"]
+config.excludes = ["Inputs"]
+
+# Tools: FileCheck/not/count/mlir-opt/mlir-translate from the pinned LLVM install, and our own tools
+# (ops-opt, ops-kernel-import, ...) from the build tree.
+tool_dirs = [config.opsjit_tools_dir, config.llvm_tools_dir]
+config.environment["PATH"] = os.pathsep.join(tool_dirs + [config.environment.get("PATH", "")])
+
+# Do not leak the user's environment into the tests (OPS_JIT_* options in particular).
+for key in list(config.environment):
+    if key.startswith("OPS_"):
+        del config.environment[key]
+
+config.substitutions.append(("%opsjit_src", config.opsjit_source_dir))
+config.substitutions.append(("%opsjit_bin", config.opsjit_binary_dir))
