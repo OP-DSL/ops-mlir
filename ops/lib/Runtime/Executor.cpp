@@ -467,11 +467,12 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
 void Executor::printStats() const {
   const Stats &s = stats_;
   const CompileStats &c = compiler_->stats();
-  std::fprintf(stderr, "ops_jit counters: flushes=%llu loops=%llu claimed=%llu declined=%llu groups=%llu plans_built=%llu plans_reused=%llu plans_failed=%llu compiled=%llu memory_hits=%llu disk_hits=%llu\n",
+  std::fprintf(stderr, "ops_jit counters: flushes=%llu loops=%llu claimed=%llu declined=%llu groups=%llu plans_built=%llu plans_reused=%llu plans_failed=%llu compiled=%llu memory_hits=%llu disk_hits=%llu verify_groups=%llu verify_mismatches=%llu\n",
                (unsigned long long)s.flushes, (unsigned long long)s.loopsSeen, (unsigned long long)s.loopsClaimed,
                (unsigned long long)s.loopsDeclined, (unsigned long long)s.groupsExecuted, (unsigned long long)s.planBuilds,
                (unsigned long long)s.planHits, (unsigned long long)s.planFailures, (unsigned long long)c.compiles,
-               (unsigned long long)c.memoryHits, (unsigned long long)c.diskHits);
+               (unsigned long long)c.memoryHits, (unsigned long long)c.diskHits, (unsigned long long)s.verifyGroups,
+               (unsigned long long)s.verifyMismatches);
   std::fprintf(stderr, "ops_jit statistics:\n");
   std::fprintf(stderr, "  flushes %llu, loops %llu: claimed %llu, declined %llu; groups executed %llu\n", (unsigned long long)s.flushes,
                (unsigned long long)s.loopsSeen, (unsigned long long)s.loopsClaimed, (unsigned long long)s.loopsDeclined,

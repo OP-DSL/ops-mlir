@@ -70,12 +70,20 @@ if(HDF5_FOUND AND TARGET OPS::ops_hdf5_seq)
   ops_app(lowdim "${c_apps}/lowdim_test" HDF5)
 endif()
 
-# TGV (OpenSBLI), double, single and mixed precision.
+# TGV (OpenSBLI), double, single and mixed precision. tgv_<p>: the benchmark as it is (for the performance runs);
+# tgvs_<p>: 33^3 points and 3 steps, run in verify mode by ctest (the application prints no QA value).
 if(HDF5_FOUND AND TARGET OPS::ops_hdf5_seq)
   foreach(variant DP SP SPDP)
     if(EXISTS "${TGV_ROOT}/TGsym_${variant}")
       ops_jit_add_app(tgv_${variant} SOURCE_DIR "${TGV_ROOT}/TGsym_${variant}" HDF5
                       IMPORTER_FLAGS -I${HDF5_INCLUDE_DIRS})
+      ops_jit_add_app(tgvs_${variant} SOURCE_DIR "${TGV_ROOT}/TGsym_${variant}" HDF5 VERIFY_ONLY
+                      IMPORTER_FLAGS -I${HDF5_INCLUDE_DIRS}
+                      PATCH_FILE opensbli.cpp
+                      PATCH "block0np0 = mult\\*512\\+1" "block0np0 = mult*32+1"
+                            "block0np1 = 513" "block0np1 = 33"
+                            "block0np2 = 513" "block0np2 = 33"
+                            "niter = 20" "niter = 3")
     endif()
   endforeach()
 else()
