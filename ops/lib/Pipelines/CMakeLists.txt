@@ -1,11 +1,17 @@
 add_mlir_library(OPSMLIRPipelines
   Pipelines.cpp
+  GroupModules.cpp
 
   LINK_LIBS PUBLIC
   OPDSLPipeline
   OPSMLIRTransforms
   OPSMLIRConversion
   MLIRPass
+  MLIRBytecodeWriter
+  MLIRControlFlowDialect
+  MLIRLLVMDialect
+  MLIRMathDialect
+  MLIROpenMPDialect
   MLIRTransforms
   MLIRSCFToOpenMP
   MLIRSCFToControlFlow

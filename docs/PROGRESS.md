@@ -216,3 +216,11 @@ Newest entries at the bottom. Cluster = `cl` (SLURM); local = WSL Ubuntu 24.04.
 - Unit tests: JIT (sum loop with a result, pointers and doubles, two objects, an object reloaded in a second session, error
   for a missing entry) and cache (miss/hit, overwrite, corruption of three kinds, version mismatch, two forked writers x 50
   stores of 100 KB, LRU eviction order, default directory).
+
+## Phase 1 exit test
+
+`ops/unittests/EndToEndCPUTest.cpp`: a chain of two unmaterialised loops (one bound constant folded, one unbound constant that becomes
+a scalar argument of the group) goes through `ops-jit-frontend` and `ops-jit-plan` (fused into one group, outlined), is split into a
+module of its own (`extractGroupModules`), keyed (sha256 over bytecode, pipeline, options, target, version), lowered with
+`ops-jit-cpu`, compiled by `JITSession`, stored in `PersistentCache` and run on real arrays through the ABI of 4.6. A second session
+loads the cached object (no lowering, no compile) and produces the same results. `GroupModules.h` also has `registerJITDialects()`.
