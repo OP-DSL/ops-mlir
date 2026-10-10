@@ -55,7 +55,7 @@ function(_ops_jit_add_test exe_target script mode tmp)
              COMMAND ${CMAKE_COMMAND} "-DCMD=${command}" "-DARG= " -DOPS_INSTALL_PATH=${OPS_INSTALL}
                      -P ${OPS_SRC}/apps/c/runtests.cmake
              WORKING_DIRECTORY "${tmp}")
-    set_tests_properties(${exe_target}${variant} PROPERTIES LABELS "${labels}" RESOURCE_LOCK "${exe_target}_dir"
+    set_tests_properties(${exe_target}${variant} PROPERTIES LABELS "${labels}" RESOURCE_LOCK "${tmp}"
                          ENVIRONMENT "${environment}")
   endforeach()
 endfunction()
