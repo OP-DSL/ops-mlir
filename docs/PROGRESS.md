@@ -282,3 +282,44 @@ loads the cached object (no lowering, no compile) and produces the same results.
   application. The tests are OPS own `cmake_test.sh` + `runtests.cmake` (label `jit-app`).
 - `libopsjit` exists as a stub (`ops/lib/Runtime/Init.cpp`, `ops/include/ops_jit.h`): `ops_jit_init()` only reads `OPS_JIT`. Phase 3 fills it.
 - Applications: laplace2d (step7), poisson, CloverLeaf 2D/3D, TeaLeaf, mblock, multiDim, lowdim, TGV_mixed DP/SP/SPDP (HDF5).
+
+## P2.6 import coverage
+
+- `scripts/import_coverage.py` translates every application of `OPS/apps/c` that has loops (with `--jit`, so the kernel kinds are the
+  translator's) and imports each kernel in the translation unit that sees its definition. `docs/coverage.md`: **588 of 626 kernels import
+  (93.9%)** in 38 applications. CloverLeaf 82/83, CloverLeaf 3D 140/141, TeaLeaf 47/47. Failures, ranked: initializer lists (11), accessor
+  `combine_*` reductions of lowdim (6), element types `unsigned short`/`char`/complex (7), a computed component of a multi-component
+  accessor (lbm, 4), writes to a global (3), one user helper function (poisson `myfun`), unsupported compound assignment (1).
+  3 applications do not translate (mblock4D, tti, wave_test: failures in the translator itself, not in the importer).
+- The translator picks the translation unit by where the kernel definition is visible (`jit.py`): TeaLeaf's kernels live in headers
+  that the file with the loop does not include.
+
+## P3.1-P3.5 `libopsjit` (CPU executor)
+
+- `ops/lib/Runtime`: `Options` (OPS_JIT_*), `Artifact` (manifest + bytecode, parsed once per artifact), `Claim` (declines with a reason),
+  `Lifter` (descriptors -> `ops.chain` of unmaterialised loops + the table of where each chain argument comes from), `Binding` (recipes
+  from the planned module; memref descriptors, shifts, ranges, displacement, scalars, result struct), `Executor` (claim, runs of claimed loops,
+  plan cache by structural key + local ranges, code cache in memory and on disk by the digest of the canonical group bytecode, execution
+  with prepare/finish/account around each group, reductions combined into the handle slots), `Init` (`ops_jit_init`, `ops_jit_set_option`,
+  `ops_jit_print_stats`).
+- **Added to the OPS side (feature/jit-executor):** `ops_lazy_dat_shift(dat, shift)` and `ops_lazy_reduction_slot(desc, arg)` (backend
+  specific: they know `d_im` and the per-block reduction slot under MPI); `ops_register_chain_executor(NULL, ...)` means the default
+  instance (so libopsjit never references an OPS symbol that the application might not link: the apps link OPS statically).
+- **Facts that were not in the plan:**
+  1. `ops_arg_reduce` does not set `elem_size`: the reduction element type is `((ops_reduction)arg.data)->type`.
+  2. A function with several results returns an LLVM struct and its C interface takes the result pointer as an extra *first* argument;
+     `JITSession`'s packed wrapper now hides that (args[nargs] = storage of the result struct).
+  3. `memref.alloca_scope` made by `convert-scf-to-openmp` must be removed (canonicalise) before `scf-to-cf` when the body has inner loops.
+  4. Optional dat arguments that are switched off (`opt == 0`, CloverLeaf's `update_halo_*` with the `fields` mask) are claimed like the
+     others: the kernel touches them only under a run-time condition that the compiled code evaluates too. Without this only 21% (2D) and
+     7% (3D) of the dynamic loops of CloverLeaf were claimed; with it 99.98% (2D).
+  5. Cache keys must include a format number for anything in the compiled object that is not in the group IR (the packed wrapper):
+     `kCodeFormat` in `Executor.cpp`.
+- `OPS_JIT_VERIFY=1` (P3.7): every group is run with the JIT, its outputs are saved, the snapshots restored, the member loops run with
+  OPS's code, and the dats (relative to the largest magnitude in the dat: 1e-12 double, 1e-5 float, exact int) and the reduction handles are
+  compared. Local results (seq, OMP_NUM_THREADS=2): laplace2d, poisson, TeaLeaf (433 groups), CloverLeaf 2D (8650 groups) all 0 differences.
+- Debugging aids: `OPS_JIT_EXPLAIN`, `OPS_JIT_PLAN`, `OPS_JIT_TRACE` (every group before it runs), `OPS_JIT_DUMP_DIR` (plan chain, group IR and
+  lowered IR), `OPS_JIT_BACKTRACE=1` (LLVM's signal handler: a symbolised stack when a compiled group crashes).
+- Importer: manifests carry `"role": "bound"` for constants that reach a loop bound or an index (the runtime folds them: their values are
+  part of the plan key).
+- Translator: `parseUnexposedFunction` crashed on `DECL_REF_EXPR`s without tokens (OpenSBLI's `opensbli.cpp`): fixed.
