@@ -88,6 +88,8 @@ else
 fi
 # TGV_mixed benchmark apps (github.com/reguly/tests, apps/TGV_mixed); see D9 in IMPLEMENTATION_PLAN.md.
 export TGV_ROOT=${TGV_ROOT:-$OPSJIT_WORK/reguly-tests/apps/TGV_mixed}
+# On the cluster the benchmark repository is already checked out in the project area (read only use).
+[ -d "$TGV_ROOT" ] || { [ -d "$HOME/projects/tests/apps/TGV_mixed" ] && export TGV_ROOT=$HOME/projects/tests/apps/TGV_mixed; }
 
 # Install prefix for OPS libraries/headers built by scripts/build_ops.sh; build trees go under build/.
 export OPS_INSTALL=${OPS_INSTALL:-$OPSJIT_WORK/install/ops}
