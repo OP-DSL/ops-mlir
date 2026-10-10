@@ -7,6 +7,7 @@
 
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Verifier.h"
 
 #include "clang/AST/ASTContext.h"
@@ -828,6 +829,31 @@ ImportResult importKernel(MLIRContext &ctx, const ImportOptions &options) {
   ReturnOp::create(walker.builder(), bld.getUnknownLoc(), ValueRange{});
   if (failed(verify(*module))) return failWith("the imported kernel does not verify");
 
+  // Constants whose value shapes the code and must therefore be folded (role "bound"): those that reach a loop bound
+  // or the index of an array constant or of a data-dependent read, and the arrays that are indexed.
+  std::set<std::string> boundConsts;
+  kernel.walk([&](ConstRefOp ref) {
+    if (ref.getIndex()) boundConsts.insert(ref.getName().str());
+    SmallVector<Value> work{ref.getResult()};
+    DenseSet<Value> seen;
+    while (!work.empty()) {
+      Value v = work.pop_back_val();
+      if (!seen.insert(v).second) continue;
+      for (OpOperand &use : v.getUses()) {
+        Operation *user = use.getOwner();
+        if (auto loop = dyn_cast<scf::ForOp>(user)) {
+          if (use.getOperandNumber() < 3) boundConsts.insert(ref.getName().str());
+        } else if (auto other = dyn_cast<ConstRefOp>(user)) {
+          if (other.getIndex() && use.get() == other.getIndex()) boundConsts.insert(ref.getName().str());
+        } else if (isa<ReadDynOp>(user)) {
+          boundConsts.insert(ref.getName().str());
+        } else if (user->getDialect() && user->getDialect()->getNamespace() == "arith" && user->getNumResults() == 1) {
+          work.push_back(user->getResult(0));
+        }
+      }
+    }
+  });
+
   // --- the manifest -------------------------------------------------------------------------------------------------
   auto offsetsJson = [](const std::set<std::vector<int64_t>> &set) {
     llvm::json::Array a;
@@ -880,6 +906,7 @@ ImportResult importKernel(MLIRContext &ctx, const ImportOptions &options) {
       o["array_stride"] = c.stride;
       o["dynamic_index"] = true;
     }
+    if (boundConsts.count(c.name)) o["role"] = "bound";
     constsJson.push_back(std::move(o));
   }
   llvm::json::Array idxAxes;

@@ -54,6 +54,7 @@ struct Stats {
   uint64_t flushes = 0, loopsSeen = 0, loopsClaimed = 0, loopsDeclined = 0, groupsExecuted = 0;
   uint64_t planBuilds = 0, planHits = 0, planFailures = 0;
   uint64_t compiles = 0, memoryHits = 0, diskHits = 0;
+  uint64_t verifyGroups = 0, verifyMismatches = 0;
   std::map<std::string, uint64_t> declineReasons;
   double tClaim = 0, tPlan = 0, tLift = 0, tFrontend = 0, tPlanPasses = 0, tLowering = 0, tLlvm = 0, tCacheIO = 0,
          tExecute = 0, tBind = 0;
@@ -83,6 +84,8 @@ private:
   std::string structuralKey(ops_kernel_descriptor **run, int n, const std::vector<std::vector<int>> &ranges,
                             const std::vector<const KernelArtifact *> &artifacts, bool soa);
   opdsl::JITSession &session();
+  /// OPS_JIT_VERIFY: the group has just run; compare it with the stock OPS code on the same inputs (see Executor.cpp).
+  struct VerifyState;
 
   mlir::DialectRegistry dialects_;
   std::unique_ptr<mlir::MLIRContext> ctx_;

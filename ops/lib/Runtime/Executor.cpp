@@ -18,6 +18,7 @@
 
 #include "ops_lazy_executor.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <set>
@@ -102,6 +103,56 @@ template <typename T> void combineInto(char *slot, T value, ReductionKind kind, 
   else if (kind == ReductionKind::Min) next = cur < value ? cur : value;
   else next = cur > value ? cur : value;
   std::memcpy(slot, &next, sizeof(T));
+}
+
+
+/// Everything OPS_JIT_VERIFY needs to know about one group before and after it ran.
+struct Snapshot {
+  std::vector<ops_dat> dats;               ///< dats the members write
+  std::vector<std::vector<char>> before, jit;
+  std::vector<std::pair<char *, size_t>> slots; ///< reduction handles the members update
+  std::vector<std::vector<char>> slotBefore, slotJit;
+};
+
+std::vector<char> copyBytes(const char *p, size_t n) { return std::vector<char>(p, p + n); }
+
+/// Largest |a-b| and largest |a|, |b| over `n` elements of type T.
+template <typename T> void compareElements(const char *a, const char *b, size_t n, double &maxDiff, double &maxAbs, size_t &differing) {
+  for (size_t i = 0; i < n; ++i) {
+    T x, y;
+    std::memcpy(&x, a + i * sizeof(T), sizeof(T));
+    std::memcpy(&y, b + i * sizeof(T), sizeof(T));
+    if (x == y || (x != x && y != y)) {
+      double ax = std::fabs((double)x);
+      if (ax == ax && ax > maxAbs) maxAbs = ax;
+      continue;
+    }
+    ++differing;
+    double d = std::fabs((double)x - (double)y);
+    if (d != d) d = HUGE_VAL;
+    if (d > maxDiff) maxDiff = d;
+    maxAbs = std::max(maxAbs, std::max(std::fabs((double)x), std::fabs((double)y)));
+  }
+}
+
+/// Relative difference (to the largest magnitude in the data) of two buffers of `type` elements, and the number of
+/// elements that differ.
+double relativeDifference(const char *type, const char *a, const char *b, size_t bytes, size_t &differing) {
+  double maxDiff = 0, maxAbs = 0;
+  differing = 0;
+  std::string t = type ? type : "";
+  if (t == "double") compareElements<double>(a, b, bytes / 8, maxDiff, maxAbs, differing);
+  else if (t == "float") compareElements<float>(a, b, bytes / 4, maxDiff, maxAbs, differing);
+  else compareElements<int32_t>(a, b, bytes / 4, maxDiff, maxAbs, differing);
+  if (maxDiff == 0) return 0;
+  return maxAbs > 0 ? maxDiff / maxAbs : maxDiff;
+}
+
+double toleranceFor(const char *type) {
+  std::string t = type ? type : "";
+  if (t == "double") return 1e-12;
+  if (t == "float") return 1e-5;
+  return 0;
 }
 
 } // namespace
@@ -248,7 +299,24 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
 
   std::vector<ops_dat> slots = datSlots(run.data(), m);
   for (Plan::Group &g : plan->groups) {
-    for (int k : g.recipe.members) ops_lazy_prepare(run[k]);
+    Snapshot snap;
+    if (opts.verify) {
+      std::set<ops_dat> seen;
+      for (int k : g.recipe.members)
+        for (int a = 0; a < run[k]->nargs; ++a) {
+          const ops_arg &arg = run[k]->args[a];
+          if (arg.argtype == OPS_ARG_DAT && arg.acc != OPS_READ && seen.insert(arg.dat).second) snap.dats.push_back(arg.dat);
+          if (arg.argtype == OPS_ARG_GBL && arg.acc != OPS_READ) {
+            char *slot = ops_lazy_reduction_slot(run[k], a);
+            snap.slots.push_back({slot, (size_t)arg.dim * elemBytes(elemName(((ops_reduction)arg.data)->type))});
+          }
+        }
+      for (int k : g.recipe.members) ops_lazy_prepare(run[k]);
+      for (ops_dat d : snap.dats) snap.before.push_back(copyBytes(d->data, d->mem));
+      for (auto &s : snap.slots) snap.slotBefore.push_back(copyBytes(s.first, s.second));
+    } else {
+      for (int k : g.recipe.members) ops_lazy_prepare(run[k]);
+    }
 
     Invocation inv;
     std::string error;
@@ -287,6 +355,40 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
         local.resize(2 * OPS_MAX_DIM, 0);
         ops_lazy_account(run[k], share, ops_lazy_transfer_bytes(run[k], local.data()));
       }
+    }
+
+    if (opts.verify) {
+      for (ops_dat d : snap.dats) snap.jit.push_back(copyBytes(d->data, d->mem));
+      for (auto &s : snap.slots) snap.slotJit.push_back(copyBytes(s.first, s.second));
+      // Back to the state before the group, then the stock code for each member in order.
+      for (size_t i = 0; i < snap.dats.size(); ++i) std::memcpy(snap.dats[i]->data, snap.before[i].data(), snap.before[i].size());
+      for (size_t i = 0; i < snap.slots.size(); ++i) std::memcpy(snap.slots[i].first, snap.slotBefore[i].data(), snap.slotBefore[i].size());
+      for (int k : g.recipe.members) ops_lazy_execute_default(instance, &run[k], 1);
+      stats_.verifyGroups++;
+      std::string names;
+      for (int k : g.recipe.members) names += std::string(names.empty() ? "" : ", ") + run[k]->name;
+      bool bad = false;
+      for (size_t i = 0; i < snap.dats.size(); ++i) {
+        size_t differing = 0;
+        double rel = relativeDifference(snap.dats[i]->type, snap.jit[i].data(), snap.dats[i]->data, snap.jit[i].size(), differing);
+        if (rel > toleranceFor(snap.dats[i]->type)) {
+          bad = true;
+          std::fprintf(stderr, "ops_jit verify: [%s] dat %s: %zu elements differ, relative difference %.3g (tolerance %.1g)\n", names.c_str(),
+                       snap.dats[i]->name ? snap.dats[i]->name : "?", differing, rel, toleranceFor(snap.dats[i]->type));
+        }
+      }
+      for (size_t i = 0; i < snap.slots.size(); ++i) {
+        // Reduction values: compared in relative terms; the handles are doubles, floats or ints.
+        size_t bytes = snap.slotJit[i].size();
+        size_t differing = 0;
+        const char *type = bytes == 8 ? "double" : bytes == 4 ? "float" : "int";
+        double rel = relativeDifference(type, snap.slotJit[i].data(), snap.slots[i].first, bytes, differing);
+        if (rel > std::max(toleranceFor(type), 1e-9)) {
+          bad = true;
+          std::fprintf(stderr, "ops_jit verify: [%s] a reduction differs, relative difference %.3g\n", names.c_str(), rel);
+        }
+      }
+      if (bad) stats_.verifyMismatches++;
     }
   }
   return true;
@@ -464,6 +566,9 @@ void Executor::printStats() const {
                (unsigned long long)s.compiles, (unsigned long long)s.memoryHits, (unsigned long long)s.diskHits);
   std::fprintf(stderr, "  time [s]: claim %.3f, lift %.3f, frontend %.3f, plan passes %.3f, lowering %.3f, llvm %.3f, cache io %.3f, bind %.3f, execute %.3f\n",
                s.tClaim, s.tLift, s.tFrontend, s.tPlanPasses, s.tLowering, s.tLlvm, s.tCacheIO, s.tBind, s.tExecute);
+  if (options().verify)
+    std::fprintf(stderr, "  verify: %llu groups checked against OPS, %llu with differences\n", (unsigned long long)s.verifyGroups,
+                 (unsigned long long)s.verifyMismatches);
   for (const auto &entry : s.declineReasons)
     std::fprintf(stderr, "  declined %llux: %s\n", (unsigned long long)entry.second, entry.first.c_str());
 }
