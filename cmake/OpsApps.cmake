@@ -37,11 +37,27 @@ function(_ops_jit_add_test exe_target script mode tmp)
   if(NOT rc EQUAL 0 OR "${command}" STREQUAL "")
     return()
   endif()
-  add_test(NAME ${exe_target}
-           COMMAND ${CMAKE_COMMAND} "-DCMD=${command}" "-DARG= " -DOPS_INSTALL_PATH=${OPS_INSTALL}
-                   -P ${OPS_SRC}/apps/c/runtests.cmake
-           WORKING_DIRECTORY "${tmp}")
-  set_tests_properties(${exe_target} PROPERTIES LABELS "jit-app")
+  # The same run in three configurations of the JIT: default, loops not fused, every group checked against OPS.
+  set(labels "jit-app")
+  if(mode MATCHES "cuda")
+    list(APPEND labels gpu)
+  else()
+    list(APPEND labels cpu)
+  endif()
+  foreach(variant "" "_nofusion" "_verify")
+    set(environment "")
+    if(variant STREQUAL "_nofusion")
+      set(environment "OPS_JIT_FUSION=0")
+    elseif(variant STREQUAL "_verify")
+      set(environment "OPS_JIT_VERIFY=1")
+    endif()
+    add_test(NAME ${exe_target}${variant}
+             COMMAND ${CMAKE_COMMAND} "-DCMD=${command}" "-DARG= " -DOPS_INSTALL_PATH=${OPS_INSTALL}
+                     -P ${OPS_SRC}/apps/c/runtests.cmake
+             WORKING_DIRECTORY "${tmp}")
+    set_tests_properties(${exe_target}${variant} PROPERTIES LABELS "${labels}" RESOURCE_LOCK "${exe_target}_dir"
+                         ENVIRONMENT "${environment}")
+  endforeach()
 endfunction()
 
 function(ops_jit_add_app name)
