@@ -63,9 +63,11 @@ ops_app(clover_leaf_3D "${c_apps}/CloverLeaf_3D"
         ODD profile OTHERS start.cpp time_step.cpp build_field.cpp read_input.cpp initialise.cpp advection.cpp)
 ops_app(tea_leaf "${c_apps}/TeaLeaf"
         OTHERS build_field.cpp diffuse.cpp initialise.cpp read_input.cpp tea_solve.cpp timestep.cpp)
-ops_app(mblock "${c_apps}/mblock")
-ops_app(multidim "${c_apps}/multiDim")
-ops_app(lowdim "${c_apps}/lowdim_test")
+# mblock and multiDim use the legacy header (ops_seq.h with per-loop globals xdim0...): OPS itself does not build them
+# (apps/c/CMakeLists.txt), so they are not built here either. lowdim needs HDF5, like in OPS.
+if(HDF5_FOUND AND TARGET OPS::ops_hdf5_seq)
+  ops_app(lowdim "${c_apps}/lowdim_test" HDF5)
+endif()
 
 # TGV (OpenSBLI), double, single and mixed precision.
 if(HDF5_FOUND AND TARGET OPS::ops_hdf5_seq)
