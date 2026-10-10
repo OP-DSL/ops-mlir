@@ -1,0 +1,24 @@
+//===- ops-opt.cpp - mlir-opt with the ops dialect and its passes --------===//
+
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Math/IR/Math.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/InitAllExtensions.h"
+#include "mlir/InitAllPasses.h"
+#include "mlir/Tools/mlir-opt/MlirOptMain.h"
+
+#include "ops-mlir/Dialect/OPS/IR/OPSDialect.h"
+
+int main(int argc, char **argv) {
+  mlir::registerAllPasses();
+
+  mlir::DialectRegistry registry;
+  registry.insert<ops_mlir::ops::OPSDialect, mlir::arith::ArithDialect, mlir::func::FuncDialect,
+                  mlir::math::MathDialect, mlir::memref::MemRefDialect, mlir::scf::SCFDialect>();
+  mlir::registerAllExtensions(registry);
+
+  return mlir::asMainReturnCode(mlir::MlirOptMain(argc, argv, "OPS MLIR optimizer driver\n", registry));
+}
