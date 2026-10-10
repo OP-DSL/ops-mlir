@@ -65,8 +65,21 @@ export OPSJIT_OMP_LIB_DIR=$LLVM_INSTALL_PATH/lib/x86_64-unknown-linux-gnu   # li
 export OPSJIT_CUDA_RUNTIME=$LLVM_INSTALL_PATH/lib/libmlir_cuda_runtime.so
 export OPS_COMPILER=${OPS_COMPILER:-clang}
 
-# Install prefix for OPS libraries/headers built by cluster/v2/build.sbatch or scripts/build_ops.sh.
+# Source trees. Locally they live directly under ~/ops-mlir-work; on the cluster the work trees are
+# updated by cluster/v2/sync.sh and live under ~/ops-jit-cl/work.
+if [ "$OPSJIT_HOST" = cluster ]; then
+  export OPS_SRC=${OPS_SRC:-$OPSJIT_WORK/work/OPS}
+  export OPSMLIR_SRC=${OPSMLIR_SRC:-$OPSJIT_WORK/work/ops-mlir}
+else
+  export OPS_SRC=${OPS_SRC:-$OPSJIT_WORK/OPS}
+  export OPSMLIR_SRC=${OPSMLIR_SRC:-$OPSJIT_WORK/ops-mlir}
+fi
+# TGV_mixed benchmark apps (github.com/reguly/tests, apps/TGV_mixed); see D9 in IMPLEMENTATION_PLAN.md.
+export TGV_ROOT=${TGV_ROOT:-$OPSJIT_WORK/reguly-tests/apps/TGV_mixed}
+
+# Install prefix for OPS libraries/headers built by scripts/build_ops.sh; build trees go under build/.
 export OPS_INSTALL=${OPS_INSTALL:-$OPSJIT_WORK/install/ops}
+export OPSJIT_BUILD_ROOT=${OPSJIT_BUILD_ROOT:-$OPSJIT_WORK/build}
 
 export PATH=$LLVM_INSTALL_PATH/bin:$CUDA_INSTALL_PATH/bin:${MPI_INSTALL_PATH:+$MPI_INSTALL_PATH/bin:}$PATH
 export LD_LIBRARY_PATH=$LLVM_INSTALL_PATH/lib:$OPSJIT_OMP_LIB_DIR:$CUDA_INSTALL_PATH/lib64:${MPI_INSTALL_PATH:+$MPI_INSTALL_PATH/lib:}${HDF5_INSTALL_PATH:+$HDF5_INSTALL_PATH/lib:}${LD_LIBRARY_PATH:-}

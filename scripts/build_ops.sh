@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Configure, build and install OPS (C/C++ libraries, headers, Python translator) with the pinned
+# clang. This is the single source of truth for how we build OPS, locally and on the cluster:
+#
+#     scripts/build_ops.sh                      # libraries only
+#     OPS_BUILD_APPS=ON scripts/build_ops.sh    # also OPS's sample apps and their ctest tests
+#
+# Environment (defaults come from scripts/env.sh):
+#   OPS_SRC            OPS source tree (branch feature/jit-executor)
+#   OPS_INSTALL        install prefix (also where the translator venv is created)
+#   OPS_CUDA           auto|on|off   (auto: on for the cluster, off locally)
+#   GPU_ARCH           CUDA architectures, default "70;80" on the cluster (V100, A100), 89 locally
+#   OPS_BUILD_SUFFIX   build-tree suffix, to keep several configurations side by side
+#   JOBS               parallel build jobs
+set -euo pipefail
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck disable=SC1091
+source "$here/env.sh"
+
+BUILD=${OPS_BUILD:-$OPSJIT_BUILD_ROOT/OPS${OPS_BUILD_SUFFIX:-}}
+APPS=${OPS_BUILD_APPS:-OFF}
+JOBS=${JOBS:-$(nproc)}
+OPS_CUDA=${OPS_CUDA:-auto}
+[ "$OPS_CUDA" = auto ] && { [ "$OPSJIT_HOST" = cluster ] && OPS_CUDA=on || OPS_CUDA=off; }
+
+args=(
+  -S "$OPS_SRC" -B "$BUILD" -G Ninja
+  -DCMAKE_BUILD_TYPE=Release
+  -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX"
+  -DCMAKE_INSTALL_PREFIX="$OPS_INSTALL"
+  -DBUILD_OPS_APPS="$APPS" -DOPS_TEST="$APPS"
+)
+
+if [ "$OPS_CUDA" = on ]; then
+  GPU_ARCH=${GPU_ARCH:-$([ "$OPSJIT_HOST" = cluster ] && echo "70;80" || echo 89)}
+  # nvcc rejects the very new clang as a host compiler: use the system g++ for .cu files only.
+  args+=( -DGPU_ARCH="$GPU_ARCH" -DGPU_NUMBER=1 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++
+          -DCUDAToolkit_ROOT="$CUDA_INSTALL_PATH" )
+else
+  args+=( -DCMAKE_DISABLE_FIND_PACKAGE_CUDAToolkit=ON )
+fi
+[ -n "${HDF5_INSTALL_PATH:-}" ] && args+=( -DHDF5_ROOT="$HDF5_INSTALL_PATH" )
+[ -n "${CFLAG:-}" ] && args+=( -DCFLAG="$CFLAG" )
+[ -n "${CXXFLAG:-}" ] && args+=( -DCXXFLAG="$CXXFLAG" )
+
+echo "== configure OPS ($OPS_SRC @ $(git -C "$OPS_SRC" log -1 --format=%h)) -> $BUILD, install $OPS_INSTALL, cuda=$OPS_CUDA apps=$APPS"
+cmake "${args[@]}" "$@"
+echo "== build"
+cmake --build "$BUILD" -j "$JOBS"
+echo "== install"
+cmake --install "$BUILD"
+echo "OPS installed in $OPS_INSTALL"
