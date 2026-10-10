@@ -1,6 +1,9 @@
 add_mlir_library(OPSMLIRTransforms
   MaterializeKernels.cpp
   SpecializeConsts.cpp
+  FusePointLocal.cpp
+  ForwardStores.cpp
+  OutlineGroups.cpp
 
   DEPENDS
   OPSMLIRTransformsIncGen

@@ -141,3 +141,22 @@ Newest entries at the bottom. Cluster = `cl` (SLURM); local = WSL Ubuntu 24.04.
   constant trip count <= 256, which would also unroll unrelated loops).
 - The greedy driver hoists the folded constants out of loop bodies to the chain body (par_loop regions are not isolated).
 - lit: `Transforms/{materialize-kernels,invalid-materialize,specialize-consts,invalid-specialize}.mlir`.
+
+## P1.5 `ops-fuse-point-local`, `ops-forward-stores`, `ops-outline-groups`
+
+- **Fuse:** plans with `planFusion` (unguarded) and rewrites: one `par_loop` per group (dat operands united by SSA value,
+  access modes joined: read+write -> rw, all inc -> inc; stencil points united; scalar operands united; range operands of the
+  first member, which is right because the plan is keyed by the concrete ranges, equal inside a group), bodies cloned in
+  member order; loops move before the operation that follows their *segment* (the loops between two reductions), so
+  reductions and the operations that use their results never move; `ops.range_values` is rewritten; fused loops carry
+  `ops.fused_loops` (member loop ids). Unmaterialised loops are an error. **Not implemented: `guarded=true`** (the pass
+  reports an error): it needs a loop-coordinate op for the range guards (`ops.index` is the global index, which differs
+  from the iteration coordinate under MPI). The planner supports guarded groups already. Decide in P7 whether TGV benefits.
+- **Forward stores:** write -> read of the same (accessor, offsets, component) inside one block, invalidated by nested regions
+  that write the accessor; skipped when the dat appears through two operands of the loop. Then narrows modes: rw never read
+  -> write, rw never written -> read (so fused intermediates are stored, not loaded).
+- **Outline:** `ops.chain @group_<n>` per loop (arguments = distinct operand values in operand order: ranges, dats, scalars;
+  captured constants copied in; `ops.range_values` entry carried over); the original chain keeps `ops.call`s. **Addition to
+  the dialect:** `ops.call` (symbol user, verifies the callee is an `ops.chain` of matching signature), because the plan
+  says "list of calls" and `func.call` does not accept an `ops.chain`.
+- lit: `Transforms/{fuse-point-local,forward-stores,outline-groups}.mlir`.

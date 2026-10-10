@@ -313,5 +313,25 @@ void ParLoopOp::getEffects(SmallVectorImpl<SideEffects::EffectInstance<MemoryEff
   }
 }
 
+
+LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto chain = symbolTable.lookupNearestSymbolFrom<ChainOp>(*this, getCalleeAttr());
+  if (!chain) return emitOpError("'") << getCallee() << "' does not reference a valid ops.chain";
+  FunctionType type = chain.getFunctionType();
+  if (type.getNumInputs() != getOperands().size())
+    return emitOpError("has ") << getOperands().size() << " operands, the callee takes " << type.getNumInputs();
+  for (unsigned i = 0; i < type.getNumInputs(); ++i)
+    if (getOperands()[i].getType() != type.getInput(i))
+      return emitOpError("operand #") << i << " must have type " << type.getInput(i) << ", got "
+                                      << getOperands()[i].getType();
+  if (type.getNumResults() != getNumResults())
+    return emitOpError("has ") << getNumResults() << " results, the callee returns " << type.getNumResults();
+  for (unsigned i = 0; i < type.getNumResults(); ++i)
+    if (getResult(i).getType() != type.getResult(i))
+      return emitOpError("result #") << i << " must have type " << type.getResult(i) << ", got "
+                                     << getResult(i).getType();
+  return success();
+}
+
 #define GET_OP_CLASSES
 #include "ops-mlir/Dialect/OPS/IR/OPSOps.cpp.inc"

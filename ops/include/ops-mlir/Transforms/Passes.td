@@ -51,4 +51,50 @@ def SpecializeConsts : Pass<"ops-specialize-consts", "::mlir::ModuleOp"> {
   let dependentDialects = ["::ops_mlir::ops::OPSDialect", "::mlir::arith::ArithDialect", "::mlir::scf::SCFDialect"];
 }
 
+
+def FusePointLocal : Pass<"ops-fuse-point-local", "::mlir::ModuleOp"> {
+  let summary = "merge the loops of a chain that can run point by point in one kernel";
+  let description = [{
+    Plans the chain with the dependence analysis (`ops.range_values` gives the concrete ranges) and rewrites it
+    along the plan: a group of loops becomes one `ops.par_loop` whose dat operands are the union of the members'
+    (deduplicated by value, access modes joined, stencil points united) and whose body is the members' bodies, in
+    order. Independent loops move next to the loops they fuse with. Loops with a reduction are never fused and
+    nothing moves across them. The kernels of all loops must be materialised (`ops-materialize-kernels`).
+    `ops.range_values` is rewritten for the new loops; the fused loops carry `ops.fused_loops`, the `loop_id`s
+    of their members.
+  }];
+  let options = [
+    Option<"maxLoops", "max-loops", "int64_t", /*default=*/"8", "upper bound on the loops of a group">,
+    Option<"reorder", "reorder", "bool", /*default=*/"true", "let independent loops move past each other">,
+    Option<"placement", "placement", "std::string", /*default=*/"\"earliest\"",
+           "which legal group a loop joins: earliest or latest">,
+    Option<"guarded", "guarded", "bool", /*default=*/"false",
+           "fuse loops of different ranges over their bounding box (not implemented yet)">,
+    Option<"boxRatio", "box-ratio", "double", /*default=*/"1.0",
+           "largest bounding box volume relative to the members' volumes (guarded fusion)">
+  ];
+  let dependentDialects = ["::ops_mlir::ops::OPSDialect"];
+}
+
+def ForwardStores : Pass<"ops-forward-stores", "::mlir::ModuleOp"> {
+  let summary = "use the value stored to a dat point instead of reading it back; narrow access modes";
+  let description = [{
+    Inside a loop body, `ops.write %a[o] {comp = c}, %v` followed by `ops.read %a[o] {comp = c}` of the same
+    accessor, with no write to that accessor in between, uses `%v`. The pass then narrows the access modes of
+    the loop: an operand that is no longer read becomes `write` (it need not be loaded), one that is never written
+    `read`.
+  }];
+  let dependentDialects = ["::ops_mlir::ops::OPSDialect"];
+}
+
+def OutlineGroups : Pass<"ops-outline-groups", "::mlir::ModuleOp"> {
+  let summary = "make each loop of a chain its own ops.chain, called from the original";
+  let description = [{
+    Each `ops.par_loop` of a chain becomes `ops.chain @group_<n>` with only the operands of the loop, and
+    the original chain becomes a list of `ops.call`s in execution order. Constants the loop body captured from
+    the chain are copied into the group. The planner and the executor compile and launch the groups.
+  }];
+  let dependentDialects = ["::ops_mlir::ops::OPSDialect"];
+}
+
 #endif // OPS_MLIR_TRANSFORMS_PASSES

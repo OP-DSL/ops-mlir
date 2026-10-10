@@ -239,6 +239,24 @@ def OPS_ChainOp : OPS_Op<"chain", [FunctionOpInterface, IsolatedFromAbove]> {
   let hasRegionVerifier = 1;
 }
 
+
+def OPS_CallOp : OPS_Op<"call", [DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+  let summary = "run a group of loops: a call of an ops.chain";
+  let description = [{
+    What `ops-outline-groups` leaves in a chain: each group of fused loops is its own `ops.chain`, and the
+    original chain calls them in order. The operands are values of the calling chain, in the callee's argument
+    order; the results are the reductions of the callee.
+
+    ```mlir
+    %m = ops.call @group_3(%a, %b, %lo0, %hi0, %lo1, %hi1) : (!ops.dat<f64, 2, 1>, !ops.dat<f64, 2, 1>, index,
+                                                               index, index, index) -> f64
+    ```
+  }];
+  let arguments = (ins FlatSymbolRefAttr:$callee, Variadic<AnyType>:$operands);
+  let results = (outs Variadic<AnyType>:$results);
+  let assemblyFormat = "$callee `(` $operands `)` attr-dict `:` functional-type($operands, $results)";
+}
+
 //===----------------------------------------------------------------------===//
 // The loop
 //===----------------------------------------------------------------------===//
