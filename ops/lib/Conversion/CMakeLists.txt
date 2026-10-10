@@ -1,6 +1,7 @@
 add_mlir_library(OPSMLIRConversion
   OpsToSCF.cpp
   MarkNoalias.cpp
+  HoistAccumulators.cpp
 
   DEPENDS
   OPSMLIRConversionIncGen
@@ -15,4 +16,5 @@ add_mlir_library(OPSMLIRConversion
   MLIRSCFDialect
   MLIRTransformUtils
   MLIRLLVMDialect
+  MLIROpenMPDialect
 )

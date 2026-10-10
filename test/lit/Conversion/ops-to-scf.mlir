@@ -11,7 +11,8 @@
 // CHECK-SAME: %[[D0:arg10]]: index, %[[D1:arg11]]: index
 // CHECK-SAME: %[[S:arg12]]: f64
 // CHECK-SAME: attributes {llvm.emit_c_interface, ops.abi = {noalias_args = array<i64: 1, 8>, num_dats = 2 : i64, num_reductions = 0 : i64, num_scalars = 1 : i64, rank = 2 : i64, soa = false}}
-// CHECK: scf.parallel (%[[J:.*]], %[[I:.*]]) = (%[[LO1]], %[[LO0]]) to (%[[HI1]], %[[HI0]])
+// CHECK: scf.parallel (%[[J:.*]]) = (%[[LO1]]) to (%[[HI1]])
+// CHECK: scf.for %[[I:.*]] = %[[LO0]] to %[[HI0]]
 // CHECK: %[[IA0:.*]] = arith.addi %[[SA0]], %[[I]]
 // CHECK: %[[IA1:.*]] = arith.addi %[[SA1]], %[[J]]
 // CHECK: %[[V:.*]] = memref.load %[[A]][%[[IA1]], %[[IA0]]]
@@ -41,7 +42,8 @@ ops.chain @pointwise(%lo0: index, %hi0: index, %lo1: index, %hi1: index, %a: !op
 // CHECK-SAME: %[[X:arg1]]: memref<?x?xi32, strided<[?, 1], offset: ?>> {llvm.noalias}
 // CHECK-SAME: %[[SU0:arg2]]: index, %[[SU1:arg3]]: index, %[[SX0:arg4]]: index, %[[SX1:arg5]]: index
 // CHECK-SAME: %[[D0:arg10]]: index, %[[D1:arg11]]: index
-// CHECK: scf.parallel (%[[J:.*]], %[[I:.*]]) =
+// CHECK: scf.parallel (%[[J:.*]]) =
+// CHECK: scf.for %[[I:.*]] =
 // CHECK: arith.addi %[[SU0]], %[[I]]
 // CHECK: %[[C1:.*]] = arith.constant 1 : index
 // CHECK: arith.addi %{{.*}}, %[[C1]]
@@ -102,8 +104,8 @@ ops.chain @multicomp(%lo0: index, %hi0: index, %lo1: index, %hi1: index, %w: !op
 // CHECK: %[[ZERO:.*]] = arith.constant 0 : i32
 // CHECK: %[[R:.*]]:2 = scf.parallel
 // CHECK-SAME: init (%[[INF]], %[[ZERO]]) -> (f64, i32)
-// CHECK: memref.alloca() : memref<f64>
-// CHECK: memref.alloca() : memref<i32>
+// CHECK: memref.alloca() {ops.accumulator} : memref<f64>
+// CHECK: memref.alloca() {ops.accumulator} : memref<i32>
 // CHECK: arith.cmpf olt
 // CHECK: arith.select
 // CHECK: arith.addi

@@ -36,6 +36,19 @@ def ConvertOpsToSCF : Pass<"convert-ops-to-scf", "::mlir::ModuleOp"> {
 }
 
 
+def OpsHoistAccumulators : Pass<"ops-hoist-accumulators", "::mlir::ModuleOp"> {
+  let summary = "move the reduction accumulators of a lowered group out of the loop body";
+  let description = [{
+    `convert-ops-to-scf` accumulates a loop's reductions in a scalar `memref.alloca` (marked `ops.accumulator`) that
+    each iteration of the parallel loop initialises with the neutral element. An alloca in a loop body is a dynamic
+    allocation after lowering: it makes LLVM bracket the body with stack save/restore and keeps it from promoting the
+    accumulator to a register (so no vectorised reduction). This pass moves each marked alloca to the entry of the
+    nearest enclosing `omp.parallel` region (one per thread) or, without OpenMP, of the function. Run it after
+    `convert-scf-to-openmp`.
+  }];
+  let dependentDialects = ["::mlir::memref::MemRefDialect", "::mlir::omp::OpenMPDialect"];
+}
+
 def OpsMarkNoalias : Pass<"ops-mark-noalias", "::mlir::ModuleOp"> {
   let summary = "mark the data pointers of the dat arguments of a lowered group noalias";
   let description = [{

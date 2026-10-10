@@ -200,7 +200,10 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
     };
     SmallVector<Value> lbs, ubs, steps, inits;
     Value one = arith::ConstantIndexOp::create(b, loc, 1);
-    for (int d = rank - 1; d >= 0; --d) { // outermost (z) first, x innermost
+    // The outer dimensions (z, y) run in parallel; x, the contiguous one, is a sequential loop inside, which the
+    // compiler vectorises. (With one dimension only, that one is the parallel loop.)
+    const bool innerLoop = rank > 1;
+    for (int d = rank - 1; d >= (innerLoop ? 1 : 0); --d) { // outermost (z) first
       lbs.push_back(rangeValue(2 * d));
       ubs.push_back(rangeValue(2 * d + 1));
       steps.push_back(one);
@@ -214,7 +217,11 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
     Block *body = parallel.getBody();
     b.setInsertionPointToStart(body);
 
-    auto iv = [&](unsigned d) { return body->getArgument(rank - 1 - d); };
+    Value innerIv;
+    auto iv = [&](unsigned d) -> Value {
+      if (innerLoop && d == 0) return innerIv;
+      return body->getArgument(rank - 1 - d);
+    };
 
     // Accessors, scalars and reductions of the loop body, as values the cloned body can use until it is rewritten.
     SmallVector<Accessor> accessors;
@@ -236,7 +243,10 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
     SmallVector<Accumulator> accumulators;
     for (unsigned r = 0; r < loop->getNumResults(); ++r) {
       Type t = loop->getResult(r).getType();
-      Value alloca = memref::AllocaOp::create(b, loc, MemRefType::get({}, t));
+      auto allocaOp = memref::AllocaOp::create(b, loc, MemRefType::get({}, t));
+      // Re-initialised per iteration of the parallel loop: ops-hoist-accumulators moves it out of the loop.
+      allocaOp->setAttr("ops.accumulator", UnitAttr::get(ctx));
+      Value alloca = allocaOp;
       memref::StoreOp::create(b, loc, neutralElement(b, loc, kinds[r], t), alloca, ValueRange{});
       accumulators.push_back({alloca, kinds[r], t});
       auto cast = UnrealizedConversionCastOp::create(b, loc, loop.getReductionArg(r).getType(), alloca);
@@ -244,6 +254,11 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
       mapper.map(loop.getReductionArg(r), cast.getResult(0));
     }
 
+    if (innerLoop) {
+      auto inner = scf::ForOp::create(b, loc, rangeValue(0), rangeValue(1), one);
+      innerIv = inner.getInductionVar();
+      b.setInsertionPointToStart(inner.getBody());
+    }
     Operation *firstCloned = nullptr;
     for (Operation &op : loop.getBodyBlock().without_terminator()) {
       Operation *c = b.clone(op, mapper);
