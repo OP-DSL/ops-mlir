@@ -16,7 +16,11 @@ def ConvertOpsToSCF : Pass<"convert-ops-to-scf", "::mlir::ModuleOp"> {
     4. the displacement of the block, one `index` per dimension (`ops.index d` is `i_d + disp_d`);
     5. the scalars of the loop (distinct chain arguments, in order of first appearance).
 
-    It returns the values of the reductions (neutral element combined over the range). A dat of an OPS block of
+    It returns the values of the reductions (neutral element combined over the range). With `target=gpu` the function
+    is the host side of a kernel launch instead: the arguments after the scalars are one rank-0 memref per reduction
+    (device memory the caller initialised with the neutral element, and reads back afterwards), each thread
+    combines its partial value into it with an atomic, and nothing is returned. The threads are a block of
+    `block` threads per dimension (x fastest); a thread outside the range does nothing. A dat of an OPS block of
     rank r with c components is a `memref<?x..xT>` of the r dimensions in memory order (z, y, x: OPS dimension d is
     memref dimension r-1-d) with a trailing dimension of size c if c > 1. Array of structures (default): the strides
     are [?, .., c, 1] (or [?, .., 1] for c = 1); structure of arrays (`soa`): [?, .., 1, ?]. An access at offset o of
@@ -30,9 +34,13 @@ def ConvertOpsToSCF : Pass<"convert-ops-to-scf", "::mlir::ModuleOp"> {
     alone. A group called from another chain in the same module cannot be converted (its signature changes): split
     the groups into modules of their own first.
   }];
-  let options = [Option<"soa", "soa", "bool", /*default=*/"false", "structure-of-arrays layout of multi-component dats">];
+  let options = [Option<"soa", "soa", "bool", /*default=*/"false", "structure-of-arrays layout of multi-component dats">,
+                 Option<"target", "target", "std::string", /*default=*/"\"cpu\"",
+                        "cpu: scf.parallel over the outer dimensions with a sequential x loop; gpu: a gpu.launch with one thread per point">,
+                 Option<"block", "block", "std::string", /*default=*/"\"32,4,1\"",
+                        "gpu: thread block size x,y,z (the dimensions the block does not have must be 1)">];
   let dependentDialects = ["::ops_mlir::ops::OPSDialect", "::mlir::arith::ArithDialect", "::mlir::func::FuncDialect",
-                           "::mlir::memref::MemRefDialect", "::mlir::scf::SCFDialect"];
+                           "::mlir::gpu::GPUDialect", "::mlir::memref::MemRefDialect", "::mlir::scf::SCFDialect"];
 }
 
 

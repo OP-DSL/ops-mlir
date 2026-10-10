@@ -22,6 +22,7 @@ void PackedArgs::addMemref(void *data, const std::vector<int64_t> &sizes, const 
     m.words[3 + i] = sizes[i];
     m.words[3 + rank + i] = strides[i];
   }
+  order.push_back({Slot::MemrefArg, memrefs.size()});
   memrefs.push_back(m);
   memrefInfo.push_back({data, sizes, strides});
 }
@@ -31,6 +32,7 @@ void PackedArgs::addScalar(const std::string &elem, const void *bytes) {
   s.elem = elem;
   s.bytes.fill(0);
   std::memcpy(s.bytes.data(), bytes, sizeOfElem(elem));
+  order.push_back({Slot::Scalar, scalarInfo.size()});
   scalarInfo.push_back(std::move(s));
 }
 
@@ -51,10 +53,14 @@ void PackedArgs::finalize() {
   argv.clear();
   memrefPointers.clear();
   for (Memref &m : memrefs) memrefPointers.push_back(&m);
-  // The storage of an argument is a pointer to the descriptor: args[i] -> (Memref *) -> descriptor.
-  for (Memref *&p : memrefPointers) argv.push_back(&p);
-  for (int64_t &v : indices) argv.push_back(&v);
-  for (ScalarInfo &s : scalarInfo) argv.push_back(s.bytes.data());
+  // The storage of a memref argument is a pointer to its descriptor: args[i] -> (Memref *) -> descriptor.
+  for (const Slot &slot : order) {
+    switch (slot.kind) {
+    case Slot::MemrefArg: argv.push_back(&memrefPointers[slot.i]); break;
+    case Slot::Index: argv.push_back(&indices[slot.i]); break;
+    case Slot::Scalar: argv.push_back(scalarInfo[slot.i].bytes.data()); break;
+    }
+  }
   if (!resultElem.empty()) argv.push_back(results.data());
 }
 

@@ -3,6 +3,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
@@ -147,9 +148,16 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
     for (unsigned i = 0; i < numDats * rank + 2 * rank + rank; ++i) inputs.push_back(indexType);
     for (BlockArgument s : scalarArgs) inputs.push_back(s.getType());
     SmallVector<Type> results(loop->getResultTypes());
+    const bool gpu = target == "gpu";
+    if (target != "cpu" && !gpu) return chain.emitError("option 'target' must be cpu or gpu, got '") << target << "'";
+    if (gpu) {
+      // The results come back through device buffers: one rank-0 memref per reduction, after the scalars.
+      for (Type t : results) inputs.push_back(MemRefType::get({}, t));
+      results.clear();
+    }
 
     unsigned shiftBase = numDats, rangeBase = shiftBase + numDats * rank, dispBase = rangeBase + 2 * rank,
-             scalarBase = dispBase + rank;
+             scalarBase = dispBase + rank, bufferBase = scalarBase + scalarArgs.size();
 
     // The function is named by `ops.func_name` (the runtime picks group_<hash>) or the chain; a declaration of that
     // name, as a caller in the same module needs, is replaced by the definition.
@@ -178,7 +186,8 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
                                                    bb.getNamedAttr("rank", bb.getI64IntegerAttr(rank)),
                                                    bb.getNamedAttr("num_dats", bb.getI64IntegerAttr(numDats)),
                                                    bb.getNamedAttr("num_scalars", bb.getI64IntegerAttr(scalarArgs.size())),
-                                                   bb.getNamedAttr("num_reductions", bb.getI64IntegerAttr(results.size())),
+                                                   bb.getNamedAttr("num_reductions", bb.getI64IntegerAttr(loop->getNumResults())),
+                                                   bb.getNamedAttr("gpu", bb.getBoolAttr(gpu)),
                                                    bb.getNamedAttr("soa", bb.getBoolAttr(soa))}));
     Block *entry = func.addEntryBlock();
     b.setInsertionPointToEnd(entry);
@@ -198,30 +207,81 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
       if (operand.getDefiningOp() && matchPattern(operand, m_Constant())) return mapper.lookup(operand);
       return entry->getArgument(rangeBase + slot);
     };
-    SmallVector<Value> lbs, ubs, steps, inits;
-    Value one = arith::ConstantIndexOp::create(b, loc, 1);
-    // The outer dimensions (z, y) run in parallel; x, the contiguous one, is a sequential loop inside, which the
-    // compiler vectorises. (With one dimension only, that one is the parallel loop.)
-    const bool innerLoop = rank > 1;
-    for (int d = rank - 1; d >= (innerLoop ? 1 : 0); --d) { // outermost (z) first
-      lbs.push_back(rangeValue(2 * d));
-      ubs.push_back(rangeValue(2 * d + 1));
-      steps.push_back(one);
-    }
     SmallVector<ReductionKind> kinds;
-    for (unsigned r = 0; r < loop->getNumResults(); ++r) {
-      kinds.push_back(loop.getReductionKind(r));
-      inits.push_back(neutralElement(b, loc, kinds[r], loop->getResult(r).getType()));
-    }
-    auto parallel = scf::ParallelOp::create(b, loc, lbs, ubs, steps, inits);
-    Block *body = parallel.getBody();
-    b.setInsertionPointToStart(body);
+    for (unsigned r = 0; r < loop->getNumResults(); ++r) kinds.push_back(loop.getReductionKind(r));
+    Value one = arith::ConstantIndexOp::create(b, loc, 1);
 
+    // The shell around the body of one point: where the body goes (`body`), the coordinate of the point in each
+    // dimension (`iv`), and what to look through to find the ops to rewrite (`walkRoot`).
+    Block *body = nullptr;
+    Operation *walkRoot = nullptr;
+    scf::ParallelOp parallel;
     Value innerIv;
+    SmallVector<Value, 3> gpuIvs;
+    const bool innerLoop = !gpu && rank > 1;
     auto iv = [&](unsigned d) -> Value {
+      if (gpu) return gpuIvs[d];
       if (innerLoop && d == 0) return innerIv;
       return body->getArgument(rank - 1 - d);
     };
+    if (!gpu) {
+      // The outer dimensions (z, y) run in parallel; x, the contiguous one, is a sequential loop inside, which the
+      // compiler vectorises. (With one dimension only, that one is the parallel loop.)
+      SmallVector<Value> lbs, ubs, steps, inits;
+      for (int d = rank - 1; d >= (innerLoop ? 1 : 0); --d) { // outermost (z) first
+        lbs.push_back(rangeValue(2 * d));
+        ubs.push_back(rangeValue(2 * d + 1));
+        steps.push_back(one);
+      }
+      for (unsigned r = 0; r < loop->getNumResults(); ++r) inits.push_back(neutralElement(b, loc, kinds[r], loop->getResult(r).getType()));
+      parallel = scf::ParallelOp::create(b, loc, lbs, ubs, steps, inits);
+      body = parallel.getBody();
+      walkRoot = parallel;
+      b.setInsertionPointToStart(body);
+    } else {
+      // Thread block and grid: x is the fastest dimension of memory and of the block.
+      SmallVector<int64_t, 3> bs;
+      for (StringRef part : llvm::split(block, ',')) {
+        int64_t v;
+        if (part.trim().getAsInteger(10, v) || v < 1) return chain.emitError("option 'block' must be positive integers x,y,z, got '") << block << "'";
+        bs.push_back(v);
+      }
+      bs.resize(3, 1);
+      for (unsigned d = rank; d < 3; ++d)
+        if (bs[d] != 1) return chain.emitError("the block size must be 1 in the dimensions the block does not have (rank ") << rank << ", block " << block << ")";
+      Value zero = arith::ConstantIndexOp::create(b, loc, 0);
+      SmallVector<Value, 3> extents, grid(3, one), blockSize;
+      Value nonEmpty;
+      for (unsigned d = 0; d < 3; ++d) blockSize.push_back(arith::ConstantIndexOp::create(b, loc, bs[d]));
+      for (unsigned d = 0; d < rank; ++d) {
+        Value extent = arith::SubIOp::create(b, loc, rangeValue(2 * d + 1), rangeValue(2 * d));
+        Value positive = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::sgt, extent, zero);
+        nonEmpty = nonEmpty ? Value(arith::AndIOp::create(b, loc, nonEmpty, positive)) : positive;
+        grid[d] = arith::CeilDivSIOp::create(b, loc, arith::MaxSIOp::create(b, loc, extent, zero), blockSize[d]);
+      }
+      auto nonEmptyIf = scf::IfOp::create(b, loc, nonEmpty, /*withElseRegion=*/false);
+      b.setInsertionPointToStart(&nonEmptyIf.getThenRegion().front());
+      auto launch = gpu::LaunchOp::create(b, loc, grid[0], grid[1], grid[2], blockSize[0], blockSize[1], blockSize[2]);
+      b.setInsertionPointToStart(&launch.getBody().front());
+      gpu::TerminatorOp::create(b, loc);
+      b.setInsertionPoint(launch.getBody().front().getTerminator());
+      Value inRange;
+      auto blockIds = launch.getBlockIds();
+      auto threadIds = launch.getThreadIds();
+      Value ids[3][2] = {{blockIds.x, threadIds.x}, {blockIds.y, threadIds.y}, {blockIds.z, threadIds.z}};
+      for (unsigned d = 0; d < rank; ++d) {
+        Value base = arith::MulIOp::create(b, loc, ids[d][0], blockSize[d]);
+        Value local = arith::AddIOp::create(b, loc, base, ids[d][1]);
+        Value index = arith::AddIOp::create(b, loc, local, rangeValue(2 * d));
+        gpuIvs.push_back(index);
+        Value inside = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::slt, index, rangeValue(2 * d + 1));
+        inRange = inRange ? Value(arith::AndIOp::create(b, loc, inRange, inside)) : inside;
+      }
+      auto active = scf::IfOp::create(b, loc, inRange, /*withElseRegion=*/false);
+      body = &active.getThenRegion().front();
+      walkRoot = launch;
+      b.setInsertionPointToStart(body);
+    }
 
     // Accessors, scalars and reductions of the loop body, as values the cloned body can use until it is rewritten.
     SmallVector<Accessor> accessors;
@@ -267,7 +327,7 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
 
     // Rewrite the ops of the dialect that the clones contain, nested ones included.
     SmallVector<Operation *> toRewrite;
-    parallel.getBody()->walk([&](Operation *op) {
+    walkRoot->walk([&](Operation *op) {
       if (isa<ReadOp, ReadDynOp, WriteOp, IndexOp, ReduceOp, GblReadOp, ConstRefOp>(op)) toRewrite.push_back(op);
     });
 
@@ -334,8 +394,21 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
       if (isa<UnrealizedConversionCastOp>(op) && op.use_empty()) op.erase();
 
     // The partial reductions of the points.
-    b.setInsertionPointToEnd(body);
-    if (!accumulators.empty()) {
+    if (gpu) {
+      // Each thread combines its partial value into the buffer of the reduction with an atomic.
+      b.setInsertionPoint(body->getTerminator());
+      for (auto [i, acc] : llvm::enumerate(accumulators)) {
+        Value partial = memref::LoadOp::create(b, loc, acc.memref, ValueRange{});
+        bool isFloat = isa<FloatType>(acc.type);
+        arith::AtomicRMWKind kind = acc.kind == ReductionKind::Add ? (isFloat ? arith::AtomicRMWKind::addf : arith::AtomicRMWKind::addi)
+                                    : acc.kind == ReductionKind::Min ? (isFloat ? arith::AtomicRMWKind::minnumf : arith::AtomicRMWKind::mins)
+                                                                    : (isFloat ? arith::AtomicRMWKind::maxnumf : arith::AtomicRMWKind::maxs);
+        memref::AtomicRMWOp::create(b, loc, kind, partial, entry->getArgument(bufferBase + i), ValueRange{});
+      }
+    } else {
+      b.setInsertionPointToEnd(body);
+    }
+    if (!gpu && !accumulators.empty()) {
       SmallVector<Value> partials;
       for (const Accumulator &acc : accumulators) partials.push_back(memref::LoadOp::create(b, loc, acc.memref, ValueRange{}));
       auto reduce = scf::ReduceOp::create(b, loc, partials);
@@ -355,7 +428,7 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
       auto res = dyn_cast<OpResult>(v);
       if (!res || res.getOwner() != loop.getOperation())
         return ret.emitError("a returned value is not a reduction of the loop");
-      returned.push_back(parallel.getResult(res.getResultNumber()));
+      if (!gpu) returned.push_back(parallel.getResult(res.getResultNumber()));
     }
     func::ReturnOp::create(b, loc, returned);
 

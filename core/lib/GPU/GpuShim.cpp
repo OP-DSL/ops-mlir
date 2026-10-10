@@ -156,8 +156,9 @@ void *cudaShimAnchor() {
 
 extern "C" {
 
-void *mgpuModuleLoad(void *data, size_t) {
+void *mgpuModuleLoad(void *data, size_t size) {
   ensureContext();
+  if (debugEnabled()) std::fprintf(stderr, "ops_jit: loading a GPU module of %zu bytes\n", size);
   void *module = nullptr;
   check(driver.cuModuleLoadData(&module, data), "cuModuleLoadData");
   return module;
@@ -183,6 +184,7 @@ void mgpuModuleUnload(void *module) {
 
 void *mgpuModuleGetFunction(void *module, const char *name) {
   ensureContext();
+  if (debugEnabled()) std::fprintf(stderr, "ops_jit: kernel %s of module %p\n", name, module);
   void *function = nullptr;
   check(driver.cuModuleGetFunction(&function, module, name), "cuModuleGetFunction");
   return function;

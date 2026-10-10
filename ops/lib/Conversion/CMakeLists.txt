@@ -17,4 +17,5 @@ add_mlir_library(OPSMLIRConversion
   MLIRTransformUtils
   MLIRLLVMDialect
   MLIROpenMPDialect
+  MLIRGPUDialect
 )

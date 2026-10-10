@@ -13,6 +13,7 @@
 #include "ops-mlir/Analysis/Passes.h"
 #include "ops-mlir/Dialect/OPS/IR/OPSDialect.h"
 #include "ops-mlir/Conversion/Passes.h"
+#include "ops-mlir/Pipelines/GroupModules.h"
 #include "ops-mlir/Pipelines/Pipelines.h"
 #include "ops-mlir/Transforms/Passes.h"
 
@@ -28,6 +29,8 @@ int main(int argc, char **argv) {
   registry.insert<ops_mlir::ops::OPSDialect, mlir::arith::ArithDialect, mlir::func::FuncDialect,
                   mlir::math::MathDialect, mlir::memref::MemRefDialect, mlir::scf::SCFDialect>();
   mlir::registerAllExtensions(registry);
+  // The dialects and translations the JIT pipelines need (GPU, NVVM target, ...).
+  ops_mlir::ops::registerJITDialects(registry);
 
   return mlir::asMainReturnCode(mlir::MlirOptMain(argc, argv, "OPS MLIR optimizer driver\n", registry));
 }

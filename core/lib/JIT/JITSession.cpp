@@ -3,7 +3,9 @@
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/OpenMP/OpenMPToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 
@@ -24,6 +26,7 @@
 #include "llvm/TargetParser/Host.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <vector>
@@ -84,6 +87,32 @@ bool definePackedWrapper(llvm::Module &module, llvm::StringRef entry) {
   return true;
 }
 
+/// ORC does not run the static constructors of object files without a platform (and there is none here), but compiled
+/// code needs them: the GPU module load that gpu.binary becomes is a global constructor. Replace `llvm.global_ctors` /
+/// `llvm.global_dtors` by exported functions `name` that call the entries in order (destructors: reverse order); the
+/// session runs them after loading and before unloading.
+void wrapGlobalFunctions(llvm::Module &module, const char *globalName, const std::string &name, bool reverse) {
+  llvm::GlobalVariable *global = module.getGlobalVariable(globalName);
+  if (!global || !global->hasInitializer()) return;
+  auto *entries = llvm::dyn_cast<llvm::ConstantArray>(global->getInitializer());
+  if (!entries) return;
+  std::vector<std::pair<uint64_t, llvm::Function *>> list;
+  for (llvm::Value *entry : entries->operands()) {
+    auto *pair = llvm::cast<llvm::ConstantStruct>(entry);
+    auto *priority = llvm::cast<llvm::ConstantInt>(pair->getOperand(0));
+    if (auto *fn = llvm::dyn_cast<llvm::Function>(pair->getOperand(1)->stripPointerCasts())) list.push_back({priority->getZExtValue(), fn});
+  }
+  std::stable_sort(list.begin(), list.end(), [&](auto &a, auto &b) { return reverse ? a.first > b.first : a.first < b.first; });
+  llvm::LLVMContext &ctx = module.getContext();
+  auto *type = llvm::FunctionType::get(llvm::Type::getVoidTy(ctx), false);
+  auto *fn = llvm::Function::Create(type, llvm::GlobalValue::ExternalLinkage, name, module);
+  llvm::IRBuilder<> builder(llvm::BasicBlock::Create(ctx, "entry", fn));
+  for (auto &[priority, callee] : list) builder.CreateCall(callee);
+  builder.CreateRetVoid();
+  llvm::appendToCompilerUsed(module, {fn});
+  global->eraseFromParent();
+}
+
 } // namespace
 
 struct JITSession::Impl {
@@ -93,12 +122,14 @@ struct JITSession::Impl {
   std::string target;
   std::atomic<unsigned> nextDylib{0};
   std::vector<llvm::orc::JITDylib *> dylibs;
+  std::vector<void (*)()> finalisers; ///< the destructors of the loaded objects, in order of loading
 };
 
 JITSession::JITSession() : impl(std::make_unique<Impl>()) {}
 JITSession::~JITSession() {
   if (impl && impl->jit) {
-    // Run the finalisers of the objects (GPU module destructors...), newest first.
+    // Run the destructors of the objects (GPU module unloading...), newest first.
+    for (auto it = impl->finalisers.rbegin(); it != impl->finalisers.rend(); ++it) (*it)();
     for (auto it = impl->dylibs.rbegin(); it != impl->dylibs.rend(); ++it) llvm::consumeError(impl->jit->deinitialize(**it));
   }
 }
@@ -107,6 +138,12 @@ void JITSession::registerTranslations(mlir::MLIRContext &ctx) {
   mlir::registerBuiltinDialectTranslation(ctx);
   mlir::registerLLVMDialectTranslation(ctx);
   mlir::registerOpenMPDialectTranslation(ctx);
+  // gpu.launch_func and gpu.binary become calls of the mgpu* runtime functions at this step.
+  mlir::DialectRegistry gpu;
+  mlir::registerGPUDialectTranslation(gpu);
+  mlir::registerNVVMDialectTranslation(gpu);
+  mlir::gpu::registerOffloadingLLVMTranslationInterfaceExternalModels(gpu);
+  ctx.appendDialectRegistry(gpu);
 }
 
 llvm::Expected<std::unique_ptr<JITSession>> JITSession::create(const JITOptions &options) {
@@ -148,7 +185,9 @@ llvm::Expected<std::unique_ptr<llvm::MemoryBuffer>> JITSession::compile(mlir::Mo
   if (!llvmModule) return fail("cannot translate the module to LLVM IR (is it fully lowered to the LLVM dialect?)");
   mlir::ExecutionEngine::setupTargetTripleAndDataLayout(llvmModule.get(), impl->targetMachine.get());
 
-  if (!definePackedWrapper(*llvmModule, entry)) return fail("the module does not define a function named '" + entry + "'");
+  if (!definePackedWrapper(*llvmModule, entry)) return fail("the module does not define a function named '" + entry.str() + "'");
+  wrapGlobalFunctions(*llvmModule, "llvm.global_ctors", "_opdsl_init_" + entry.str(), /*reverse=*/false);
+  wrapGlobalFunctions(*llvmModule, "llvm.global_dtors", "_opdsl_fini_" + entry.str(), /*reverse=*/true);
 
   auto optimize = mlir::makeOptimizingTransformer(impl->options.optLevel, /*sizeLevel=*/0, impl->targetMachine.get());
   if (llvm::Error e = optimize(llvmModule.get())) return std::move(e);
@@ -174,6 +213,11 @@ llvm::Expected<JITSession::PackedFn> JITSession::load(std::unique_ptr<llvm::Memo
   if (llvm::Error e = jit.addObjectFile(jd, std::move(object))) return std::move(e);
   if (llvm::Error e = jit.initialize(jd)) return std::move(e);
   impl->dylibs.push_back(&jd);
+  // Static constructors (see wrapGlobalFunctions), then the packed wrapper.
+  if (auto init = jit.lookup(jd, ("_opdsl_init_" + entry).str())) init->toPtr<void (*)()>()();
+  else llvm::consumeError(init.takeError());
+  if (auto fini = jit.lookup(jd, ("_opdsl_fini_" + entry).str())) impl->finalisers.push_back(fini->toPtr<void (*)()>());
+  else llvm::consumeError(fini.takeError());
   auto symbol = jit.lookup(jd, packedName(entry));
   if (!symbol) return symbol.takeError();
   return symbol->toPtr<PackedFn>();

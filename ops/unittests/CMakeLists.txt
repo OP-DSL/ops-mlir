@@ -15,3 +15,8 @@ if(TARGET OPSMLIRRuntimeObjects)
     target_link_options(ops_runtime_test PRIVATE -Wl,--export-dynamic)
   endif()
 endif()
+
+# The CUDA pipeline end to end (skipped without a device/toolkit).
+add_opsjit_unittest(ops_end_to_end_gpu_test EndToEndGPUTest.cpp $<TARGET_OBJECTS:OPDSLGpu>
+  LINK OPSMLIRRuntimeCore OPSMLIRPipelines OPSMLIRDialect OPDSLJIT OPDSLCache OPDSLSupport MLIRParser ${CMAKE_DL_LIBS})
+target_link_options(ops_end_to_end_gpu_test PRIVATE -Wl,--export-dynamic)

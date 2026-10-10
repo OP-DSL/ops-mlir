@@ -23,4 +23,13 @@ add_mlir_library(OPSMLIRPipelines
   MLIRMemRefToLLVM
   MLIROpenMPToLLVM
   MLIRReconcileUnrealizedCasts
+  MLIRRegisterAllExtensions
+  MLIRGPUDialect
+  MLIRGPUPipelines
+  MLIRGPUToLLVMIRTranslation
+  MLIRGPUToGPURuntimeTransforms
+  MLIRNVVMDialect
+  MLIRNVVMTarget
+  MLIRNVVMToLLVMIRTranslation
+  MLIRLLVMToLLVMIRTranslation
 )

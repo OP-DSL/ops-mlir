@@ -20,7 +20,7 @@ add_library(OPDSLJIT STATIC
 target_include_directories(OPDSLJIT PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(OPDSLJIT PUBLIC
   MLIRIR MLIRExecutionEngine MLIRTargetLLVMIRExport MLIRBuiltinToLLVMIRTranslation MLIRLLVMToLLVMIRTranslation
-  MLIROpenMPToLLVMIRTranslation ${opdsl_llvm_libs})
+  MLIROpenMPToLLVMIRTranslation MLIRGPUToLLVMIRTranslation MLIRNVVMToLLVMIRTranslation ${opdsl_llvm_libs})
 
 add_library(OPDSLCache STATIC
   lib/Cache/PersistentCache.cpp)
@@ -35,6 +35,7 @@ set_target_properties(OPDSLGpu PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(OPDSLTestMain STATIC unittests/TestMain.cpp)
 target_include_directories(OPDSLTestMain PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(OPDSLTestMain PUBLIC LLVMSupport)
 
 add_subdirectory(unittests)
 

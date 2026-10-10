@@ -26,13 +26,16 @@ class PackedArgs {
 public:
   /// A strided memref over `data`. `sizes` and `strides` in memory order (slowest first), in elements; at most 4.
   void addMemref(void *data, const std::vector<int64_t> &sizes, const std::vector<int64_t> &strides);
-  void addIndex(int64_t value) { indices.push_back(value); }
+  void addIndex(int64_t value) {
+    order.push_back({Slot::Index, indices.size()});
+    indices.push_back(value);
+  }
   /// A scalar argument: `bytes` of storage holding a value of type `elem`.
   void addScalar(const std::string &elem, const void *bytes);
   /// The element types of the results (several: returned as one struct, natural alignment).
   void setResults(const std::vector<std::string> &elems);
 
-  /// Builds the argument vector; call after everything was added, before call().
+  /// Builds the argument vector, in the order the arguments were added; call after everything was added, before call().
   void finalize();
   void call(opdsl::JITSession::PackedFn fn) { fn(argv.data()); }
 
@@ -57,6 +60,11 @@ private:
   struct Memref {
     std::array<int64_t, 3 + 2 * 4> words{}; // allocated, aligned, offset, sizes[r], strides[r]
   };
+  struct Slot {
+    enum Kind { MemrefArg, Index, Scalar } kind;
+    size_t i;
+  };
+  std::vector<Slot> order;
   std::vector<Memref> memrefs;
   std::vector<MemrefInfo> memrefInfo;
   std::vector<Memref *> memrefPointers;
