@@ -40,17 +40,19 @@ if [ "$OPS_CUDA" = on ]; then
 else
   args+=( -DCMAKE_DISABLE_FIND_PACKAGE_CUDAToolkit=ON )
 fi
-# Reproducibility: only look at what env.sh points at. In particular do not ask the h5cc/h5pcc wrapper
-# scripts where HDF5 is: the shared cluster copy was relocated and its wrappers still name the original
-# location, which holds an Intel-built HDF5 that cannot be linked without Intel's runtime libraries.
+# Reproducibility: only look at what env.sh points at.
 args+=( -DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF
         -DHDF5_NO_FIND_PACKAGE_CONFIG_FILE=TRUE )
-# (Only when HDF5 is configured: without any HDF5, "no interrogation" makes FindHDF5 report success.)
-if [ -n "${HDF5_INSTALL_PATH:-}" ]; then
-  args+=( -DHDF5_ROOT="$HDF5_INSTALL_PATH" -DHDF5_C_COMPILER_NO_INTERROGATE=TRUE
-          -DHDF5_C_INCLUDE_DIR="$HDF5_INSTALL_PATH/include"
-          -DHDF5_hdf5_LIBRARY_RELEASE="$HDF5_INSTALL_PATH/lib/libhdf5.so"
-          -DHDF5_hdf5_hl_LIBRARY_RELEASE="$HDF5_INSTALL_PATH/lib/libhdf5_hl.so" )
+# CMake's FindHDF5 asks the h5pcc wrapper where HDF5 is. The shared cluster copy was relocated and its
+# wrapper still names the original location (prefix=/home/reguly/projects/tests/hdf5), which holds an
+# Intel-built HDF5 that cannot be linked without Intel's runtime libraries. Use a copy of the wrapper
+# with the right prefix.
+if [ -n "${HDF5_INSTALL_PATH:-}" ] && [ -f "$HDF5_INSTALL_PATH/bin/h5pcc" ]; then
+  wrappers=$OPSJIT_BUILD_ROOT/hdf5-wrappers
+  mkdir -p "$wrappers"
+  sed "s#^prefix=.*#prefix=\"$HDF5_INSTALL_PATH\"#" "$HDF5_INSTALL_PATH/bin/h5pcc" >"$wrappers/h5pcc"
+  chmod +x "$wrappers/h5pcc"
+  args+=( -DHDF5_ROOT="$HDF5_INSTALL_PATH" -DHDF5_C_COMPILER_EXECUTABLE="$wrappers/h5pcc" )
 fi
 [ -n "${CFLAG:-}" ] && args+=( -DCFLAG="$CFLAG" )
 [ -n "${CXXFLAG:-}" ] && args+=( -DCXXFLAG="$CXXFLAG" )
