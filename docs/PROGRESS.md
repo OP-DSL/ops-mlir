@@ -323,3 +323,37 @@ loads the cached object (no lowering, no compile) and produces the same results.
 - Importer: manifests carry `"role": "bound"` for constants that reach a loop bound or an index (the runtime folds them: their values are
   part of the plan key).
 - Translator: `parseUnexposedFunction` crashed on `DECL_REF_EXPR`s without tokens (OpenSBLI's `opensbli.cpp`): fixed.
+
+## P3 (continued): results and what changed after the first runs
+
+- **Verify results (local, seq + 2 threads):** laplace2d, poisson, TeaLeaf (433 groups), CloverLeaf 2D (8650 groups, 12834 of 12836 loops
+  claimed) and CloverLeaf 3D (28078 groups, 51261 of 51264 claimed) pass with 0 differing groups. The few declines are the initialisation loops
+  that use edge dats (1-D coordinate dats) and `poisson_kernel_populate` (user helper `myfun`, since inlined by the importer).
+- **MPI (cluster, np=4, A first run of the whole suite, job 227458):** every default and OPS_JIT_FUSION=0 test of laplace2d, poisson,
+  lazy_triggers, TeaLeaf, lowdim, CloverLeaf 2D/3D passed under `mpirun -np 4`; the failures of that run were infrastructure (the cache test driver was
+  ignored by git: `*.cmake` in .gitignore; the MPI verify runs of CloverLeaf hit the 600 s default timeout).
+- **Lowering performance:** the first lowering made one `scf.parallel` over all dimensions: with OpenMP that became a collapsed loop whose inner
+  loop LLVM did not vectorise, and every reduction allocated its accumulator inside the loop body (stack save/restore per point). Now `convert-ops-to-scf`
+  parallelises the outer dimensions and leaves x as a sequential `scf.for`, and `ops-hoist-accumulators` moves accumulators to the entry of the
+  `omp.parallel` region. laplace2d 4096^2 x 100 iterations on this machine: 8.9 s -> 3.8 s on one thread (AOT OpenMP code of the same build: 43.6 s).
+- **Tools:** `OPS_JIT_DUMP_DATA=1` records the first call of every group; `ops-jit-replay <dir> <group>` re-runs it offline (checksums of the dats and
+  the reduction values are compared with what the application saw). `PackedArgs` (argument block of the packed call) and `GroupCompiler` (lowering,
+  compile, memory and disk caches) are independent of OPS.
+- **Importer:** `"role": "bound"` for constants that reach a loop bound or an index; calls of helper functions defined in the translation unit
+  are inlined (scalar by-value parameters, body ending in `return value;`).
+
+## P4 GPU (CUDA), first results
+
+- **P4.1** `core/lib/GPU/GpuShim.cpp`: the `mgpu*` symbols that MLIR's GPU translation calls, over the CUDA driver API loaded with dlopen. Differences to
+  upstream's libmlir_cuda_runtime: the current context (the one OPS's runtime-API calls made current), the legacy default stream (so ordered with OPS's
+  own CUDA work and host transfers), `mgpuStreamSynchronize` only with `OPS_JIT_SYNC=1`.
+- **P4.2** `convert-ops-to-scf target=gpu block=x,y,z`: grid from the range, one thread per point, a mask for threads outside the range, atomics into
+  a device buffer per reduction (`maxnumf`/`minnumf`/`addf` and the integer forms). `ops-jit-cuda{chip features block ptxas specialize soa}` =
+  specialise, lower, then MLIR's `gpu-lower-to-nvvm-pipeline` (fatbin through ptxas of the toolkit: `CUDA_ROOT`). The result is a module with a
+  `gpu.binary` and `gpu.launch_func`; JITSession's translation to LLVM IR generates the `mgpu*` calls.
+- **Facts:** ORC does not run the static constructors of object files (no platform): the module load that `gpu.binary` becomes is one. JITSession now turns
+  `llvm.global_ctors`/`dtors` into exported functions that it calls after loading / before unloading. `PackedArgs` must keep the order of the arguments
+  (the GPU reduction buffers come after the scalars). The NVVM target needs `registerAllExtensions` plus the offloading translation interface in the context.
+- **Test:** `EndToEndGPUTest` (a stencil with an atomic max over a range that is not a multiple of the block) passes on the local RTX 4050 (sm_89).
+- **P4.3** the executor runs loops with `isdevice` on the GPU (data from `data_d`, reductions through per-group device buffers initialised with the
+  neutral element and copied back, combined into the handle slot like on the host); verify mode reads and restores the device copies.
