@@ -56,8 +56,12 @@ function(_ops_jit_add_test exe_target script mode tmp)
              COMMAND ${CMAKE_COMMAND} "-DCMD=${command}" "-DARG= " -DOPS_INSTALL_PATH=${OPS_INSTALL}
                      -P ${OPS_SRC}/apps/c/runtests.cmake
              WORKING_DIRECTORY "${tmp}")
+    set(timeout 1800)
+    if(variant STREQUAL "_verify")
+      set(timeout 7200)
+    endif()
     set_tests_properties(${exe_target}${variant} PROPERTIES LABELS "${labels}" RESOURCE_LOCK "${tmp}"
-                         ENVIRONMENT "${environment}")
+                         ENVIRONMENT "${environment}" TIMEOUT ${timeout})
   endforeach()
   # Two runs with a fresh disk cache: the second compiles nothing.
   add_test(NAME ${exe_target}_cache
