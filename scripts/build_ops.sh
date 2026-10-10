@@ -35,8 +35,9 @@ args=(
 if [ "$OPS_CUDA" = on ]; then
   GPU_ARCH=${GPU_ARCH:-$([ "$OPSJIT_HOST" = cluster ] && echo "70;80" || echo 89)}
   # nvcc rejects the very new clang as a host compiler: use the system g++ for .cu files only.
+  # -no-pie: nvcc's host objects are not position independent, the clang driver links PIE by default.
   args+=( -DGPU_ARCH="$GPU_ARCH" -DGPU_NUMBER=1 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++
-          -DCUDAToolkit_ROOT="$CUDA_INSTALL_PATH" )
+          -DCUDAToolkit_ROOT="$CUDA_INSTALL_PATH" -DCMAKE_EXE_LINKER_FLAGS=-no-pie )
 else
   args+=( -DCMAKE_DISABLE_FIND_PACKAGE_CUDAToolkit=ON )
 fi
@@ -61,7 +62,8 @@ echo "== configure OPS ($OPS_SRC @ $(git -C "$OPS_SRC" log -1 --format=%h)) -> $
 cmake "${args[@]}" "$@"
 if [ "${OPS_CONFIGURE_ONLY:-0}" = 1 ]; then echo "== configure only"; exit 0; fi
 echo "== build"
-cmake --build "$BUILD" -j "$JOBS"
+# -k 0: report every failing target, not only the first
+cmake --build "$BUILD" -j "$JOBS" -- -k 0
 if [ "$APPS" = ON ] && [ "${OPS_INSTALL_APPS:-0}" != 1 ]; then
   # The apps are tested from the build tree. Installing would also copy every app and input deck.
   echo "== apps built in $BUILD (not installed); run: ctest --test-dir $BUILD"

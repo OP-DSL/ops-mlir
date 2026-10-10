@@ -15,5 +15,5 @@ target_include_directories(OPDSLTestMain PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/incl
 add_subdirectory(unittests)
 
 add_test(NAME core_independence
-  COMMAND ${CMAKE_SOURCE_DIR}/scripts/check_core_independence.sh ${CMAKE_CURRENT_SOURCE_DIR})
+  COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/check_core_independence.sh ${CMAKE_CURRENT_SOURCE_DIR})
 set_tests_properties(core_independence PROPERTIES LABELS "unit")
