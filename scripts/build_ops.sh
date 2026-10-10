@@ -29,6 +29,7 @@ args=(
   -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX"
   -DCMAKE_INSTALL_PREFIX="$OPS_INSTALL"
   -DBUILD_OPS_APPS="$APPS" -DOPS_TEST="$APPS"
+  -DAPP_INSTALL_DIR="${OPS_APP_INSTALL:-$OPSJIT_WORK/install/apps}"
 )
 
 if [ "$OPS_CUDA" = on ]; then
@@ -47,6 +48,11 @@ echo "== configure OPS ($OPS_SRC @ $(git -C "$OPS_SRC" log -1 --format=%h)) -> $
 cmake "${args[@]}" "$@"
 echo "== build"
 cmake --build "$BUILD" -j "$JOBS"
-echo "== install"
-cmake --install "$BUILD"
-echo "OPS installed in $OPS_INSTALL"
+if [ "$APPS" = ON ] && [ "${OPS_INSTALL_APPS:-0}" != 1 ]; then
+  # The apps are tested from the build tree. Installing would also copy every app and input deck.
+  echo "== apps built in $BUILD (not installed); run: ctest --test-dir $BUILD"
+else
+  echo "== install"
+  cmake --install "$BUILD"
+  echo "OPS installed in $OPS_INSTALL"
+fi
