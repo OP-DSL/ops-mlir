@@ -378,9 +378,9 @@ OPDSL_TEST(Runtime, SameStructureReusesThePlanAndConstantsAreArguments) {
     flush();
   };
   run(0.5);
-  uint64_t compilesBefore = stats.compiles, hitsBefore = stats.planHits;
+  uint64_t compilesBefore = executor().compileStats().compiles, hitsBefore = stats.planHits;
   run(7.0);
-  OPDSL_EXPECT_EQ(stats.compiles, compilesBefore);
+  OPDSL_EXPECT_EQ(executor().compileStats().compiles, compilesBefore);
   OPDSL_EXPECT_EQ(stats.planHits, hitsBefore + 1);
   OPDSL_EXPECT(std::fabs(w.at(w.b, 3, 2) - ((1.0 + 0.25 * 3 + 0.5 * 2) + 7.0)) < 1e-14);
 }
@@ -400,10 +400,10 @@ OPDSL_TEST(Runtime, BoundConstantsAreFoldedAndPartOfThePlanKey) {
   };
   run(3);
   OPDSL_EXPECT(std::fabs(w.at(w.b, 2, 2) - 4.0 * (1.0 + 0.5 + 1.0)) < 1e-14);
-  uint64_t compiles = stats.compiles;
+  uint64_t compiles = executor().compileStats().compiles;
   run(5); // another value of a bound constant: another plan, and other code
   OPDSL_EXPECT(std::fabs(w.at(w.b, 2, 2) - 6.0 * (1.0 + 0.5 + 1.0)) < 1e-14);
-  OPDSL_EXPECT(stats.compiles + stats.diskHits > compiles);
+  OPDSL_EXPECT(executor().compileStats().compiles + executor().compileStats().diskHits > compiles);
   uint64_t plans = stats.planBuilds;
   run(3); // back to the first: its plan is still there
   OPDSL_EXPECT_EQ(stats.planBuilds, plans);

@@ -31,8 +31,6 @@ using Clock = std::chrono::steady_clock;
 
 namespace {
 
-constexpr int kCodeFormat = 3; ///< bump when the ABI, the packed wrapper or the meaning of a compiled group changes
-
 double since(Clock::time_point t0) { return std::chrono::duration<double>(Clock::now() - t0).count(); }
 
 struct ScopedTime {
@@ -163,6 +161,11 @@ Executor::Executor() {
   ctx_ = std::make_unique<MLIRContext>(dialects_, MLIRContext::Threading::DISABLED);
   ctx_->loadAllAvailableDialects();
   artifacts_ = std::make_unique<ArtifactCache>(*ctx_);
+  CompilerOptions co;
+  co.useCache = options().cache;
+  co.cacheDir = options().cacheDir;
+  co.dumpDir = options().dumpDir;
+  compiler_ = std::make_unique<GroupCompiler>(*ctx_, registry_, co);
 }
 
 Executor &executor() {
@@ -173,19 +176,6 @@ Executor &executor() {
 void Executor::run(OPS_instance *instance, ops_kernel_descriptor **descs, int n, void *ctx) {
   (void)ctx;
   executor().execute(instance, descs, n);
-}
-
-opdsl::JITSession &Executor::session() {
-  if (!session_) {
-    opdsl::JITOptions jo;
-    auto s = opdsl::JITSession::create(jo);
-    if (!s) {
-      std::fprintf(stderr, "ops_jit: cannot create the JIT session: %s\n", errorText(s.takeError()).c_str());
-      std::abort();
-    }
-    session_ = std::move(*s);
-  }
-  return *session_;
 }
 
 void Executor::execute(OPS_instance *instance, ops_kernel_descriptor **descs, int n) {
@@ -441,7 +431,9 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
   for (size_t g = 0; g < groups.size(); ++g) {
     OwningOpRef<ModuleOp> canonical = canonicalGroup(groups[g].module.get(), opts.specialize != "none");
     std::string cerror;
-    std::shared_ptr<GroupCode> code = codeFor(canonical.get(), soa, cerror);
+    const std::string pipelineOptions = std::string("omp=") + (opts.omp ? "true" : "false") + " specialize=" + opts.specialize +
+                                        " soa=" + (soa ? "true" : "false");
+    std::shared_ptr<GroupCode> code = compiler_->compile(canonical.get(), "ops-jit-cpu", pipelineOptions, cerror);
     if (!code) return fail("compiling a group: " + cerror);
     Plan::Group pg;
     pg.recipe = std::move(recipes[g]);
@@ -461,116 +453,23 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
   return plan;
 }
 
-std::shared_ptr<GroupCode> Executor::codeFor(ModuleOp group, bool soa, std::string &error) {
-  const Options &opts = options();
-  const std::string pipelineOptions = std::string("omp=") + (opts.omp ? "true" : "false") + " specialize=" + opts.specialize +
-                                      " soa=" + (soa ? "true" : "false");
-  std::string bytecode = moduleBytecode(group);
-  std::string key = opdsl::Hasher()
-                        .add(bytecode)
-                        .add("ops-jit-cpu")
-                        .add(pipelineOptions)
-                        .add(session().targetDescription())
-                        .addInt(kCodeFormat)
-                        .add(LLVM_VERSION_STRING)
-                        .hex();
-  auto known = code_.find(key);
-  if (known != code_.end()) {
-    stats_.memoryHits++;
-    return known->second;
-  }
-  auto code = std::make_shared<GroupCode>();
-  code->key = key;
-  code->entry = "group_" + key.substr(0, 16);
-
-  if (opts.cache && !cache_) {
-    opdsl::CacheOptions co;
-    co.directory = opts.cacheDir;
-    cache_ = std::make_unique<opdsl::PersistentCache>(co);
-  }
-  if (opts.cache) {
-    ScopedTime timer(stats_.tCacheIO);
-    if (auto hit = cache_->lookup(key)) {
-      auto fn = session().load(llvm::MemoryBuffer::getMemBufferCopy(hit->payload, code->entry), code->entry);
-      if (fn) {
-        code->fn = *fn;
-        stats_.diskHits++;
-        code_[key] = code;
-        return code;
-      }
-      llvm::consumeError(fn.takeError());
-    }
-  }
-
-  // Lowering and compiling.
-  stats_.compiles++;
-  dumpModule(code->entry + ".group.mlir", group);
-  OwningOpRef<ModuleOp> lowered(cast<ModuleOp>(group->clone()));
-  {
-    ScopedTime timer(stats_.tLowering);
-    for (ChainOp chain : lowered->getOps<ChainOp>()) chain->setAttr("ops.func_name", StringAttr::get(ctx_.get(), code->entry));
-    CaptureDiagnostics diagnostics(ctx_.get());
-    PassManager pm(ctx_.get());
-    if (llvm::Error e = registry_.build("ops-jit-cpu", pipelineOptions, pm)) {
-      error = errorText(std::move(e));
-      return nullptr;
-    }
-    if (failed(pm.run(*lowered))) {
-      error = "ops-jit-cpu failed: " + diagnostics.text;
-      return nullptr;
-    }
-  }
-  dumpModule(code->entry + ".lowered.mlir", *lowered);
-  std::unique_ptr<llvm::MemoryBuffer> object;
-  {
-    ScopedTime timer(stats_.tLlvm);
-    auto o = session().compile(*lowered, code->entry);
-    if (!o) {
-      error = "LLVM: " + errorText(o.takeError());
-      return nullptr;
-    }
-    object = std::move(*o);
-  }
-  if (opts.cache) {
-    ScopedTime timer(stats_.tCacheIO);
-    llvm::json::Object header;
-    header["entry"] = code->entry;
-    header["pipeline"] = pipelineOptions;
-    std::string headerText;
-    llvm::raw_string_ostream hs(headerText);
-    hs << llvm::json::Value(std::move(header));
-    if (llvm::Error e = cache_->store(key, headerText, object->getBuffer()))
-      std::fprintf(stderr, "ops_jit: cannot write the cache: %s\n", errorText(std::move(e)).c_str());
-  }
-  {
-    ScopedTime timer(stats_.tLlvm);
-    auto fn = session().load(std::move(object), code->entry);
-    if (!fn) {
-      error = "LLVM load: " + errorText(fn.takeError());
-      return nullptr;
-    }
-    code->fn = *fn;
-  }
-  code_[key] = code;
-  return code;
-}
-
 void Executor::printStats() const {
   const Stats &s = stats_;
+  const CompileStats &c = compiler_->stats();
   std::fprintf(stderr, "ops_jit counters: flushes=%llu loops=%llu claimed=%llu declined=%llu groups=%llu plans_built=%llu plans_reused=%llu plans_failed=%llu compiled=%llu memory_hits=%llu disk_hits=%llu\n",
                (unsigned long long)s.flushes, (unsigned long long)s.loopsSeen, (unsigned long long)s.loopsClaimed,
                (unsigned long long)s.loopsDeclined, (unsigned long long)s.groupsExecuted, (unsigned long long)s.planBuilds,
-               (unsigned long long)s.planHits, (unsigned long long)s.planFailures, (unsigned long long)s.compiles,
-               (unsigned long long)s.memoryHits, (unsigned long long)s.diskHits);
+               (unsigned long long)s.planHits, (unsigned long long)s.planFailures, (unsigned long long)c.compiles,
+               (unsigned long long)c.memoryHits, (unsigned long long)c.diskHits);
   std::fprintf(stderr, "ops_jit statistics:\n");
   std::fprintf(stderr, "  flushes %llu, loops %llu: claimed %llu, declined %llu; groups executed %llu\n", (unsigned long long)s.flushes,
                (unsigned long long)s.loopsSeen, (unsigned long long)s.loopsClaimed, (unsigned long long)s.loopsDeclined,
                (unsigned long long)s.groupsExecuted);
   std::fprintf(stderr, "  plans: %llu built, %llu reused, %llu failed; code: %llu compiled, %llu from memory, %llu from disk\n",
                (unsigned long long)s.planBuilds, (unsigned long long)s.planHits, (unsigned long long)s.planFailures,
-               (unsigned long long)s.compiles, (unsigned long long)s.memoryHits, (unsigned long long)s.diskHits);
+               (unsigned long long)c.compiles, (unsigned long long)c.memoryHits, (unsigned long long)c.diskHits);
   std::fprintf(stderr, "  time [s]: claim %.3f, lift %.3f, frontend %.3f, plan passes %.3f, lowering %.3f, llvm %.3f, cache io %.3f, bind %.3f, execute %.3f\n",
-               s.tClaim, s.tLift, s.tFrontend, s.tPlanPasses, s.tLowering, s.tLlvm, s.tCacheIO, s.tBind, s.tExecute);
+               s.tClaim, s.tLift, s.tFrontend, s.tPlanPasses, c.tLowering, c.tLlvm, c.tCacheIO, s.tBind, s.tExecute);
   if (options().verify)
     std::fprintf(stderr, "  verify: %llu groups checked against OPS, %llu with differences\n", (unsigned long long)s.verifyGroups,
                  (unsigned long long)s.verifyMismatches);

@@ -16,6 +16,7 @@ add_library(OPSMLIRRuntimeObjects OBJECT
   Claim.cpp
   Lifter.cpp
   Binding.cpp
+  GroupCompiler.cpp
   Executor.cpp
   Init.cpp)
 set_target_properties(OPSMLIRRuntimeObjects PROPERTIES POSITION_INDEPENDENT_CODE ON)
