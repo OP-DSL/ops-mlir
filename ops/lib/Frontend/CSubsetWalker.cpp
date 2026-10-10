@@ -7,6 +7,7 @@
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Basic/SourceManager.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Path.h"
 
@@ -184,7 +185,10 @@ Value CSubsetWalker::emitCall(const clang::CallExpr *call) {
   const clang::FunctionDecl *callee = call->getDirectCallee();
   if (!callee || !callee->getDeclName().isIdentifier()) return fail("call to an unknown function", call);
   std::string name = normalizedMathName(callee->getName());
-  if (name.empty()) return fail("call to unsupported function '" + callee->getNameAsString() + "'", call);
+  if (name.empty()) {
+    if (const clang::FunctionDecl *definition = callee->getDefinition()) return inlineCall(call, definition);
+    return fail("call to unsupported function '" + callee->getNameAsString() + "'", call);
+  }
 
   SmallVector<Value, 2> a;
   for (const clang::Expr *arg : call->arguments()) {
@@ -238,6 +242,56 @@ Value CSubsetWalker::emitCall(const clang::CallExpr *call) {
     if (name == "copysign") return math::CopySignOp::create(b, loc, a[0], a[1]);
   }
   return fail("call to unsupported function '" + callee->getNameAsString() + "'", call);
+}
+
+namespace {
+/// Counts the return statements of a function body.
+struct ReturnCounter : clang::RecursiveASTVisitor<ReturnCounter> {
+  int count = 0;
+  bool VisitReturnStmt(clang::ReturnStmt *) {
+    ++count;
+    return true;
+  }
+};
+} // namespace
+
+Value CSubsetWalker::inlineCall(const clang::CallExpr *call, const clang::FunctionDecl *def) {
+  const std::string name = def->getNameAsString();
+  if (inlineStack.size() >= 8 || llvm::is_contained(inlineStack, def)) return fail("recursive or deeply nested call of '" + name + "'", call);
+  const auto *body = llvm::dyn_cast_or_null<clang::CompoundStmt>(def->getBody());
+  if (!body || body->body_empty() || !llvm::isa<clang::ReturnStmt>(body->body_back()) ||
+      !llvm::cast<clang::ReturnStmt>(body->body_back())->getRetValue())
+    return fail("function '" + name + "' cannot be inlined: its body must end in `return value;`", call);
+  ReturnCounter returns;
+  returns.TraverseStmt(const_cast<clang::CompoundStmt *>(body));
+  if (returns.count != 1) return fail("function '" + name + "' cannot be inlined: it has more than one return", call);
+  Type resultType = scalarType(def->getReturnType());
+  if (!resultType) return fail("function '" + name + "' returns a type that is not supported", call);
+
+  // The arguments first (they may call the same function), then bind the parameters.
+  SmallVector<Value> args;
+  for (auto [i, arg] : llvm::enumerate(call->arguments())) {
+    const clang::ParmVarDecl *param = def->getParamDecl(i);
+    clang::QualType t = param->getType();
+    Type paramType = (t->isReferenceType() || t->isPointerType()) ? Type() : scalarType(t);
+    if (!paramType) return fail("function '" + name + "' cannot be inlined: parameter '" + param->getNameAsString() + "' is not a scalar passed by value", call);
+    Value v = emit(arg);
+    if (!v) return {};
+    args.push_back(cast(v, paramType));
+  }
+  for (auto [i, v] : llvm::enumerate(args)) env.locals[def->getParamDecl(i)] = v;
+
+  inlineStack.push_back(def);
+  for (const clang::Stmt *s : body->body()) {
+    if (s == body->body_back()) break;
+    emitStmt(s);
+    if (!ok()) break;
+  }
+  Value result;
+  if (ok()) result = emit(llvm::cast<clang::ReturnStmt>(body->body_back())->getRetValue());
+  inlineStack.pop_back();
+  if (!result) return {};
+  return cast(result, resultType);
 }
 
 Value CSubsetWalker::emitShortCircuit(const clang::BinaryOperator *op) {

@@ -444,7 +444,8 @@ protected:
     if (const auto *dre = llvm::dyn_cast<clang::DeclRefExpr>(x)) {
       if (llvm::isa<clang::ParmVarDecl>(dre->getDecl())) {
         int p = paramIndex(x);
-        if (p >= 0 && params[p].kind == Param::Gbl && params[p].byValue) return gblRead(params[p], 0);
+        if (p < 0) return std::nullopt; // a parameter of an inlined helper function: bound by the generic walker
+        if (params[p].kind == Param::Gbl && params[p].byValue) return gblRead(params[p], 0);
         return fail("kernel parameter '" + dre->getDecl()->getNameAsString() + "' is used in an unsupported way", x);
       }
       if (const auto *vd = llvm::dyn_cast<clang::VarDecl>(dre->getDecl()); vd && vd->hasGlobalStorage()) return emitGlobalOrConstant(x);

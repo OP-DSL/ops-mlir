@@ -131,6 +131,10 @@ private:
   mlir::Type typeOf(const LocalTarget &t);
 
   mlir::Value emitCall(const clang::CallExpr *call);
+  /// Inlines a call of a function defined in the translation unit: scalar by-value parameters, a body that ends in
+  /// `return value;` and has no other return.
+  mlir::Value inlineCall(const clang::CallExpr *call, const clang::FunctionDecl *definition);
+  std::vector<const clang::FunctionDecl *> inlineStack;
   mlir::Value emitBinary(const clang::BinaryOperator *op);
   mlir::Value emitConditional(const clang::ConditionalOperator *op);
   mlir::Value emitShortCircuit(const clang::BinaryOperator *op);
