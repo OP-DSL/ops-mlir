@@ -31,7 +31,7 @@ using Clock = std::chrono::steady_clock;
 
 namespace {
 
-constexpr int kCodeFormat = 2; ///< bump when the ABI, the packed wrapper or the meaning of a compiled group changes
+constexpr int kCodeFormat = 3; ///< bump when the ABI, the packed wrapper or the meaning of a compiled group changes
 
 double since(Clock::time_point t0) { return std::chrono::duration<double>(Clock::now() - t0).count(); }
 

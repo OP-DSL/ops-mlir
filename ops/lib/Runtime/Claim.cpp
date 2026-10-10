@@ -57,7 +57,8 @@ std::string claimReason(ops_kernel_descriptor *desc, const KernelArtifact &artif
     switch (p.kind) {
     case ParamInfo::Acc: {
       if (a.argtype != OPS_ARG_DAT) return where + "the kernel takes a dat accessor, the loop passes a global or index";
-      if (!a.opt) return where + "optional (absent) dat argument";
+      // An optional argument that is switched off (a.opt == 0) is passed like any other: the kernel only touches it
+      // under a run-time condition (CloverLeaf's `fields` mask), which the compiled code evaluates as well.
       ops_dat dat = a.dat;
       if (!dat) return where + "no dat";
       std::string elem = elemName(dat->type ? dat->type : "");

@@ -9,7 +9,8 @@ if(NOT OPS_INSTALL OR NOT EXISTS "${OPS_INSTALL}/include/ops_lazy_executor.h")
   return()
 endif()
 
-add_library(opsjit SHARED
+# The sources are an object library so that the unit tests can link them too (the shared library hides its symbols).
+add_library(OPSMLIRRuntimeObjects OBJECT
   Options.cpp
   Artifact.cpp
   Claim.cpp
@@ -17,9 +18,10 @@ add_library(opsjit SHARED
   Binding.cpp
   Executor.cpp
   Init.cpp)
-target_include_directories(opsjit PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../include>")
-target_include_directories(opsjit PRIVATE "${OPS_INSTALL}/include")
-target_link_libraries(opsjit PRIVATE
+set_target_properties(OPSMLIRRuntimeObjects PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(OPSMLIRRuntimeObjects PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
+target_include_directories(OPSMLIRRuntimeObjects SYSTEM PUBLIC "${OPS_INSTALL}/include")
+set(OPSJIT_RUNTIME_LIBS
   OPSMLIRDialect
   OPSMLIRAnalysis
   OPSMLIRTransforms
@@ -30,8 +32,13 @@ target_link_libraries(opsjit PRIVATE
   OPDSLJIT
   OPDSLCache
   MLIRParser
-  MLIRPass)
-set_target_properties(opsjit PROPERTIES POSITION_INDEPENDENT_CODE ON LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+  MLIRPass
+  CACHE INTERNAL "libraries libopsjit is made of")
+target_link_libraries(OPSMLIRRuntimeObjects PUBLIC ${OPSJIT_RUNTIME_LIBS})
+
+add_library(opsjit SHARED $<TARGET_OBJECTS:OPSMLIRRuntimeObjects>)
+target_link_libraries(opsjit PRIVATE ${OPSJIT_RUNTIME_LIBS})
+set_target_properties(opsjit PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 # Keep the statically linked MLIR/LLVM out of the dynamic symbol table: the application may link its own LLVM.
 target_link_options(opsjit PRIVATE -Wl,--exclude-libs,ALL)
 # The OPS functions it calls (ops_lazy_*) are provided by the OPS library the application links.

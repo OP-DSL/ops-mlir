@@ -67,7 +67,12 @@ llvm::Error buildCPU(mlir::OpPassManager &pm, const OptionMap &o) {
   pm.addPass(createConvertOpsToSCF(lower));
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
-  if (omp) pm.addPass(mlir::createConvertSCFToOpenMPPass());
+  if (omp) {
+    pm.addPass(mlir::createConvertSCFToOpenMPPass());
+    // The conversion wraps the loop body in a memref.alloca_scope; an empty one is removed here, because a scope whose
+    // body is lowered to several blocks (inner loops) is invalid.
+    pm.addPass(mlir::createCanonicalizerPass());
+  }
   pm.addPass(mlir::createSCFToControlFlowPass());
   pm.addPass(mlir::createConvertControlFlowToLLVMPass());
   pm.addPass(mlir::createArithToLLVMConversionPass());
