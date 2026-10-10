@@ -40,6 +40,11 @@ if [ "$OPS_CUDA" = on ]; then
 else
   args+=( -DCMAKE_DISABLE_FIND_PACKAGE_CUDAToolkit=ON )
 fi
+# Reproducibility: only look at what env.sh points at. In particular do not ask the h5cc/h5pcc wrapper
+# scripts where HDF5 is: the shared cluster copy was relocated and its wrappers still name the original
+# location, which holds an Intel-built HDF5 that cannot be linked without Intel's runtime libraries.
+args+=( -DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF
+        -DHDF5_NO_FIND_PACKAGE_CONFIG_FILE=TRUE -DHDF5_C_COMPILER_NO_INTERROGATE=TRUE )
 [ -n "${HDF5_INSTALL_PATH:-}" ] && args+=( -DHDF5_ROOT="$HDF5_INSTALL_PATH" )
 [ -n "${CFLAG:-}" ] && args+=( -DCFLAG="$CFLAG" )
 [ -n "${CXXFLAG:-}" ] && args+=( -DCXXFLAG="$CXXFLAG" )
