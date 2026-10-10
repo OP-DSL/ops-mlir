@@ -27,6 +27,7 @@ struct Options {
   bool verify = false;           ///< OPS_JIT_VERIFY
   bool explain = false;          ///< OPS_JIT_EXPLAIN: print why a loop is not claimed
   bool plan = false;             ///< OPS_JIT_PLAN: print the groups
+  bool trace = false;            ///< OPS_JIT_TRACE: print every group before it runs (to find the one that crashes)
   bool stats = false;            ///< OPS_JIT_STATS: counters and phase times at exit
   std::string dumpDir;           ///< OPS_JIT_DUMP_DIR
   int runMax = 512;              ///< OPS_JIT_RUN_MAX: most loops compiled and planned together

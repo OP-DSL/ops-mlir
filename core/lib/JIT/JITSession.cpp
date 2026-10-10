@@ -44,10 +44,17 @@ void initializeLLVMOnce() {
 }
 
 /// Defines `_opdsl_<entry>(void **args)`, calling `_mlir_ciface_<entry>` if the module has it and `<entry>` otherwise.
+///
+/// A function with several results returns them as one LLVM struct; the C interface of such a function takes a pointer
+/// to the struct as an extra first argument (and returns void). The packed wrapper hides that: like for a single
+/// result, args[nargs] points at the storage for the results, laid out as the struct (natural alignment).
 bool definePackedWrapper(llvm::Module &module, llvm::StringRef entry) {
+  llvm::Function *plain = module.getFunction(entry);
   llvm::Function *callee = module.getFunction(("_mlir_ciface_" + entry).str());
-  if (!callee || callee->isDeclaration()) callee = module.getFunction(entry);
+  const bool ciface = callee && !callee->isDeclaration();
+  if (!ciface) callee = plain;
   if (!callee || callee->isDeclaration()) return false;
+  const bool resultThroughPointer = ciface && plain && !plain->isDeclaration() && plain->getReturnType()->isStructTy();
 
   llvm::LLVMContext &ctx = module.getContext();
   llvm::IRBuilder<> builder(ctx);
@@ -58,18 +65,20 @@ bool definePackedWrapper(llvm::Module &module, llvm::StringRef entry) {
   auto *block = llvm::BasicBlock::Create(ctx, "entry", wrapper);
   builder.SetInsertPoint(block);
   llvm::Value *argList = wrapper->arg_begin();
-  llvm::SmallVector<llvm::Value *, 8> args;
-  for (auto [index, arg] : llvm::enumerate(callee->args())) {
+  auto loadSlot = [&](uint64_t index) {
     llvm::Value *slot = builder.CreateGEP(builder.getPtrTy(), argList, builder.getInt64(index));
-    llvm::Value *ptr = builder.CreateLoad(builder.getPtrTy(), slot);
-    args.push_back(builder.CreateLoad(arg.getType(), ptr));
+    return builder.CreateLoad(builder.getPtrTy(), slot);
+  };
+  llvm::SmallVector<llvm::Value *, 8> args;
+  const uint64_t numArgs = callee->arg_size() - (resultThroughPointer ? 1 : 0);
+  if (resultThroughPointer) args.push_back(loadSlot(numArgs));
+  for (auto [index, arg] : llvm::enumerate(callee->args())) {
+    if (resultThroughPointer && index == 0) continue;
+    uint64_t position = resultThroughPointer ? index - 1 : index;
+    args.push_back(builder.CreateLoad(arg.getType(), loadSlot(position)));
   }
   llvm::Value *result = builder.CreateCall(callee, args);
-  if (!result->getType()->isVoidTy()) {
-    llvm::Value *slot = builder.CreateGEP(builder.getPtrTy(), argList, builder.getInt64(callee->arg_size()));
-    llvm::Value *ptr = builder.CreateLoad(builder.getPtrTy(), slot);
-    builder.CreateStore(result, ptr);
-  }
+  if (!result->getType()->isVoidTy()) builder.CreateStore(result, loadSlot(numArgs));
   builder.CreateRetVoid();
   llvm::appendToCompilerUsed(module, {wrapper});
   return true;

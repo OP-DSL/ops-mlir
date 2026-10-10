@@ -12,6 +12,7 @@
 #include "mlir/Pass/PassManager.h"
 
 #include "llvm/Config/llvm-config.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -29,7 +30,7 @@ using Clock = std::chrono::steady_clock;
 
 namespace {
 
-constexpr int kCodeFormat = 1; ///< bump when the ABI or the meaning of a compiled group changes
+constexpr int kCodeFormat = 2; ///< bump when the ABI, the packed wrapper or the meaning of a compiled group changes
 
 double since(Clock::time_point t0) { return std::chrono::duration<double>(Clock::now() - t0).count(); }
 
@@ -53,6 +54,24 @@ struct CaptureDiagnostics {
 };
 
 std::string errorText(llvm::Error e) { return llvm::toString(std::move(e)); }
+
+/// OPS_JIT_DUMP_DIR: writes `text` (or the module) to <dir>/<name>.
+void dumpText(const std::string &name, llvm::StringRef text) {
+  const std::string &dir = options().dumpDir;
+  if (dir.empty()) return;
+  llvm::sys::fs::create_directories(dir);
+  std::error_code ec;
+  llvm::raw_fd_ostream os(dir + "/" + name, ec);
+  if (!ec) os << text;
+}
+
+void dumpModule(const std::string &name, ModuleOp module) {
+  if (options().dumpDir.empty()) return;
+  std::string text;
+  llvm::raw_string_ostream os(text);
+  module->print(os);
+  dumpText(name, text);
+}
 
 /// The module of one group without what makes equal code look different: loop numbers, concrete ranges.
 OwningOpRef<ModuleOp> canonicalGroup(ModuleOp m, bool keepRanges) {
@@ -239,6 +258,11 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
       std::abort(); // loops of the run may already have executed: no way back
     }
     stats_.tBind += since(tb);
+    if (opts.trace) {
+      std::fprintf(stderr, "ops_jit: running %s:", g.code->entry.c_str());
+      for (int k : g.recipe.members) std::fprintf(stderr, " %s", run[k]->name);
+      std::fprintf(stderr, "\n");
+    }
     auto t0 = Clock::now();
     inv.call(g.code->fn);
     double seconds = since(t0);
@@ -265,13 +289,11 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
       }
     }
   }
-  (void)opts;
   return true;
 }
 
 std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, const std::vector<std::vector<int>> &ranges,
                                           const std::vector<const KernelArtifact *> &artifacts, const std::string &planKey) {
-  (void)planKey;
   const Options &opts = options();
   stats_.planBuilds++;
   auto plan = std::make_shared<Plan>();
@@ -308,6 +330,7 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
     if (failed(pm.run(*lifted.module))) return fail("ops-jit-plan failed: " + diagnostics.text);
   }
 
+  dumpModule("plan_" + planKey.substr(0, 16) + ".mlir", *lifted.module);
   std::vector<GroupModule> groups = extractGroupModules(*lifted.module);
   std::vector<GroupRecipe> recipes;
   if (!buildRecipes(lifted, *lifted.module, recipes, error)) return fail(error);
@@ -379,6 +402,7 @@ std::shared_ptr<GroupCode> Executor::codeFor(ModuleOp group, bool soa, std::stri
 
   // Lowering and compiling.
   stats_.compiles++;
+  dumpModule(code->entry + ".group.mlir", group);
   OwningOpRef<ModuleOp> lowered(cast<ModuleOp>(group->clone()));
   {
     ScopedTime timer(stats_.tLowering);
@@ -394,6 +418,7 @@ std::shared_ptr<GroupCode> Executor::codeFor(ModuleOp group, bool soa, std::stri
       return nullptr;
     }
   }
+  dumpModule(code->entry + ".lowered.mlir", *lowered);
   std::unique_ptr<llvm::MemoryBuffer> object;
   {
     ScopedTime timer(stats_.tLlvm);

@@ -13,6 +13,8 @@
 
 #include "ops_lazy_executor.h"
 
+#include "llvm/Support/Signals.h"
+
 #include <cstdio>
 #include <cstdlib>
 
@@ -27,9 +29,11 @@ void atExit() {
 extern "C" void ops_jit_init(void) {
   if (initialised) return;
   initialised = true;
+  // OPS_JIT_BACKTRACE=1: a stack trace (symbolised if llvm-symbolizer is on the PATH) when the process crashes.
+  if (const char *bt = std::getenv("OPS_JIT_BACKTRACE"); bt && bt[0] == '1') llvm::sys::PrintStackTraceOnErrorSignal("ops_jit");
   const ops_mlir::runtime::Options &opts = ops_mlir::runtime::options();
   if (!opts.enabled) return;
-  ops_register_chain_executor(OPS_instance::getOPSInstance(), &ops_mlir::runtime::Executor::run, nullptr);
+  ops_register_chain_executor(nullptr, &ops_mlir::runtime::Executor::run, nullptr); // nullptr: the default instance
   std::atexit(atExit);
 }
 

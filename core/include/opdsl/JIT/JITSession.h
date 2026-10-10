@@ -9,7 +9,7 @@
 // on a hit, the pipeline and compile() are skipped and the cached object goes straight to load().
 //
 // Compiled functions are called through a packed wrapper `void(void **args)`: args[i] points at the storage of
-// argument i, and args[nargs] at the storage of the result if there is one. The wrapper is generated for the
+// argument i, and args[nargs] at the storage of the result(s) if there are any (several results: a struct). The wrapper is generated for the
 // entry function, calling its C interface `_mlir_ciface_<entry>` (the descriptor-pointer ABI that MLIR's
 // `llvm.emit_c_interface` produces) when that exists and the function itself otherwise.
 //

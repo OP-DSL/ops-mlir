@@ -64,6 +64,7 @@ bool Options::set(const std::string &name, const std::string &value) {
   if (name == "OPS_JIT_VERIFY") return parseBool(value, verify);
   if (name == "OPS_JIT_EXPLAIN") return parseBool(value, explain);
   if (name == "OPS_JIT_PLAN") return parseBool(value, plan);
+  if (name == "OPS_JIT_TRACE") return parseBool(value, trace);
   if (name == "OPS_JIT_STATS") return parseBool(value, stats);
   if (name == "OPS_JIT_DUMP_DIR") {
     dumpDir = value;
@@ -90,6 +91,7 @@ Options Options::fromEnvironment() {
                                 "OPS_JIT_VERIFY",
                                 "OPS_JIT_EXPLAIN",
                                 "OPS_JIT_PLAN",
+                                "OPS_JIT_TRACE",
                                 "OPS_JIT_STATS",
                                 "OPS_JIT_DUMP_DIR",
                                 "OPS_JIT_RUN_MAX",
