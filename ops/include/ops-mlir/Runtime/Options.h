@@ -33,6 +33,9 @@ struct Options {
   bool dumpData = false;         ///< OPS_JIT_DUMP_DATA: also record the first call of every group (inputs, checksums) for ops-jit-replay
   int runMax = 512;              ///< OPS_JIT_RUN_MAX: most loops compiled and planned together
   bool sync = false;             ///< OPS_JIT_SYNC (device builds)
+  std::string gpuBlock = "32,4,1"; ///< OPS_JIT_GPU_BLOCK: thread block (x,y,z) of the generated kernels
+  std::string gpuArch;           ///< OPS_JIT_GPU_ARCH: e.g. sm_80 (empty: the device in use)
+  std::string ptxasOpts;         ///< OPS_JIT_PTXAS_OPTS: extra ptxas options (e.g. -v)
 
   /// Reads the OPS_JIT_* environment variables.
   static Options fromEnvironment();

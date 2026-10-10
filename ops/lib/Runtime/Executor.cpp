@@ -7,6 +7,8 @@
 #include "ops-mlir/Runtime/Claim.h"
 #include "ops-mlir/Runtime/Lifter.h"
 
+#include "opdsl/GPU/GpuShim.h"
+
 #include "opdsl/Support/Hash.h"
 
 #include "mlir/IR/Diagnostics.h"
@@ -20,7 +22,10 @@
 #include "ops_lazy_executor.h"
 
 #include <cmath>
+#include <algorithm>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <set>
 
@@ -154,6 +159,35 @@ double toleranceFor(const char *type) {
   return 0;
 }
 
+
+/// The whole allocation of a dat as bytes, from the host or the device copy.
+std::vector<char> readDat(ops_dat d, bool device) {
+  std::vector<char> bytes(d->mem);
+  if (device) mgpuMemcpy(bytes.data(), d->data_d, d->mem, nullptr);
+  else std::memcpy(bytes.data(), d->data, d->mem);
+  return bytes;
+}
+
+void writeDat(ops_dat d, const std::vector<char> &bytes, bool device) {
+  if (device) mgpuMemcpy(d->data_d, const_cast<char *>(bytes.data()), bytes.size(), nullptr);
+  else std::memcpy(d->data, bytes.data(), bytes.size());
+}
+
+/// The neutral element of a reduction as bytes of the element type, in an 8-byte slot.
+void neutralBytes(const std::string &elem, ReductionKind kind, char *slot8) {
+  std::memset(slot8, 0, 8);
+  if (elem == "f64") {
+    double v = kind == ReductionKind::Add ? 0.0 : kind == ReductionKind::Min ? INFINITY : -INFINITY;
+    std::memcpy(slot8, &v, 8);
+  } else if (elem == "f32") {
+    float v = kind == ReductionKind::Add ? 0.0f : kind == ReductionKind::Min ? INFINITY : -INFINITY;
+    std::memcpy(slot8, &v, 4);
+  } else {
+    int32_t v = kind == ReductionKind::Add ? 0 : kind == ReductionKind::Min ? INT32_MAX : INT32_MIN;
+    std::memcpy(slot8, &v, 4);
+  }
+}
+
 } // namespace
 
 Executor::Executor() {
@@ -179,6 +213,27 @@ void Executor::run(OPS_instance *instance, ops_kernel_descriptor **descs, int n,
   executor().execute(instance, descs, n);
 }
 
+bool Executor::deviceReady() {
+  if (deviceState_ < 0) {
+    deviceState_ = opdsl::gpu::cudaAvailable() ? 1 : 0;
+    if (deviceState_) {
+      // The NVVM target finds ptxas and libdevice through the toolkit path: the usual variables, else the CUDA used to build OPS.
+      if (!std::getenv("CUDA_ROOT") && !std::getenv("CUDA_HOME") && !std::getenv("CUDA_PATH"))
+        if (const char *root = std::getenv("CUDA_INSTALL_PATH")) ::setenv("CUDA_ROOT", root, 0);
+    }
+  }
+  return deviceState_ == 1;
+}
+
+void *Executor::deviceScratch(size_t bytes) {
+  if (bytes > scratchBytes_) {
+    if (scratch_) mgpuMemFree(scratch_, nullptr);
+    scratchBytes_ = std::max<size_t>(bytes, 256);
+    scratch_ = mgpuMemAlloc(scratchBytes_, nullptr, false);
+  }
+  return scratch_;
+}
+
 void Executor::execute(OPS_instance *instance, ops_kernel_descriptor **descs, int n) {
   const Options &opts = options();
   stats_.flushes++;
@@ -194,7 +249,7 @@ void Executor::execute(OPS_instance *instance, ops_kernel_descriptor **descs, in
       else if (descs[i]->startup_func) reason = "the loop has a startup function";
       else {
         artifacts[i] = artifacts_->get(descs[i]->jit_artifact, reason);
-        if (artifacts[i]) reason = claimReason(descs[i], *artifacts[i], deviceSupported);
+        if (artifacts[i]) reason = claimReason(descs[i], *artifacts[i], descs[i]->isdevice ? deviceReady() : false);
       }
       if (reason.empty()) {
         claimed[i] = 1;
@@ -218,7 +273,7 @@ void Executor::execute(OPS_instance *instance, ops_kernel_descriptor **descs, in
       continue;
     }
     int j = i;
-    while (j < n && claimed[j] && j - i < opts.runMax) ++j;
+    while (j < n && claimed[j] && j - i < opts.runMax && descs[j]->isdevice == descs[i]->isdevice) ++j; // host and device loops do not share a plan
     std::vector<const KernelArtifact *> runArtifacts(artifacts.begin() + i, artifacts.begin() + j);
     if (!runJit(instance, descs + i, j - i, runArtifacts)) ops_lazy_execute_default(instance, descs + i, j - i);
     i = j;
@@ -303,16 +358,32 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
           }
         }
       for (int k : g.recipe.members) ops_lazy_prepare(run[k]);
-      for (ops_dat d : snap.dats) snap.before.push_back(copyBytes(d->data, d->mem));
+      for (ops_dat d : snap.dats) snap.before.push_back(readDat(d, g.device));
       for (auto &s : snap.slots) snap.slotBefore.push_back(copyBytes(s.first, s.second));
     } else {
       for (int k : g.recipe.members) ops_lazy_prepare(run[k]);
     }
 
+    // Device groups return their reductions through device buffers (8 bytes each), initialised with the neutral element.
+    std::vector<void *> reductionBuffers;
+    std::vector<char> staging;
+    if (g.device) {
+      const size_t count = g.recipe.reductionOf.size();
+      staging.assign(std::max<size_t>(count, 1) * 8, 0);
+      char *base = static_cast<char *>(deviceScratch(staging.size()));
+      for (size_t r = 0; r < count; ++r) {
+        int index = g.recipe.reductionOf[r];
+        const ReductionRef &ref = plan->reductions[index >= 0 ? index : 0];
+        neutralBytes(index >= 0 ? ref.elem : "f64", index >= 0 ? ref.kind : ReductionKind::Add, &staging[8 * r]);
+        reductionBuffers.push_back(base + 8 * r);
+      }
+      if (count) mgpuMemcpy(base, staging.data(), count * 8, nullptr);
+    }
+
     Invocation inv;
     std::string error;
     auto tb = Clock::now();
-    if (!inv.bind(g.recipe, run.data(), ranges, slots, soa, error)) {
+    if (!inv.bind(g.recipe, run.data(), ranges, slots, soa, error, g.device ? &reductionBuffers : nullptr)) {
       std::fprintf(stderr, "ops_jit: binding failed: %s\n", error.c_str());
       std::abort(); // loops of the run may already have executed: no way back
     }
@@ -330,6 +401,10 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
     }
     auto t0 = Clock::now();
     inv.call(g.code->fn);
+    if (g.device && !reductionBuffers.empty()) {
+      // The copy waits for the kernel (default stream) and for the host to have the values.
+      mgpuMemcpy(staging.data(), reductionBuffers.front(), staging.size(), nullptr);
+    }
     double seconds = since(t0);
     stats_.tExecute += seconds;
     stats_.groupsExecuted++;
@@ -343,7 +418,22 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
       if (index < 0) continue;
       const ReductionRef &ref = plan->reductions[index];
       char *slot = ops_lazy_reduction_slot(run[ref.loop], ref.arg);
-      if (ref.elem == "f64") combineInto<double>(slot, inv.resultAsDouble(r), ref.kind, ref.assign);
+      if (g.device) {
+        // The value is in the staging copy of the device buffer.
+        if (ref.elem == "f64") {
+          double v;
+          std::memcpy(&v, &staging[8 * r], 8);
+          combineInto<double>(slot, v, ref.kind, ref.assign);
+        } else if (ref.elem == "f32") {
+          float v;
+          std::memcpy(&v, &staging[8 * r], 4);
+          combineInto<float>(slot, v, ref.kind, ref.assign);
+        } else {
+          int32_t v;
+          std::memcpy(&v, &staging[8 * r], 4);
+          combineInto<int32_t>(slot, v, ref.kind, ref.assign);
+        }
+      } else if (ref.elem == "f64") combineInto<double>(slot, inv.resultAsDouble(r), ref.kind, ref.assign);
       else if (ref.elem == "f32") combineInto<float>(slot, static_cast<float>(inv.resultAsDouble(r)), ref.kind, ref.assign);
       else combineInto<int32_t>(slot, static_cast<int32_t>(inv.resultAsInt(r)), ref.kind, ref.assign);
     }
@@ -359,10 +449,10 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
     }
 
     if (opts.verify) {
-      for (ops_dat d : snap.dats) snap.jit.push_back(copyBytes(d->data, d->mem));
+      for (ops_dat d : snap.dats) snap.jit.push_back(readDat(d, g.device));
       for (auto &s : snap.slots) snap.slotJit.push_back(copyBytes(s.first, s.second));
       // Back to the state before the group, then the stock code for each member in order.
-      for (size_t i = 0; i < snap.dats.size(); ++i) std::memcpy(snap.dats[i]->data, snap.before[i].data(), snap.before[i].size());
+      for (size_t i = 0; i < snap.dats.size(); ++i) writeDat(snap.dats[i], snap.before[i], g.device);
       for (size_t i = 0; i < snap.slots.size(); ++i) std::memcpy(snap.slots[i].first, snap.slotBefore[i].data(), snap.slotBefore[i].size());
       for (int k : g.recipe.members) ops_lazy_execute_default(instance, &run[k], 1);
       stats_.verifyGroups++;
@@ -371,7 +461,8 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
       bool bad = false;
       for (size_t i = 0; i < snap.dats.size(); ++i) {
         size_t differing = 0;
-        double rel = relativeDifference(snap.dats[i]->type, snap.jit[i].data(), snap.dats[i]->data, snap.jit[i].size(), differing);
+        std::vector<char> aot = readDat(snap.dats[i], g.device);
+        double rel = relativeDifference(snap.dats[i]->type, snap.jit[i].data(), aot.data(), snap.jit[i].size(), differing);
         if (rel > toleranceFor(snap.dats[i]->type)) {
           bad = true;
           std::fprintf(stderr, "ops_jit verify: [%s] dat %s: %zu elements differ, relative difference %.3g (tolerance %.1g)\n", names.c_str(),
@@ -442,13 +533,27 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
   for (size_t g = 0; g < groups.size(); ++g) {
     OwningOpRef<ModuleOp> canonical = canonicalGroup(groups[g].module.get(), opts.specialize != "none");
     std::string cerror;
-    const std::string pipelineOptions = std::string("omp=") + (opts.omp ? "true" : "false") + " specialize=" + opts.specialize +
-                                        " soa=" + (soa ? "true" : "false");
-    std::shared_ptr<GroupCode> code = compiler_->compile(canonical.get(), "ops-jit-cpu", pipelineOptions, cerror);
+    const bool device = run[0]->isdevice != 0;
+    std::string pipeline, pipelineOptions;
+    if (device) {
+      // block sizes with `x` between them, ptxas options with `:` between them (the option syntax uses blanks and commas)
+      std::string block = opts.gpuBlock, ptxas = opts.ptxasOpts;
+      std::replace(block.begin(), block.end(), ',', 'x');
+      std::replace(ptxas.begin(), ptxas.end(), ' ', ':');
+      std::string arch = opts.gpuArch.empty() ? opdsl::gpu::cudaDeviceArch() : opts.gpuArch;
+      pipeline = "ops-jit-cuda";
+      pipelineOptions = "chip=" + arch + " features=+ptx80 block=" + block + " specialize=" + opts.specialize + " soa=" + (soa ? "true" : "false");
+      if (!ptxas.empty()) pipelineOptions += " ptxas=" + ptxas;
+    } else {
+      pipeline = "ops-jit-cpu";
+      pipelineOptions = std::string("omp=") + (opts.omp ? "true" : "false") + " specialize=" + opts.specialize + " soa=" + (soa ? "true" : "false");
+    }
+    std::shared_ptr<GroupCode> code = compiler_->compile(canonical.get(), pipeline, pipelineOptions, cerror);
     if (!code) return fail("compiling a group: " + cerror);
     Plan::Group pg;
     pg.recipe = std::move(recipes[g]);
     pg.code = std::move(code);
+    pg.device = device;
     plan->groups.push_back(std::move(pg));
   }
   plan->reductions = lifted.reductions;

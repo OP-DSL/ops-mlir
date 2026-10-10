@@ -73,6 +73,22 @@ bool Options::set(const std::string &name, const std::string &value) {
   if (name == "OPS_JIT_DUMP_DATA") return parseBool(value, dumpData);
   if (name == "OPS_JIT_RUN_MAX") return parseInt(value, runMax, 1);
   if (name == "OPS_JIT_SYNC") return parseBool(value, sync);
+  if (name == "OPS_JIT_GPU_BLOCK") {
+    // three positive integers separated by commas
+    int x, y, z;
+    char c1, c2;
+    if (std::sscanf(value.c_str(), "%d%c%d%c%d", &x, &c1, &y, &c2, &z) != 5 || c1 != ',' || c2 != ',' || x < 1 || y < 1 || z < 1) return false;
+    gpuBlock = value;
+    return true;
+  }
+  if (name == "OPS_JIT_GPU_ARCH") {
+    gpuArch = value;
+    return true;
+  }
+  if (name == "OPS_JIT_PTXAS_OPTS") {
+    ptxasOpts = value;
+    return true;
+  }
   return false;
 }
 
@@ -97,7 +113,10 @@ Options Options::fromEnvironment() {
                                 "OPS_JIT_DUMP_DIR",
                                 "OPS_JIT_DUMP_DATA",
                                 "OPS_JIT_RUN_MAX",
-                                "OPS_JIT_SYNC"};
+                                "OPS_JIT_SYNC",
+                                "OPS_JIT_GPU_BLOCK",
+                                "OPS_JIT_GPU_ARCH",
+                                "OPS_JIT_PTXAS_OPTS"};
   for (const char *name : names)
     if (const char *value = std::getenv(name))
       if (!o.set(name, value)) std::fprintf(stderr, "ops_jit: ignoring %s=%s (not a valid value)\n", name, value);
@@ -112,6 +131,7 @@ std::string Options::codegenDigest() const {
   s += ";placement=" + fusionPlacement;
   s += fusionGuarded ? ";guarded" : ";noguarded";
   s += ";specialize=" + specialize;
+  s += ";gpu=" + gpuBlock + "," + gpuArch + "," + ptxasOpts;
   return s;
 }
 

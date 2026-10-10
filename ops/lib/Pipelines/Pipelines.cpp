@@ -115,7 +115,9 @@ llvm::Error buildCUDA(mlir::OpPassManager &pm, const OptionMap &o) {
   mlir::gpu::GPUToNVVMPipelineOptions nvvm;
   nvvm.cubinChip = o.getString("chip", "sm_80");
   nvvm.cubinFeatures = o.getString("features", "");
-  nvvm.cmdOptions = o.getString("ptxas", "");
+  std::string ptxas = o.getString("ptxas", "");
+  std::replace(ptxas.begin(), ptxas.end(), ':', ' '); // options are separated by ":" in the option string
+  nvvm.cmdOptions = ptxas;
   nvvm.optLevel = 3;
   // The result is a module in the LLVM dialect with a gpu.binary and gpu.launch_func: the translation to LLVM IR
   // (JITSession) turns the launches into calls of the mgpu* runtime functions (opdsl GpuShim).

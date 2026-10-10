@@ -39,6 +39,7 @@ struct Plan {
   struct Group {
     GroupRecipe recipe;
     std::shared_ptr<GroupCode> code;
+    bool device = false; ///< lowered for the GPU: the data are the device copies, reductions come back through buffers
   };
   std::vector<Group> groups;
   std::vector<ReductionRef> reductions;
@@ -65,8 +66,8 @@ public:
   Stats &stats() { return stats_; }
   const CompileStats &compileStats() const { return compiler_->stats(); }
 
-  /// Whether this executor may run loops that are on a device (set by device builds).
-  bool deviceSupported = false;
+  /// Whether loops that run on a device can be executed: a CUDA driver and device are usable (checked on first use).
+  bool deviceReady();
 
 private:
   struct EffectiveRun;
@@ -87,6 +88,11 @@ private:
   std::unordered_map<std::string, std::shared_ptr<Plan>> plans_;
   std::set<std::string> dumpedGroups_;
   Stats stats_;
+  int deviceState_ = -1; ///< -1 unknown, 0 no device, 1 ready
+  void *scratch_ = nullptr;
+  size_t scratchBytes_ = 0;
+  /// Device memory for the reduction buffers of a group (grows, never shrinks).
+  void *deviceScratch(size_t bytes);
 };
 
 /// The process-wide executor.

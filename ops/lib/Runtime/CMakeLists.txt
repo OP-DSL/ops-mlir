@@ -45,8 +45,8 @@ set(OPSJIT_RUNTIME_LIBS OPSMLIRRuntimeCore OPSMLIRAnalysis OPSMLIRTransforms OPS
     CACHE INTERNAL "libraries libopsjit is made of")
 target_link_libraries(OPSMLIRRuntimeObjects PUBLIC ${OPSJIT_RUNTIME_LIBS})
 
-add_library(opsjit SHARED $<TARGET_OBJECTS:OPSMLIRRuntimeObjects>)
-target_link_libraries(opsjit PRIVATE ${OPSJIT_RUNTIME_LIBS})
+add_library(opsjit SHARED $<TARGET_OBJECTS:OPSMLIRRuntimeObjects> $<TARGET_OBJECTS:OPDSLGpu>)
+target_link_libraries(opsjit PRIVATE ${OPSJIT_RUNTIME_LIBS} ${CMAKE_DL_LIBS})
 set_target_properties(opsjit PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 # Keep the statically linked MLIR/LLVM out of the dynamic symbol table: the application may link its own LLVM.
 target_link_options(opsjit PRIVATE -Wl,--exclude-libs,ALL)
