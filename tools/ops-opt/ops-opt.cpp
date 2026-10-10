@@ -10,10 +10,12 @@
 #include "mlir/InitAllPasses.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 
+#include "ops-mlir/Analysis/Passes.h"
 #include "ops-mlir/Dialect/OPS/IR/OPSDialect.h"
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
+  ops_mlir::ops::registerAnalysisPasses();
 
   mlir::DialectRegistry registry;
   registry.insert<ops_mlir::ops::OPSDialect, mlir::arith::ArithDialect, mlir::func::FuncDialect,

@@ -5,6 +5,7 @@ get_property(mlir_extension_libs GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
 add_opsjit_tool(ops-opt ops-opt.cpp
   LINK
     OPSMLIRDialect
+    OPSMLIRAnalysis
     ${mlir_dialect_libs}
     ${mlir_conversion_libs}
     ${mlir_extension_libs}

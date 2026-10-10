@@ -97,3 +97,29 @@ Newest entries at the bottom. Cluster = `cl` (SLURM); local = WSL Ubuntu 24.04.
 - `OPS_LAZY_EXECUTOR_TEST=split|manual[,seed=N]` (argv or environment): built-in executors that must not change any
   results; `split` hands the queue to the default path in random pieces of 1-5 loops. laplace2d and lazy_triggers pass in
   every combination with/without OPS_TILING locally.
+
+## P1.1-P1.2 skeleton and the `ops` dialect (ops-mlir `36a6c2d`)
+
+- `v2` skeleton with `core/` (opdsl: hashing, test harness, independence check), vendored lit, `check-ops-mlir[-lit|-unit]`,
+  `scripts/ci.sh`. The dialect: types, access modes, stencil attr, kernel/chain/par_loop and the body ops, verifiers
+  (8 lit tests, ~48 negative cases). **Deviation:** no `StencilAccessOpInterface` yet; passes use `ParLoopOp` accessors
+  (`getAccess`, `getStencil`) directly. Add the interface if a second op ever needs it.
+
+## P1.3 footprints and chain dependence
+
+- `Analysis/Footprint.h`: boxes, `Reach` (min/max offset per dimension, strides other than 1 make a dimension unbounded,
+  point-locality) and `footprint(range, reach)`. Exact reach: a stencil with only `+1` offsets does not imply the zero offset.
+- `Analysis/ChainDependence.h`: `extractLoops(ChainOp)` reads concrete ranges from `ops.range_values` (one dense i64
+  array per `par_loop`); `ChainDependence` holds the loops and the RAW/WAR/WAW edges with `fusable` flags and prints them.
+  **Write footprints:** the offsets of the `ops.write`s of a materialised body; the whole stencil of the operand when the
+  body is empty or never writes it. A non-zero write offset (or stride other than 1) makes every edge on that dat blocking.
+- `Analysis/FusionPlanner.h` (**addition to the layout of plan §3**, the planner is pure analysis and `ops-fuse-point-local`
+  will apply it): port of the legacy consecutive and DAG planners, `blockedBy`, `numReordered`, `digest`, traffic estimate.
+  Guarded fusion treats a member with non-local writes like one with non-local reads.
+- Passes `-ops-print-chain-dependence` and `-ops-print-fusion-plan{max-loops reorder placement guarded box-ratio}` (stderr).
+- `KernelOp`/`ChainOp` got a `(name, FunctionType)` builder and `addEntryBlock()`.
+- Tests (`ops/unittests`): every case of the legacy suite on `ops.chain` (`ChainBuilder.h` builds a chain from compact
+  loop specs), new tests for writes at non-zero offsets (TGV boundary pattern, both orders, disjoint footprints, narrowing by
+  the body), randomised oracle with and without non-zero write offsets over materialised and unmaterialised bodies. The
+  oracle was checked by mutation: dropping the non-zero-write rule or the WAR rule fails it (280 mismatches).
+  lit: `test/lit/Analysis/chain-dependence.mlir` (Jacobi, point-wise, reordering, boundary kernel).

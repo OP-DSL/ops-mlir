@@ -171,7 +171,21 @@ def OPS_KernelOp : OPS_Op<"kernel", [FunctionOpInterface, IsolatedFromAbove]> {
                        OptionalAttr<StrAttr>:$sym_visibility, OptionalAttr<DictArrayAttr>:$arg_attrs,
                        OptionalAttr<DictArrayAttr>:$res_attrs);
   let regions = (region AnyRegion:$body);
+  let builders = [OpBuilder<(ins "::llvm::StringRef":$name, "::mlir::FunctionType":$type), [{
+    $_state.addAttribute(::mlir::SymbolTable::getSymbolAttrName(), $_builder.getStringAttr(name));
+    $_state.addAttribute(getFunctionTypeAttrName($_state.name), ::mlir::TypeAttr::get(type));
+    (void)$_state.addRegion();
+  }]>];
   let extraClassDeclaration = [{
+    /// Creates the entry block with one argument per parameter. The body must be empty.
+    ::mlir::Block *addEntryBlock() {
+      assert(getBody().empty() && "the function already has a body");
+      ::mlir::Block *entry = new ::mlir::Block();
+      getBody().push_back(entry);
+      ::llvm::SmallVector<::mlir::Location> locs(getArgumentTypes().size(), getLoc());
+      entry->addArguments(getArgumentTypes(), locs);
+      return entry;
+    }
     ::mlir::Region *getCallableRegion() { return isExternal() ? nullptr : &getBody(); }
     ::llvm::ArrayRef<::mlir::Type> getArgumentTypes() { return getFunctionType().getInputs(); }
     ::llvm::ArrayRef<::mlir::Type> getResultTypes() { return getFunctionType().getResults(); }
@@ -200,7 +214,21 @@ def OPS_ChainOp : OPS_Op<"chain", [FunctionOpInterface, IsolatedFromAbove]> {
                        OptionalAttr<StrAttr>:$sym_visibility, OptionalAttr<DictArrayAttr>:$arg_attrs,
                        OptionalAttr<DictArrayAttr>:$res_attrs);
   let regions = (region AnyRegion:$body);
+  let builders = [OpBuilder<(ins "::llvm::StringRef":$name, "::mlir::FunctionType":$type), [{
+    $_state.addAttribute(::mlir::SymbolTable::getSymbolAttrName(), $_builder.getStringAttr(name));
+    $_state.addAttribute(getFunctionTypeAttrName($_state.name), ::mlir::TypeAttr::get(type));
+    (void)$_state.addRegion();
+  }]>];
   let extraClassDeclaration = [{
+    /// Creates the entry block with one argument per parameter. The body must be empty.
+    ::mlir::Block *addEntryBlock() {
+      assert(getBody().empty() && "the function already has a body");
+      ::mlir::Block *entry = new ::mlir::Block();
+      getBody().push_back(entry);
+      ::llvm::SmallVector<::mlir::Location> locs(getArgumentTypes().size(), getLoc());
+      entry->addArguments(getArgumentTypes(), locs);
+      return entry;
+    }
     ::mlir::Region *getCallableRegion() { return isExternal() ? nullptr : &getBody(); }
     ::llvm::ArrayRef<::mlir::Type> getArgumentTypes() { return getFunctionType().getInputs(); }
     ::llvm::ArrayRef<::mlir::Type> getResultTypes() { return getFunctionType().getResults(); }
