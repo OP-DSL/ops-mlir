@@ -695,6 +695,13 @@ ImportResult importKernel(MLIRContext &ctx, const ImportOptions &options) {
 
   std::unique_ptr<clang::ASTUnit> unit = clang::tooling::buildASTFromCodeWithArgs(code, args, fileName);
   if (!unit) return failWith("clang could not parse " + fileName);
+  {
+    const clang::SourceManager &sm = unit->getSourceManager();
+    for (auto it = sm.fileinfo_begin(); it != sm.fileinfo_end(); ++it) {
+      std::string name = it->first.getName().str();
+      if (!name.empty() && name != macroPath.str().str() && llvm::sys::fs::exists(name)) result.dependencies.push_back(name);
+    }
+  }
 
   struct Finder : clang::RecursiveASTVisitor<Finder> {
     llvm::StringRef name;

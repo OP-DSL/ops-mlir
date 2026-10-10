@@ -47,6 +47,7 @@ struct ImportResult {
   mlir::OwningOpRef<mlir::ModuleOp> module;
   std::string manifest;               ///< JSON text, with the digest of the module and the manifest
   std::vector<std::string> warnings;  ///< things that were dropped or approximated (printf)
+  std::vector<std::string> dependencies; ///< files the translation unit read (for build dependency files)
 };
 
 /// "A/1.0": the provider and its version, recorded in manifests and part of their digests.

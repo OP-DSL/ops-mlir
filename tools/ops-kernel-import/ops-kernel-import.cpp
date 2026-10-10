@@ -21,6 +21,7 @@
 
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <string>
@@ -37,6 +38,8 @@ static cl::opt<std::string> output("o", cl::desc("output module (.mlir: text, ot
 static cl::opt<std::string> manifestPath("manifest", cl::desc("output manifest (JSON)"));
 static cl::opt<std::string> provider("provider", cl::desc("importer provider"), cl::init("A"));
 static cl::opt<std::string> resourceDir("resource-dir", cl::desc("clang resource directory"));
+static cl::opt<std::string> argsFile("args-file", cl::desc("file with more clang arguments, separated by blanks and newlines"));
+static cl::opt<std::string> depFile("depfile", cl::desc("write the files the translation unit read, as a Makefile dependency rule"));
 static cl::opt<bool> strict("strict", cl::desc("exit with 1 when the kernel cannot be imported"));
 
 int main(int argc, char **argv) {
@@ -71,11 +74,46 @@ int main(int argc, char **argv) {
     options.kinds.push_back(first.str());
     rest = tail;
   }
+  if (!argsFile.empty()) {
+    auto buffer = MemoryBuffer::getFile(argsFile);
+    if (!buffer) {
+      errs() << "ops-kernel-import: cannot read " << argsFile << "\n";
+      return 2;
+    }
+    std::string word;
+    for (char c : (*buffer)->getBuffer()) {
+      if (c == ' ' || c == '\n' || c == '\t' || c == '\r') {
+        if (!word.empty()) options.clangArgs.push_back(word);
+        word.clear();
+      } else {
+        word += c;
+      }
+    }
+    if (!word.empty()) options.clangArgs.push_back(word);
+  }
   for (const std::string &a : clangArgs) options.clangArgs.push_back(a);
 
   ops_mlir::frontend::ImportResult result = ops_mlir::frontend::importKernel(ctx, options);
   for (const std::string &w : result.warnings) errs() << "ops-kernel-import: warning: " << kernel << ": " << w << "\n";
   if (!result.ok) errs() << "ops-kernel-import: " << kernel << ": not imported: " << result.reason << "\n";
+
+  if (!depFile.empty()) {
+    std::string target = (!output.empty() && output != "-") ? std::string(output) : std::string(manifestPath);
+    std::error_code ec;
+    raw_fd_ostream os(depFile, ec, sys::fs::OF_Text);
+    if (ec) {
+      errs() << "ops-kernel-import: cannot write " << depFile << ": " << ec.message() << "\n";
+      return 2;
+    }
+    auto escaped = [](StringRef s) {
+      std::string out;
+      for (char c : s) out += (c == ' ' ? "\\ " : std::string(1, c));
+      return out;
+    };
+    os << escaped(target) << ":";
+    for (const std::string &d : result.dependencies) os << " " << escaped(d);
+    os << "\n";
+  }
 
   if (!manifestPath.empty()) {
     std::error_code ec;
