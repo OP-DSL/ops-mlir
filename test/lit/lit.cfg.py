@@ -24,3 +24,17 @@ config.substitutions.append(("%opsjit_bin", config.opsjit_binary_dir))
 # Runtime libraries of the MLIR execution tests (mlir-runner): printing and C helpers.
 config.substitutions.append(("%mlir_runner_utils", config.llvm_lib_dir + "/libmlir_runner_utils.so"))
 config.substitutions.append(("%mlir_c_runner_utils", config.llvm_lib_dir + "/libmlir_c_runner_utils.so"))
+
+import platform
+
+if platform.machine() in ("x86_64", "AMD64"):
+    config.available_features.add("x86")
+def _find_libomp():
+    for d in (config.llvm_lib_dir, os.path.join(config.llvm_lib_dir, "x86_64-unknown-linux-gnu")):
+        path = os.path.join(d, "libomp.so")
+        if os.path.exists(path):
+            return path
+    return "libomp.so"
+
+
+config.substitutions.append(("%mlir_omp", _find_libomp()))

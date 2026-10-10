@@ -13,6 +13,7 @@
 #include "ops-mlir/Analysis/Passes.h"
 #include "ops-mlir/Dialect/OPS/IR/OPSDialect.h"
 #include "ops-mlir/Conversion/Passes.h"
+#include "ops-mlir/Pipelines/Pipelines.h"
 #include "ops-mlir/Transforms/Passes.h"
 
 int main(int argc, char **argv) {
@@ -20,6 +21,8 @@ int main(int argc, char **argv) {
   ops_mlir::ops::registerAnalysisPasses();
   ops_mlir::ops::registerOPSTransformsPasses();
   ops_mlir::ops::registerOPSConversionPasses();
+  ops_mlir::ops::registerOPSPipelines();
+  ops_mlir::ops::registerOPSPipelinesWithMLIR();
 
   mlir::DialectRegistry registry;
   registry.insert<ops_mlir::ops::OPSDialect, mlir::arith::ArithDialect, mlir::func::FuncDialect,

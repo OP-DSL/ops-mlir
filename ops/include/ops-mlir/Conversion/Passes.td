@@ -35,4 +35,17 @@ def ConvertOpsToSCF : Pass<"convert-ops-to-scf", "::mlir::ModuleOp"> {
                            "::mlir::memref::MemRefDialect", "::mlir::scf::SCFDialect"];
 }
 
+
+def OpsMarkNoalias : Pass<"ops-mark-noalias", "::mlir::ModuleOp"> {
+  let summary = "mark the data pointers of the dat arguments of a lowered group noalias";
+  let description = [{
+    Run after the conversion of the group function to the LLVM dialect: the memref arguments of `func.func` are
+    expanded to a descriptor (allocated pointer, aligned pointer, offset, sizes, strides) and the attribute
+    `llvm.noalias` of the argument does not reach the pointers the code loads and stores through. This pass sets it on
+    the aligned pointer of each dat, using `ops.abi.noalias_args` that `convert-ops-to-scf` recorded. Distinct dats of
+    a group never overlap (the lifter deduplicates by dat), which lets LLVM vectorise without run-time overlap checks.
+  }];
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
+}
+
 #endif // OPS_MLIR_CONVERSION_PASSES

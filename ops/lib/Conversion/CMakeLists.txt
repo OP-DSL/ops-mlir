@@ -1,5 +1,6 @@
 add_mlir_library(OPSMLIRConversion
   OpsToSCF.cpp
+  MarkNoalias.cpp
 
   DEPENDS
   OPSMLIRConversionIncGen
@@ -13,4 +14,5 @@ add_mlir_library(OPSMLIRConversion
   MLIRMemRefDialect
   MLIRSCFDialect
   MLIRTransformUtils
+  MLIRLLVMDialect
 )

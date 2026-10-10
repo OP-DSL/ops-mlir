@@ -9,6 +9,7 @@
 
 namespace mlir {
 namespace arith { class ArithDialect; }
+namespace LLVM { class LLVMDialect; }
 namespace func { class FuncDialect; }
 namespace memref { class MemRefDialect; }
 namespace scf { class SCFDialect; }

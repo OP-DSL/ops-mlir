@@ -1,13 +1,18 @@
 // Executes lowered groups with mlir-runner on hand-filled memrefs: stencil offsets, shifts, scalars, the block
-// displacement and reductions.
-// RUN: ops-opt %s -convert-ops-to-scf -convert-scf-to-cf -convert-cf-to-llvm -convert-arith-to-llvm \
-// RUN:   -finalize-memref-to-llvm -convert-func-to-llvm -reconcile-unrealized-casts \
+// displacement and reductions. Through the full CPU pipeline, sequential and with OpenMP.
+// RUN: ops-opt %s -ops-jit-cpu="omp=false" \
+// RUN:   | mlir-runner -e main -entry-point-result=void -shared-libs=%mlir_runner_utils,%mlir_c_runner_utils \
+// RUN:   | FileCheck %s
+// RUN: ops-opt %s -ops-jit-cpu="omp=true" \
+// RUN:   | mlir-runner -e main -entry-point-result=void -shared-libs=%mlir_runner_utils,%mlir_c_runner_utils,%mlir_omp \
+// RUN:   | FileCheck %s
+// RUN: ops-opt %s -ops-jit-cpu="omp=false specialize=ranges" \
 // RUN:   | mlir-runner -e main -entry-point-result=void -shared-libs=%mlir_runner_utils,%mlir_c_runner_utils \
 // RUN:   | FileCheck %s
 
 // v(i, j) = u(i+1, j) + u(i, j+1) over [1,4) x [1,4); the dats are 6 x 6 with zero shifts.
 ops.chain @stencil_group(%lo0: index, %hi0: index, %lo1: index, %hi1: index, %u: !ops.dat<f64, 2, 1>,
-                         %v: !ops.dat<f64, 2, 1>) attributes {ops.func_name = "stencil"} {
+                         %v: !ops.dat<f64, 2, 1>) attributes {ops.func_name = "stencil", ops.range_values = [array<i64: 1, 4, 1, 4>]} {
   ops.par_loop range(%lo0, %hi0, %lo1, %hi1)
       dats(%u : !ops.dat<f64, 2, 1> read #ops.stencil<[[1, 0], [0, 1]]>,
            %v : !ops.dat<f64, 2, 1> write #ops.stencil<[[0, 0]]>) scalars() {
@@ -22,7 +27,7 @@ ops.chain @stencil_group(%lo0: index, %hi0: index, %lo1: index, %hi1: index, %u:
 
 // v = u * scale + (global x index); the block starts at x = 100.
 ops.chain @index_group(%lo0: index, %hi0: index, %lo1: index, %hi1: index, %u: !ops.dat<f64, 2, 1>,
-                       %v: !ops.dat<f64, 2, 1>, %scale: f64) attributes {ops.func_name = "indexed"} {
+                       %v: !ops.dat<f64, 2, 1>, %scale: f64) attributes {ops.func_name = "indexed", ops.range_values = [array<i64: 1, 4, 1, 4>]} {
   ops.par_loop range(%lo0, %hi0, %lo1, %hi1)
       dats(%u : !ops.dat<f64, 2, 1> read #ops.stencil<[[0, 0]]>, %v : !ops.dat<f64, 2, 1> write #ops.stencil<[[0, 0]]>)
       scalars(%scale : f64) {
@@ -39,7 +44,7 @@ ops.chain @index_group(%lo0: index, %hi0: index, %lo1: index, %hi1: index, %u: !
 
 // min and sum of u over the range.
 ops.chain @reduce_group(%lo0: index, %hi0: index, %lo1: index, %hi1: index, %u: !ops.dat<f64, 2, 1>) -> (f64, f64)
-    attributes {ops.func_name = "reduced"} {
+    attributes {ops.func_name = "reduced", ops.range_values = [array<i64: 1, 4, 1, 4>]} {
   %mn, %sum = ops.par_loop range(%lo0, %hi0, %lo1, %hi1)
       dats(%u : !ops.dat<f64, 2, 1> read #ops.stencil<[[0, 0]]>) scalars()
       attributes {reduction_kinds = [#ops.red_kind<min>, #ops.red_kind<add>]} -> f64, f64 {

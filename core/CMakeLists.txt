@@ -9,6 +9,11 @@ add_library(OPDSLSupport STATIC
 target_include_directories(OPDSLSupport PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(OPDSLSupport PUBLIC LLVMSupport)
 
+add_library(OPDSLPipeline STATIC
+  lib/Pipeline/PipelineRegistry.cpp)
+target_include_directories(OPDSLPipeline PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(OPDSLPipeline PUBLIC LLVMSupport MLIRPass MLIRIR)
+
 add_library(OPDSLTestMain STATIC unittests/TestMain.cpp)
 target_include_directories(OPDSLTestMain PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 

@@ -180,3 +180,21 @@ Newest entries at the bottom. Cluster = `cl` (SLURM); local = WSL Ubuntu 24.04.
 - Tests: `Conversion/ops-to-scf.mlir` (FileCheck of 2D point-wise, stencil offsets, stride-0 dat, multi-component AoS/SoA,
   reductions) and `Conversion/exec-group-abi.mlir` (runs lowered groups with `mlir-runner` on hand-filled memrefs: stencil, shifts,
   scalar, displacement, min+sum). lit got `%mlir_runner_utils`, `%mlir_c_runner_utils`.
+
+## P1.7 CPU pipelines and `opdsl::PipelineRegistry`
+
+- `core/`: `opdsl::OptionMap` (blank/comma separated `key=value`, bare key = true, canonical sorted form for cache keys,
+  validation against declared name/kind pairs, useful messages) and `opdsl::PipelineRegistry` (name -> builder over an
+  `mlir::OpPassManager`, declared options, `build(name, optionText, pm)`). Library `OPDSLPipeline`, 5 unit tests.
+- `ops/lib/Pipelines`: `ops-jit-frontend`, `ops-jit-plan{max-loops reorder placement guarded}`, `ops-jit-cpu{omp specialize soa}`,
+  registered in the global registry and as named pipelines of `ops-opt` (`-ops-jit-cpu="omp=false"`).
+- `ops-specialize{mode=none|ranges}` (`shapes` reports "not implemented"): range operands become the constants of
+  `ops.range_values`; `convert-ops-to-scf` uses constant range operands instead of the function arguments, so trip counts are
+  compile-time while the ABI is unchanged.
+- **noalias:** convert-func-to-llvm puts `llvm.noalias` only on the descriptor pointers of the C-interface wrapper, not on the
+  data pointers the code uses. `convert-ops-to-scf` records the positions of the aligned pointers in `ops.abi.noalias_args`
+  and `ops-mark-noalias` (after func-to-llvm) sets the attribute. With it LLVM vectorises a point-wise group without run-time
+  overlap checks (lit: `Pipelines/jit-cpu-vectorize.mlir` checks `<4 x double>` loads/stores on AVX2, `REQUIRES: x86`).
+- The CPU pipeline does not use bare-pointer calling conventions (descriptors + `_mlir_ciface_` wrapper, plan 4.6).
+- lit: `Pipelines/{jit-cpu-vectorize,pipeline-options,frontend-plan}.mlir`; `Conversion/exec-group-abi.mlir` now runs through
+  `ops-jit-cpu` three ways (sequential, OpenMP with libomp, `specialize=ranges`).

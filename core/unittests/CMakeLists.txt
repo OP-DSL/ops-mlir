@@ -1,1 +1,2 @@
 add_opsjit_unittest(opdsl_hash_test HashTest.cpp LINK OPDSLSupport)
+add_opsjit_unittest(opdsl_pipeline_registry_test PipelineRegistryTest.cpp LINK OPDSLPipeline)

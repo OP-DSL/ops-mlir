@@ -6,6 +6,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Matchers.h"
 
 #include "llvm/ADT/DenseMap.h"
 
@@ -164,7 +165,17 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
     func->setAttr("llvm.emit_c_interface", UnitAttr::get(ctx));
     for (unsigned i = 0; i < numDats; ++i) func.setArgAttr(i, "llvm.noalias", UnitAttr::get(ctx));
     Builder bb(ctx);
-    func->setAttr("ops.abi", bb.getDictionaryAttr({bb.getNamedAttr("rank", bb.getI64IntegerAttr(rank)),
+    // Position of the aligned pointer of each dat once the memref arguments are expanded to descriptors (allocated
+    // pointer, aligned pointer, offset, sizes, strides).
+    SmallVector<int64_t> noaliasArgs;
+    for (unsigned pos = 0; Type t : inputs) {
+      auto memref = dyn_cast<MemRefType>(t);
+      if (!memref) break;
+      noaliasArgs.push_back(pos + 1);
+      pos += 3 + 2 * memref.getRank();
+    }
+    func->setAttr("ops.abi", bb.getDictionaryAttr({bb.getNamedAttr("noalias_args", bb.getDenseI64ArrayAttr(noaliasArgs)),
+                                                   bb.getNamedAttr("rank", bb.getI64IntegerAttr(rank)),
                                                    bb.getNamedAttr("num_dats", bb.getI64IntegerAttr(numDats)),
                                                    bb.getNamedAttr("num_scalars", bb.getI64IntegerAttr(scalarArgs.size())),
                                                    bb.getNamedAttr("num_reductions", bb.getI64IntegerAttr(results.size())),
@@ -181,11 +192,17 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
     }
 
     // --- the loop ---------------------------------------------------------------------------------------------
+    // A range operand that is a constant (ops-specialize) is used as such; otherwise it is the function argument.
+    auto rangeValue = [&](unsigned slot) -> Value {
+      Value operand = loop.getRange()[slot];
+      if (operand.getDefiningOp() && matchPattern(operand, m_Constant())) return mapper.lookup(operand);
+      return entry->getArgument(rangeBase + slot);
+    };
     SmallVector<Value> lbs, ubs, steps, inits;
     Value one = arith::ConstantIndexOp::create(b, loc, 1);
     for (int d = rank - 1; d >= 0; --d) { // outermost (z) first, x innermost
-      lbs.push_back(entry->getArgument(rangeBase + 2 * d));
-      ubs.push_back(entry->getArgument(rangeBase + 2 * d + 1));
+      lbs.push_back(rangeValue(2 * d));
+      ubs.push_back(rangeValue(2 * d + 1));
       steps.push_back(one);
     }
     SmallVector<ReductionKind> kinds;

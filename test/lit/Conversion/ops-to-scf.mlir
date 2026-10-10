@@ -10,7 +10,7 @@
 // CHECK-SAME: %[[LO0:arg6]]: index, %[[HI0:arg7]]: index, %[[LO1:arg8]]: index, %[[HI1:arg9]]: index
 // CHECK-SAME: %[[D0:arg10]]: index, %[[D1:arg11]]: index
 // CHECK-SAME: %[[S:arg12]]: f64
-// CHECK-SAME: attributes {llvm.emit_c_interface, ops.abi = {num_dats = 2 : i64, num_reductions = 0 : i64, num_scalars = 1 : i64, rank = 2 : i64, soa = false}}
+// CHECK-SAME: attributes {llvm.emit_c_interface, ops.abi = {noalias_args = array<i64: 1, 8>, num_dats = 2 : i64, num_reductions = 0 : i64, num_scalars = 1 : i64, rank = 2 : i64, soa = false}}
 // CHECK: scf.parallel (%[[J:.*]], %[[I:.*]]) = (%[[LO1]], %[[LO0]]) to (%[[HI1]], %[[HI0]])
 // CHECK: %[[IA0:.*]] = arith.addi %[[SA0]], %[[I]]
 // CHECK: %[[IA1:.*]] = arith.addi %[[SA1]], %[[J]]

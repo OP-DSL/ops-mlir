@@ -4,6 +4,7 @@ add_mlir_library(OPSMLIRTransforms
   FusePointLocal.cpp
   ForwardStores.cpp
   OutlineGroups.cpp
+  Specialize.cpp
 
   DEPENDS
   OPSMLIRTransformsIncGen
