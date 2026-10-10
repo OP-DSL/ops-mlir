@@ -557,6 +557,11 @@ std::shared_ptr<GroupCode> Executor::codeFor(ModuleOp group, bool soa, std::stri
 
 void Executor::printStats() const {
   const Stats &s = stats_;
+  std::fprintf(stderr, "ops_jit counters: flushes=%llu loops=%llu claimed=%llu declined=%llu groups=%llu plans_built=%llu plans_reused=%llu plans_failed=%llu compiled=%llu memory_hits=%llu disk_hits=%llu\n",
+               (unsigned long long)s.flushes, (unsigned long long)s.loopsSeen, (unsigned long long)s.loopsClaimed,
+               (unsigned long long)s.loopsDeclined, (unsigned long long)s.groupsExecuted, (unsigned long long)s.planBuilds,
+               (unsigned long long)s.planHits, (unsigned long long)s.planFailures, (unsigned long long)s.compiles,
+               (unsigned long long)s.memoryHits, (unsigned long long)s.diskHits);
   std::fprintf(stderr, "ops_jit statistics:\n");
   std::fprintf(stderr, "  flushes %llu, loops %llu: claimed %llu, declined %llu; groups executed %llu\n", (unsigned long long)s.flushes,
                (unsigned long long)s.loopsSeen, (unsigned long long)s.loopsClaimed, (unsigned long long)s.loopsDeclined,

@@ -26,6 +26,7 @@
 # variable OPSJIT_IMPORTER.
 
 include("${CMAKE_CURRENT_LIST_DIR}/OpsJitArtifacts.cmake")
+set(OPSJIT_E2E_DIR "${CMAKE_CURRENT_LIST_DIR}/../test/e2e")
 
 function(_ops_jit_add_test exe_target script mode tmp)
   if(NOT OPS_TEST OR NOT EXISTS "${script}")
@@ -58,6 +59,11 @@ function(_ops_jit_add_test exe_target script mode tmp)
     set_tests_properties(${exe_target}${variant} PROPERTIES LABELS "${labels}" RESOURCE_LOCK "${tmp}"
                          ENVIRONMENT "${environment}")
   endforeach()
+  # Two runs with a fresh disk cache: the second compiles nothing.
+  add_test(NAME ${exe_target}_cache
+           COMMAND ${CMAKE_COMMAND} "-DCMD=${command}" -DDIR=${CMAKE_CURRENT_BINARY_DIR}/${exe_target}_cache -DWORKDIR=${tmp}
+                   -P ${OPSJIT_E2E_DIR}/CacheTest.cmake)
+  set_tests_properties(${exe_target}_cache PROPERTIES LABELS "${labels}" RESOURCE_LOCK "${tmp}")
 endfunction()
 
 function(ops_jit_add_app name)
