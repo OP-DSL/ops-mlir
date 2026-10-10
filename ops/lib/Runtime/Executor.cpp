@@ -3,6 +3,7 @@
 #include "ops-mlir/Dialect/OPS/IR/OPSOps.h"
 #include "ops-mlir/Pipelines/GroupModules.h"
 #include "ops-mlir/Pipelines/Pipelines.h"
+#include "ops-mlir/Runtime/CallDump.h"
 #include "ops-mlir/Runtime/Claim.h"
 #include "ops-mlir/Runtime/Lifter.h"
 
@@ -321,11 +322,21 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
       for (int k : g.recipe.members) std::fprintf(stderr, " %s", run[k]->name);
       std::fprintf(stderr, "\n");
     }
+    std::unique_ptr<CallRecorder> recorder;
+    if (opts.dumpData && !opts.dumpDir.empty() && dumpedGroups_.insert(g.code->entry).second) {
+      std::vector<std::string> elems;
+      for (int slot : g.recipe.datSlots) elems.push_back(elemName(slots[slot]->type ? slots[slot]->type : ""));
+      recorder = std::make_unique<CallRecorder>(opts.dumpDir, g.code->entry, g.code->pipeline, g.code->pipelineOptions, inv.args(), elems);
+    }
     auto t0 = Clock::now();
     inv.call(g.code->fn);
     double seconds = since(t0);
     stats_.tExecute += seconds;
     stats_.groupsExecuted++;
+    if (recorder) {
+      std::string rerror;
+      if (!recorder->finish(rerror)) std::fprintf(stderr, "ops_jit: cannot record %s: %s\n", g.code->entry.c_str(), rerror.c_str());
+    }
 
     for (size_t r = 0; r < g.recipe.reductionOf.size(); ++r) {
       int index = g.recipe.reductionOf[r];

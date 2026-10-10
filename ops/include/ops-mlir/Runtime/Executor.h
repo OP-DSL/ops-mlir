@@ -27,6 +27,7 @@
 #include <chrono>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -84,6 +85,7 @@ private:
   opdsl::PipelineRegistry registry_;
   std::unique_ptr<GroupCompiler> compiler_;
   std::unordered_map<std::string, std::shared_ptr<Plan>> plans_;
+  std::set<std::string> dumpedGroups_;
   Stats stats_;
 };
 

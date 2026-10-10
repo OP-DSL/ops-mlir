@@ -30,6 +30,7 @@ struct Options {
   bool trace = false;            ///< OPS_JIT_TRACE: print every group before it runs (to find the one that crashes)
   bool stats = false;            ///< OPS_JIT_STATS: counters and phase times at exit
   std::string dumpDir;           ///< OPS_JIT_DUMP_DIR
+  bool dumpData = false;         ///< OPS_JIT_DUMP_DATA: also record the first call of every group (inputs, checksums) for ops-jit-replay
   int runMax = 512;              ///< OPS_JIT_RUN_MAX: most loops compiled and planned together
   bool sync = false;             ///< OPS_JIT_SYNC (device builds)
 

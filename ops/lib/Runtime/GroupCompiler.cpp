@@ -88,6 +88,8 @@ std::shared_ptr<GroupCode> GroupCompiler::compile(ModuleOp group, const std::str
   auto code = std::make_shared<GroupCode>();
   code->key = key;
   code->entry = "group_" + key.substr(0, 16);
+  code->pipeline = pipeline;
+  code->pipelineOptions = pipelineOptions;
 
   if (options.useCache && !cache_) {
     opdsl::CacheOptions co;

@@ -70,6 +70,7 @@ bool Options::set(const std::string &name, const std::string &value) {
     dumpDir = value;
     return true;
   }
+  if (name == "OPS_JIT_DUMP_DATA") return parseBool(value, dumpData);
   if (name == "OPS_JIT_RUN_MAX") return parseInt(value, runMax, 1);
   if (name == "OPS_JIT_SYNC") return parseBool(value, sync);
   return false;
@@ -94,6 +95,7 @@ Options Options::fromEnvironment() {
                                 "OPS_JIT_TRACE",
                                 "OPS_JIT_STATS",
                                 "OPS_JIT_DUMP_DIR",
+                                "OPS_JIT_DUMP_DATA",
                                 "OPS_JIT_RUN_MAX",
                                 "OPS_JIT_SYNC"};
   for (const char *name : names)

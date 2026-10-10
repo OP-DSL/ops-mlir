@@ -30,6 +30,7 @@ struct GroupCode {
   opdsl::JITSession::PackedFn fn = nullptr;
   std::string entry;
   std::string key;
+  std::string pipeline, pipelineOptions; ///< what it was lowered with (for dumps)
 };
 
 struct CompileStats {

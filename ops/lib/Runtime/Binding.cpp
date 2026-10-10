@@ -10,8 +10,6 @@ namespace ops_mlir::runtime {
 using namespace mlir;
 using namespace ops_mlir::ops;
 
-size_t sizeOfElem(const std::string &elem) { return elemBytes(elem); }
-
 namespace {
 
 /// The chain argument (index) behind an operand of a call, or -1.
@@ -121,29 +119,18 @@ bool buildRecipes(const Lifted &lifted, ModuleOp planned, std::vector<GroupRecip
 bool Invocation::bind(const GroupRecipe &recipe, ops_kernel_descriptor *const *run, const std::vector<std::vector<int>> &ranges,
                       const std::vector<ops_dat> &slots, bool soa, std::string &error) {
   const int rank = recipe.rank;
-  memrefs.assign(recipe.datSlots.size(), Memref());
-  memrefPointers.clear();
-  indexArgs.clear();
-  scalarArgs.assign(recipe.scalars.size(), Scalar());
-  argv.clear();
+  args_ = PackedArgs();
+  ops_kernel_descriptor *first = run[recipe.members.front()];
+  OPS_instance *instance = first->block->instance;
 
-  // Dats. The loop `members.front()` supplies the instance (all loops of a run are on one).
-  OPS_instance *instance = run[recipe.members.front()]->block->instance;
-  for (size_t i = 0; i < recipe.datSlots.size(); ++i) {
-    ops_dat dat = slots[recipe.datSlots[i]];
-    Memref &m = memrefs[i];
-    const bool device = run[recipe.members.front()]->isdevice != 0;
-    char *ptr = device ? dat->data_d : dat->data;
-    m.words[0] = reinterpret_cast<int64_t>(ptr);
-    m.words[1] = reinterpret_cast<int64_t>(ptr);
-    m.words[2] = 0;
+  // Dats: whole allocations as memrefs, z/y/x (slowest first), then the component.
+  for (int slot : recipe.datSlots) {
+    ops_dat dat = slots[slot];
+    char *ptr = first->isdevice ? dat->data_d : dat->data;
     const int ncomp = dat->dim;
-    const int memRank = rank + (ncomp > 1 ? 1 : 0);
-    // sizes: z, y, x (memory order, slowest first), then the component.
-    int64_t *sizes = &m.words[3];
-    int64_t *strides = &m.words[3 + memRank];
     int64_t points = 1;
     for (int d = 0; d < rank; ++d) points *= dat->size[d];
+    std::vector<int64_t> sizes(rank + (ncomp > 1 ? 1 : 0)), strides(sizes.size());
     int64_t stride = (ncomp > 1 && !soa) ? ncomp : 1; // x
     for (int d = 0; d < rank; ++d) {
       sizes[rank - 1 - d] = dat->size[d];
@@ -154,24 +141,23 @@ bool Invocation::bind(const GroupRecipe &recipe, ops_kernel_descriptor *const *r
       sizes[rank] = ncomp;
       strides[rank] = soa ? points : 1;
     }
-    memrefPointers.push_back(&m);
+    args_.addMemref(ptr, sizes, strides);
   }
   // Shifts, dat-major.
-  for (size_t i = 0; i < recipe.datSlots.size(); ++i) {
+  for (int slot : recipe.datSlots) {
     int shift[OPS_MAX_DIM];
-    ops_lazy_dat_shift(slots[recipe.datSlots[i]], shift);
-    for (int d = 0; d < rank; ++d) indexArgs.push_back(shift[d]);
+    ops_lazy_dat_shift(slots[slot], shift);
+    for (int d = 0; d < rank; ++d) args_.addIndex(shift[d]);
   }
   // Ranges.
-  for (const ChainArg &r : recipe.range) indexArgs.push_back(ranges[r.loop][2 * r.dim + (r.hi ? 1 : 0)]);
+  for (const ChainArg &r : recipe.range) args_.addIndex(ranges[r.loop][2 * r.dim + (r.hi ? 1 : 0)]);
   // Displacement of this process's part of the block.
   int disp[OPS_MAX_DIM];
-  ops_lazy_block_disp(run[recipe.members.front()]->block, disp);
-  for (int d = 0; d < rank; ++d) indexArgs.push_back(disp[d]);
+  ops_lazy_block_disp(first->block, disp);
+  for (int d = 0; d < rank; ++d) args_.addIndex(disp[d]);
 
   // Scalars.
-  for (size_t i = 0; i < recipe.scalars.size(); ++i) {
-    const ChainArg &s = recipe.scalars[i];
+  for (const ChainArg &s : recipe.scalars) {
     const char *src = nullptr;
     if (s.kind == ChainArg::Gbl) {
       const ops_arg &a = run[s.loop]->args[s.arg];
@@ -184,59 +170,11 @@ bool Invocation::bind(const GroupRecipe &recipe, ops_kernel_descriptor *const *r
       }
       src = c->snapshot + s.offset;
     }
-    std::memcpy(scalarArgs[i].bytes, src, sizeOfElem(s.elem));
+    args_.addScalar(s.elem, src);
   }
-
-  // Results.
-  resultElem = recipe.resultElem;
-  resultOffset.clear();
-  size_t offset = 0;
-  for (const std::string &e : resultElem) {
-    size_t size = sizeOfElem(e);
-    offset = (offset + size - 1) / size * size;
-    resultOffset.push_back(offset);
-    offset += size;
-  }
-  results.assign(std::max<size_t>(offset, 16) + 16, 0);
-
-  // The argument vector of the packed wrapper: pointers to the storage of each argument.
-  for (Memref *&m : memrefPointers) argv.push_back(&m);
-  for (int64_t &v : indexArgs) argv.push_back(&v);
-  for (Scalar &s : scalarArgs) argv.push_back(s.bytes);
-  if (!resultElem.empty()) argv.push_back(results.data());
+  args_.setResults(recipe.resultElem);
+  args_.finalize();
   return true;
-}
-
-void Invocation::call(opdsl::JITSession::PackedFn fn) { fn(argv.data()); }
-
-double Invocation::resultAsDouble(size_t i) const {
-  const char *p = results.data() + resultOffset[i];
-  if (resultElem[i] == "f64") {
-    double v;
-    std::memcpy(&v, p, 8);
-    return v;
-  }
-  if (resultElem[i] == "f32") {
-    float v;
-    std::memcpy(&v, p, 4);
-    return v;
-  }
-  return static_cast<double>(resultAsInt(i));
-}
-
-int64_t Invocation::resultAsInt(size_t i) const {
-  const char *p = results.data() + resultOffset[i];
-  if (resultElem[i] == "i32") {
-    int32_t v;
-    std::memcpy(&v, p, 4);
-    return v;
-  }
-  if (resultElem[i] == "i64") {
-    int64_t v;
-    std::memcpy(&v, p, 8);
-    return v;
-  }
-  return static_cast<int64_t>(resultAsDouble(i));
 }
 
 } // namespace ops_mlir::runtime

@@ -16,6 +16,8 @@
 #include "ops-mlir/Runtime/Lifter.h"
 #include "ops-mlir/Pipelines/GroupModules.h"
 
+#include "ops-mlir/Runtime/PackedArgs.h"
+
 #include "opdsl/JIT/JITSession.h"
 
 #include <array>
@@ -40,40 +42,25 @@ struct GroupRecipe {
 /// the meaning of the chain arguments.
 bool buildRecipes(const Lifted &lifted, mlir::ModuleOp planned, std::vector<GroupRecipe> &recipes, std::string &error);
 
-/// Storage for one call: build it, then call().
+/// The arguments of one call of a compiled group, evaluated from a run of descriptors.
 class Invocation {
 public:
   /// Evaluates `recipe` for the loops `run` (with their local `ranges`). `soa`: OPS stores components apart.
   bool bind(const GroupRecipe &recipe, ops_kernel_descriptor *const *run, const std::vector<std::vector<int>> &ranges,
             const std::vector<ops_dat> &slots, bool soa, std::string &error);
 
-  /// Calls the compiled group. After it, result<T>(i) reads the reduction values.
-  void call(opdsl::JITSession::PackedFn fn);
+  /// Calls the compiled group. After it, result(i) reads the reduction values.
+  void call(opdsl::JITSession::PackedFn fn) { args_.call(fn); }
 
-  /// Result `i` (in the order of the group's results) as a double, int64 or float according to `elem`.
-  double resultAsDouble(size_t i) const;
-  int64_t resultAsInt(size_t i) const;
-  const char *resultPointer(size_t i) const { return results.data() + resultOffset[i]; }
+  /// Result `i` (in the order of the group's results).
+  double resultAsDouble(size_t i) const { return args_.resultAsDouble(i); }
+  int64_t resultAsInt(size_t i) const { return args_.resultAsInt(i); }
+
+  const PackedArgs &args() const { return args_; }
 
 private:
-  struct Memref {
-    std::array<int64_t, 3 + 2 * 4> words{}; // allocated, aligned, offset, sizes[r], strides[r]
-  };
-  struct Scalar {
-    alignas(8) char bytes[8] = {0};
-  };
-  std::vector<Memref> memrefs;
-  std::vector<Memref *> memrefPointers;
-  std::vector<int64_t> indexArgs; ///< shifts, ranges, displacements
-  std::vector<Scalar> scalarArgs;
-  std::vector<void *> argv;
-  std::vector<char> results;
-  std::vector<size_t> resultOffset;
-  std::vector<std::string> resultElem;
+  PackedArgs args_;
 };
-
-/// Natural size and alignment of an element type name.
-size_t sizeOfElem(const std::string &elem);
 
 } // namespace ops_mlir::runtime
 
