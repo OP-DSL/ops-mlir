@@ -38,3 +38,8 @@ def _find_libomp():
 
 
 config.substitutions.append(("%mlir_omp", _find_libomp()))
+
+# Kernel importer tests need the headers of OPS (ops_lib_core.h defines ACC and the MIN/MAX/SIGN macros).
+if os.path.exists(os.path.join(config.ops_include_dir, "ops_lib_core.h")):
+    config.available_features.add("ops-headers")
+config.substitutions.append(("%ops_include", config.ops_include_dir))

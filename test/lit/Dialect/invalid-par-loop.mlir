@@ -82,17 +82,6 @@ ops.chain @body_red_type(%a: !ops.dat<f64, 1, 1>, %lo: index, %hi: index) {
 
 // -----
 
-ops.chain @read_write_only(%a: !ops.dat<f64, 1, 1>, %lo: index, %hi: index) {
-  ops.par_loop range(%lo, %hi) dats(%a : !ops.dat<f64, 1, 1> write #ops.stencil<[[0]]>) scalars() {
-  ^bb0(%x: !ops.acc<f64, 1, 1>):
-    // expected-error @+1 {{reads dat operand #0 of the enclosing ops.par_loop, which is write-only}}
-    %v = ops.read %x[0] : !ops.acc<f64, 1, 1> -> f64
-  }
-  ops.return
-}
-
-// -----
-
 ops.chain @write_read_only(%a: !ops.dat<f64, 1, 1>, %lo: index, %hi: index) {
   ops.par_loop range(%lo, %hi) dats(%a : !ops.dat<f64, 1, 1> read #ops.stencil<[[0]]>) scalars() {
   ^bb0(%x: !ops.acc<f64, 1, 1>):
@@ -122,19 +111,6 @@ ops.chain @write_offset_outside_stencil(%a: !ops.dat<f64, 1, 1>, %lo: index, %hi
     %c = arith.constant 1.0 : f64
     // expected-error @+1 {{offset [-1] is not a point of the stencil of dat operand #0}}
     ops.write %x[-1], %c : !ops.acc<f64, 1, 1>
-  }
-  ops.return
-}
-
-// -----
-
-// Reading a write-only accessor at a data-dependent offset.
-ops.chain @dyn_read_write_only(%a: !ops.dat<f64, 1, 1>, %lo: index, %hi: index) {
-  ops.par_loop range(%lo, %hi) dats(%a : !ops.dat<f64, 1, 1> write #ops.stencil<[[0]]>) scalars() {
-  ^bb0(%x: !ops.acc<f64, 1, 1>):
-    %i = ops.index 0
-    // expected-error @+1 {{reads dat operand #0 of the enclosing ops.par_loop, which is write-only}}
-    %v = ops.read_dyn %x[%i : i32] : !ops.acc<f64, 1, 1> -> f64
   }
   ops.return
 }

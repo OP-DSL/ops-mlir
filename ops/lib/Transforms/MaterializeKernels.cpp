@@ -1,5 +1,6 @@
 #include "ops-mlir/Dialect/OPS/IR/OPSOps.h"
 #include "ops-mlir/Transforms/Passes.h"
+#include "ops-mlir/Transforms/StoreForwarding.h"
 
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Verifier.h"
@@ -87,7 +88,11 @@ struct MaterializeKernelsPass : public impl::MaterializeKernelsBase<MaterializeK
         if (acc >= loop.getNumDats())
           return loop.emitError("kernel @") << kernel.getSymName() << " has more accessor parameters than the loop has dats";
         BlockArgument target = loop.getAccessorArg(acc++);
-        if (target.getType() != p.getType())
+        // The kernel only knows the components it uses: its accessor may have fewer than the dat.
+        auto kernelAcc = cast<AccType>(p.getType());
+        auto loopAcc = cast<AccType>(target.getType());
+        if (kernelAcc.getElementType() != loopAcc.getElementType() || kernelAcc.getRank() != loopAcc.getRank() ||
+            kernelAcc.getNcomp() > loopAcc.getNcomp())
           return loop.emitError("kernel @") << kernel.getSymName() << " parameter " << p.getArgNumber() << " has type "
                                             << p.getType() << " but the dat operand has accessor type " << target.getType();
         paramToBlockArg[p] = target;
@@ -150,6 +155,16 @@ struct MaterializeKernelsPass : public impl::MaterializeKernelsBase<MaterializeK
     }
     // The loop is now valid or not: report what is wrong with the kernel against this loop's stencils.
     if (failed(verify(loop))) return failure();
+    // A kernel may read back what it wrote to an output: use the stored values, and diagnose the reads of write-only
+    // operands that no store feeds.
+    forwardStoresInLoop(loop);
+    for (unsigned i = 0; i < loop.getNumDats(); ++i) {
+      if (loop.getAccess(i) != AccessMode::Write) continue;
+      for (Operation *user : loop.getAccessorArg(i).getUsers())
+        if (isa<ReadOp, ReadDynOp>(user))
+          return user->emitError("kernel @") << kernel.getSymName() << " reads the write-only dat operand #" << i
+                                             << " before it has written that point";
+    }
     return success();
   }
 };

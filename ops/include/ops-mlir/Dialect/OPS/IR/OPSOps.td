@@ -59,6 +59,7 @@ def OPS_ReadDynOp : OPS_Op<"read_dyn", [
   let results = (outs OPS_ScalarType:$result);
   let assemblyFormat = "$acc `[` $offsets `:` type($offsets) `]` attr-dict `:` qualified(type($acc)) `->` type($result)";
   let hasVerifier = 1;
+  let hasCanonicalizer = 1;
 }
 
 def OPS_WriteOp : OPS_Op<"write", [

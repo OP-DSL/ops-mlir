@@ -224,3 +224,34 @@ a scalar argument of the group) goes through `ops-jit-frontend` and `ops-jit-pla
 module of its own (`extractGroupModules`), keyed (sha256 over bytecode, pipeline, options, target, version), lowered with
 `ops-jit-cpu`, compiled by `JITSession`, stored in `PersistentCache` and run on real arrays through the ABI of 4.6. A second session
 loads the cached object (no lowering, no compile) and produces the same results. `GroupModules.h` also has `registerJITDialects()`.
+
+## P2.1 `ops-kernel-import` (provider A), P2.2 importer tests
+
+- `ops/lib/Frontend/CSubsetWalker` (generic: C subset of a kernel body -> arith/math/scf; locals as SSA threaded through
+  `scf.if` results and `scf.for` iter_args, local arrays with constant indices, ternary, short circuit, math library,
+  hooks for everything DSL-specific) and `KernelImport.cpp` (OPS: accessor recognition, reductions, globals, manifest).
+  Tool `ops-kernel-import --kernel K (--source app.cpp | --header k.h) --ndim N [--kinds ...] -o out[.mlir] --manifest out.json -- <clang flags>`.
+- **Translation unit:** the application source file that includes the kernel (`--source`) is parsed with the application's flags, so
+  globals, structs and macros are the real ones; `--header` mode parses `<ops_lib_core.h>` + the header (globals missing: kernels
+  that read them fail with "unresolved names"). The importer defines `OPS_<n>D`, `OPS_ACC_IGNORE` (as OPS's translator does: then
+  `ops_macros.h` leaves out its OPS_ACCn macros and MIN/MAX/SIGN come from `ops_lib_core.h`) and its own `OPS_ACCn` / `OPS_ACC_MDn`
+  that expand to a call carrying n.
+- **Parameter kinds** (`--kinds` from the translator, else inferred): `ACC<T>&` -> `!ops.acc`; a pointer indexed with `OPS_ACCn` -> acc;
+  a pointer named `idx` -> idx; other `const T*` -> `!ops.gbl`; other `T*` -> `!ops.red`.
+- **Decisions beyond the plan:** (1) component counts and global sizes come from the walk, not a pre-scan (loops over components are
+  unrolled when the loop variable selects an accessor component/offset or a global element and the bounds are constants, at most
+  64 iterations); the kernel argument types are patched afterwards. (2) A kernel may read back what it wrote to a write-only output
+  (`Anew(0,0)` after writing it in the Laplace kernel): the verifier no longer rejects it, `ops-materialize-kernels` forwards the stored
+  values (`StoreForwarding.h`, shared with `ops-forward-stores`) and reports reads of write-only operands that no store feeds.
+  (3) `ops.read_dyn` with constant offsets canonicalises to `ops.read`. (4) Kernel accessors may have fewer components than the dat.
+  (5) Pure ternaries are `arith.select`, others `scf.if`; `&&`/`||` are eager when the right side is speculatable.
+- **Not supported (declined with a reason):** while/do/switch/goto/break/continue, early return, pointer arithmetic, calls other than
+  the math library, writes to globals, reduction dim > 1, gbl arrays indexed by data, writes at data-dependent offsets, f16.
+  printf is dropped with a warning.
+- Corpus check (scripts, not committed): 243 kernels of the OPS apps in header mode: 169 import; the failures are 43 with a wrong
+  `--ndim` in my loop (lowdim 3D kernels given 2), 27 kernels that need application globals (header mode), a handful of real limits.
+- lit `Frontend/`: 13 tests on verbatim kernels of OPS and TGV (`Inputs/README.md` lists sources): accessors in 2D/3D, mixed
+  precision, legacy macros 2D/3D, control flow (if/else threading, loops with iter_args, ternary, local arrays, short circuit,
+  unrolling of component loops), reductions (accumulate, min, max, test-then-assign, assign style, mixed kinds rejected),
+  multi-component, boundary writes at non-zero offsets, idx + constants, data-dependent offsets, struct-array constants with dynamic
+  index, unsupported constructs with reasons, unresolved names. `REQUIRES: ops-headers` (`OPS_SRC`, passed by `scripts/ci.sh`).

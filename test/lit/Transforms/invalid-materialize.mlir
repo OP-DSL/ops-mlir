@@ -67,3 +67,20 @@ ops.chain @c5(%a: !ops.dat<f64, 2, 1>, %lo0: index, %hi0: index, %lo1: index, %h
   }
   ops.return
 }
+
+// -----
+
+// A kernel that reads a point of a write-only operand that it has not written.
+ops.kernel @reads_output(%x: !ops.acc<f64, 1, 1>) {
+  // expected-error @+1 {{kernel @reads_output reads the write-only dat operand #0 before it has written that point}}
+  %v = ops.read %x[0] : !ops.acc<f64, 1, 1> -> f64
+  ops.write %x[0], %v : !ops.acc<f64, 1, 1>
+  ops.return
+}
+
+ops.chain @c6(%a: !ops.dat<f64, 1, 1>, %lo: index, %hi: index) {
+  ops.par_loop @reads_output range(%lo, %hi) dats(%a : !ops.dat<f64, 1, 1> write #ops.stencil<[[0]]>) scalars() {
+  ^bb0(%x: !ops.acc<f64, 1, 1>):
+  }
+  ops.return
+}

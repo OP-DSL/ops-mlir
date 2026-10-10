@@ -38,7 +38,13 @@ include(AddLLVM)
 include(AddMLIR)
 include(HandleLLVMOptions)
 
-include_directories(${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS})
+# Clang: the build-time kernel importer (ops/lib/Frontend) parses OPS kernels with it.
+find_package(Clang REQUIRED CONFIG HINTS "${LLVM_DIR}/../clang")
+message(STATUS "Using ClangConfig.cmake in: ${Clang_DIR}")
+# clang finds its builtin headers (stddef.h...) relative to its own executable; ours is not clang.
+set(OPSJIT_CLANG_RESOURCE_DIR "${LLVM_LIBRARY_DIR}/clang/${LLVM_VERSION_MAJOR}" CACHE PATH "clang resource directory")
+
+include_directories(${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS} ${CLANG_INCLUDE_DIRS})
 link_directories(${LLVM_BUILD_LIBRARY_DIR})
 add_definitions(${LLVM_DEFINITIONS})
 

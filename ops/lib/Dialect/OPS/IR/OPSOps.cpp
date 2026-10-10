@@ -1,7 +1,9 @@
 #include "ops-mlir/Dialect/OPS/IR/OPSOps.h"
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/FunctionImplementation.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
@@ -97,8 +99,6 @@ static LogicalResult verifyAgainstLoop(Operation *op, Value acc, ArrayRef<int64_
   AccessMode mode = loop.getAccess(i);
   if (isWrite && mode == AccessMode::Read)
     return op->emitOpError("writes dat operand #") << i << " of the enclosing ops.par_loop, which is only read";
-  if (!isWrite && mode == AccessMode::Write)
-    return op->emitOpError("reads dat operand #") << i << " of the enclosing ops.par_loop, which is write-only";
   if (!dynamic && !loop.getStencil(i).contains(offsets)) {
     InFlightDiagnostic diag = op->emitOpError("offset [");
     llvm::interleaveComma(offsets, diag);
@@ -331,6 +331,29 @@ LogicalResult CallOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
       return emitOpError("result #") << i << " must have type " << type.getResult(i) << ", got "
                                      << getResult(i).getType();
   return success();
+}
+
+
+namespace {
+/// A read at offsets that turn out to be constants is an ordinary read (after unrolling a loop that computed them).
+struct ReadDynToRead : public OpRewritePattern<ReadDynOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(ReadDynOp op, PatternRewriter &rewriter) const override {
+    SmallVector<int64_t> offsets;
+    for (Value v : op.getOffsets()) {
+      APInt value;
+      if (!matchPattern(v, m_ConstantInt(&value))) return failure();
+      offsets.push_back(value.getSExtValue());
+    }
+    rewriter.replaceOpWithNewOp<ReadOp>(op, op.getResult().getType(), op.getAcc(), rewriter.getDenseI64ArrayAttr(offsets),
+                                        rewriter.getI64IntegerAttr(static_cast<int64_t>(op.getComp())));
+    return success();
+  }
+};
+} // namespace
+
+void ReadDynOp::getCanonicalizationPatterns(RewritePatternSet &patterns, MLIRContext *ctx) {
+  patterns.add<ReadDynToRead>(ctx);
 }
 
 #define GET_OP_CLASSES

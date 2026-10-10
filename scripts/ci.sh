@@ -13,7 +13,7 @@ BUILD=${BUILD:-$OPSJIT_BUILD_ROOT/ops-mlir}
 
 cmake -S "$src" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="$CXX" -DMLIR_DIR="$MLIR_DIR" -DLLVM_DIR="$LLVM_DIR" \
-  -DOPS_INSTALL="$OPS_INSTALL" $OPSJIT_CMAKE_ARGS "$@"
+  -DOPS_INSTALL="$OPS_INSTALL" -DOPSJIT_OPS_SRC="$OPS_SRC" $OPSJIT_CMAKE_ARGS "$@"
 ninja -C "$BUILD"
 ninja -C "$BUILD" check-ops-mlir
 # End-to-end suites (cpu label) are added from P3.9 on.

@@ -3,6 +3,7 @@ add_mlir_library(OPSMLIRTransforms
   SpecializeConsts.cpp
   FusePointLocal.cpp
   ForwardStores.cpp
+  StoreForwarding.cpp
   OutlineGroups.cpp
   Specialize.cpp
 
