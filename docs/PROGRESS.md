@@ -198,3 +198,21 @@ Newest entries at the bottom. Cluster = `cl` (SLURM); local = WSL Ubuntu 24.04.
 - The CPU pipeline does not use bare-pointer calling conventions (descriptors + `_mlir_ciface_` wrapper, plan 4.6).
 - lit: `Pipelines/{jit-cpu-vectorize,pipeline-options,frontend-plan}.mlir`; `Conversion/exec-group-abi.mlir` now runs through
   `ops-jit-cpu` three ways (sequential, OpenMP with libomp, `specialize=ranges`).
+
+## P1.8 `opdsl::JITSession`, P1.9 `opdsl::PersistentCache`
+
+- `core/JIT/JITSession.h`: `compile(ModuleOp in the LLVM dialect, entry)` -> object bytes (translate to LLVM IR, target machine of the
+  host or `JITOptions.cpu/features`, `makeOptimizingTransformer` at -O3, object via the code generator) and `load(object, entry)`
+  -> packed `void(void **)` function. Compile and load are separate so that a cache hit skips the MLIR pipeline and the compile.
+  Each loaded object gets its own JITDylib (helper symbols such as OpenMP critical-section variables may repeat across objects),
+  process symbols come through a search generator, `sharedLibraries` are loaded into the process, initialisers run
+  (`LLJIT::initialize`) and are finalised in reverse order at destruction. The packed wrapper `_opdsl_<entry>` calls
+  `_mlir_ciface_<entry>` when the module has it (the descriptor-pointer ABI), the function itself otherwise; args[nargs] takes the
+  result. `targetDescription()` ("triple cpu +features") is meant for cache keys. LLVM 23: `createBareJITDylib` returns a reference.
+- `core/Cache/PersistentCache.h`: files `<dir>/<key>.opdslc` (magic, format version, sizes, xxh3 checksum, header, payload);
+  atomic stores (temp in the same directory + rename, so concurrent writers both succeed), a corrupt, truncated or wrong-version
+  file is a miss and is deleted, LRU eviction by modification time (a hit refreshes it) down to 90% of the cap (default 2 GB),
+  directory from `OPS_JIT_CACHE_DIR`, `XDG_CACHE_HOME/opdsl-jit` or `~/.cache/opdsl-jit`.
+- Unit tests: JIT (sum loop with a result, pointers and doubles, two objects, an object reloaded in a second session, error
+  for a missing entry) and cache (miss/hit, overwrite, corruption of three kinds, version mismatch, two forked writers x 50
+  stores of 100 KB, LRU eviction order, default directory).

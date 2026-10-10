@@ -14,6 +14,19 @@ add_library(OPDSLPipeline STATIC
 target_include_directories(OPDSLPipeline PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(OPDSLPipeline PUBLIC LLVMSupport MLIRPass MLIRIR)
 
+llvm_map_components_to_libnames(opdsl_llvm_libs Core Support OrcJIT Passes native TargetParser)
+add_library(OPDSLJIT STATIC
+  lib/JIT/JITSession.cpp)
+target_include_directories(OPDSLJIT PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(OPDSLJIT PUBLIC
+  MLIRIR MLIRExecutionEngine MLIRTargetLLVMIRExport MLIRBuiltinToLLVMIRTranslation MLIRLLVMToLLVMIRTranslation
+  MLIROpenMPToLLVMIRTranslation ${opdsl_llvm_libs})
+
+add_library(OPDSLCache STATIC
+  lib/Cache/PersistentCache.cpp)
+target_include_directories(OPDSLCache PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(OPDSLCache PUBLIC LLVMSupport)
+
 add_library(OPDSLTestMain STATIC unittests/TestMain.cpp)
 target_include_directories(OPDSLTestMain PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
