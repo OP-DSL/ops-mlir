@@ -12,6 +12,7 @@ set(OPSJIT_BUILD "$ENV{HOME}/ops-mlir-work/build/ops-mlir" CACHE PATH "ops-mlir 
 set(TGV_ROOT "$ENV{HOME}/ops-mlir-work/reguly-tests/apps/TGV_mixed" CACHE PATH "TGV_mixed (github.com/reguly/tests)")
 option(OPS_TEST "Register the apps' tests with ctest" ON)
 option(OPSJIT_APPS_CUDA "Build the CUDA variants" OFF)
+set(OPSJIT_APPS "" CACHE STRING "build only these applications (semicolon separated names as in this file); empty: all")
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -48,7 +49,9 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/OpsApps.cmake")
 set(c_apps "${OPS_SRC}/apps/c")
 
 macro(ops_app name dir)
-  if(EXISTS "${dir}")
+  if(OPSJIT_APPS AND NOT "${name}" IN_LIST OPSJIT_APPS)
+    # not selected
+  elseif(EXISTS "${dir}")
     ops_jit_add_app(${name} SOURCE_DIR "${dir}" TEST_SCRIPT "${dir}/cmake_test.sh" ${ARGN})
   else()
     message(WARNING "${dir} does not exist: ${name} skipped")
@@ -75,8 +78,11 @@ endif()
 if(HDF5_FOUND AND TARGET OPS::ops_hdf5_seq)
   foreach(variant DP SP SPDP)
     if(EXISTS "${TGV_ROOT}/TGsym_${variant}")
+      if(NOT OPSJIT_APPS OR tgv_${variant} IN_LIST OPSJIT_APPS)
       ops_jit_add_app(tgv_${variant} SOURCE_DIR "${TGV_ROOT}/TGsym_${variant}" HDF5
                       IMPORTER_FLAGS -I${HDF5_INCLUDE_DIRS})
+      endif()
+      if(NOT OPSJIT_APPS OR tgvs_${variant} IN_LIST OPSJIT_APPS)
       ops_jit_add_app(tgvs_${variant} SOURCE_DIR "${TGV_ROOT}/TGsym_${variant}" HDF5 VERIFY_ONLY
                       IMPORTER_FLAGS -I${HDF5_INCLUDE_DIRS}
                       PATCH_FILE opensbli.cpp
@@ -84,6 +90,7 @@ if(HDF5_FOUND AND TARGET OPS::ops_hdf5_seq)
                             "block0np1 = 513" "block0np1 = 33"
                             "block0np2 = 513" "block0np2 = 33"
                             "niter = 20" "niter = 3")
+      endif()
     endif()
   endforeach()
 else()
