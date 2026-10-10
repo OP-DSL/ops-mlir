@@ -17,6 +17,6 @@ suite=${1:?usage: perf.sbatch <suite>}
 export OPSJIT_RESULTS=${OPSJIT_RESULTS:-$OPSJIT_WORK/results}
 mkdir -p "$OPSJIT_RESULTS"
 script=scripts/perf/$suite.sh
-if [ ! -x "$script" ]; then echo "perf.sbatch: $script does not exist yet" >&2; exit 2; fi
+if [ ! -f "$script" ]; then echo "perf.sbatch: $script does not exist yet" >&2; exit 2; fi
 export OPSJIT_JOB=${SLURM_JOB_ID:-local}
-"$script"
+bash "$script"

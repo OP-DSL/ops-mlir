@@ -15,8 +15,8 @@ MLIR_BRANCH=${MLIR_BRANCH:-v2}
 git -C "$WORK/OPS" push cl-ops "$OPS_BRANCH:$OPS_BRANCH"
 git -C "$WORK/ops-mlir" push cl-mlir "$MLIR_BRANCH:$MLIR_BRANCH"
 
-# -n: ssh must not swallow our stdin.
-ssh -n cl bash -s -- "$OPS_BRANCH" "$MLIR_BRANCH" <<'REMOTE'
+# The remote script comes from this heredoc, so no `ssh -n` here (it would replace stdin).
+ssh cl bash -s -- "$OPS_BRANCH" "$MLIR_BRANCH" <<'REMOTE'
 set -euo pipefail
 OPS_BRANCH=$1; MLIR_BRANCH=$2
 W=$HOME/ops-jit-cl/work

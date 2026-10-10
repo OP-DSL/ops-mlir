@@ -15,7 +15,7 @@ source scripts/env.sh
 what=${1:-all}
 for step in $( [ "$what" = all ] && echo "ops mlir apps" || echo "$what" ); do
   script=scripts/build_$step.sh
-  if [ ! -x "$script" ]; then echo "build.sbatch: $script does not exist yet" >&2; exit 2; fi
+  if [ ! -f "$script" ]; then echo "build.sbatch: $script does not exist yet" >&2; exit 2; fi
   echo "== $(date -Is) build $step"
-  "$script"
+  bash "$script"
 done
