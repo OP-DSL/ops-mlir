@@ -44,13 +44,20 @@ fi
 # scripts where HDF5 is: the shared cluster copy was relocated and its wrappers still name the original
 # location, which holds an Intel-built HDF5 that cannot be linked without Intel's runtime libraries.
 args+=( -DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF
-        -DHDF5_NO_FIND_PACKAGE_CONFIG_FILE=TRUE -DHDF5_C_COMPILER_NO_INTERROGATE=TRUE )
-[ -n "${HDF5_INSTALL_PATH:-}" ] && args+=( -DHDF5_ROOT="$HDF5_INSTALL_PATH" )
+        -DHDF5_NO_FIND_PACKAGE_CONFIG_FILE=TRUE )
+# (Only when HDF5 is configured: without any HDF5, "no interrogation" makes FindHDF5 report success.)
+if [ -n "${HDF5_INSTALL_PATH:-}" ]; then
+  args+=( -DHDF5_ROOT="$HDF5_INSTALL_PATH" -DHDF5_C_COMPILER_NO_INTERROGATE=TRUE
+          -DHDF5_C_INCLUDE_DIR="$HDF5_INSTALL_PATH/include"
+          -DHDF5_hdf5_LIBRARY_RELEASE="$HDF5_INSTALL_PATH/lib/libhdf5.so"
+          -DHDF5_hdf5_hl_LIBRARY_RELEASE="$HDF5_INSTALL_PATH/lib/libhdf5_hl.so" )
+fi
 [ -n "${CFLAG:-}" ] && args+=( -DCFLAG="$CFLAG" )
 [ -n "${CXXFLAG:-}" ] && args+=( -DCXXFLAG="$CXXFLAG" )
 
 echo "== configure OPS ($OPS_SRC @ $(git -C "$OPS_SRC" log -1 --format=%h)) -> $BUILD, install $OPS_INSTALL, cuda=$OPS_CUDA apps=$APPS"
 cmake "${args[@]}" "$@"
+if [ "${OPS_CONFIGURE_ONLY:-0}" = 1 ]; then echo "== configure only"; exit 0; fi
 echo "== build"
 cmake --build "$BUILD" -j "$JOBS"
 if [ "$APPS" = ON ] && [ "${OPS_INSTALL_APPS:-0}" != 1 ]; then
