@@ -34,8 +34,66 @@ Newest entries at the bottom. Cluster = `cl` (SLURM); local = WSL Ubuntu 24.04.
   SSH key copied into WSL (`~/.ssh/id_rsa_cl` + `Host cl` entry, with Windows CRLF line endings converted).
 - **Acceptance:** `cluster/v2/hello.sbatch` (pinned clang + OpenMP/libomp + MPI + CUDA-driver check)
   passes on a CPU node (job 223629: `omp threads=4`, `mpi ranks=2 allreduce=2`, `HELLO OK`).
-  A100 (223630) and V100 (223631) jobs are queued behind other users; results below when they run.
+  The A100 (223630) and V100 (223631) jobs waited behind other users; see below.
 - **Deviation from the plan:** the plan's acceptance said "builds the OPS libraries with the pinned clang"; the
   hello job checks the toolchain only, and the OPS build is P0.2 (`scripts/build_ops.sh`).
 - Notes: `.gitignore` ignored `*.cmake`; `!cmake/*.cmake` added. `core.fileMode=false` in OPS and ops-mlir
   (Windows-copy mode noise), so exec bits are recorded with `git update-index --chmod=+x`.
+  A100 (223630) and V100 (223631) hello jobs also pass (`Tesla V100-PCIE-16GB sm_70`, `NVIDIA A100-PCIE-40GB sm_80`):
+  **P0.0 accepted** on CPU, V100 and A100 nodes.
+
+## P0.1 Hygiene
+
+- `core.fileMode=false` in OPS and ops-mlir; `*:Zone.Identifier` ignored through `.git/info/exclude`;
+  `apps/c/TeaLeaf/tea.in` restored to its symlink; OPS un-shallowed.
+- **Pending Istvan's OK:** deleting the `*:Zone.Identifier` files and the broken `refs/heads/*:Zone.Identifier`
+  refs (they only make git print warnings in ops-mlir).
+
+## P0.2 OPS build and baseline
+
+- `scripts/build_ops.sh` builds and installs OPS with the pinned clang (single source of truth, local and cluster);
+  `OPS_BUILD_APPS=ON` builds the sample apps and their ctest tests in a separate tree.
+  First library build on the cluster (CUDA sm_70+sm_80, MPI, HDF5): clean on the first attempt.
+- OPS `CMakeLists.txt`: `project(OPS C CXX)`; Fortran only with `BUILD_OPS_FORTRAN=ON` (it made every
+  configure fail on machines without a Fortran compiler; local WSL has none).
+- **Local limitation:** no MPI, HDF5 or gfortran in WSL and no sudo, and the system Python has no `venv`/`pip`.
+  `scripts/setup_translator_local.sh` builds the translator venv without pip and copies the cluster venv's
+  site-packages (same Python 3.12; pure Python + libclang 16.0.6 wheel). Local builds are libs without MPI/HDF5/CUDA;
+  `scripts/ops_app_manual.sh` translates and builds one app by hand (OPS's CMake app machinery runs the translator
+  over every sample app at configure time, 10+ minutes). MPI, HDF5 and GPU tests run on the cluster.
+- **Cluster HDF5 trap:** the shared `op-dsl/hdf5` was relocated; its `h5pcc` wrapper still says
+  `prefix=/home/reguly/projects/tests/hdf5`, where an Intel-built HDF5 lives that cannot be linked (needs `libimf`).
+  CMake's FindHDF5 trusts the wrapper, so `build_ops.sh` uses a copy of the wrapper with the prefix corrected
+  (build-tree only; the shared files are untouched). Also: CMake package registries are disabled for reproducibility.
+
+## P0.3-P0.5 executor hook, queue-only mode, artifact pointer (OPS `a0f390f9f`)
+
+- New headers `ops_lazy_executor.h`, `ops_jit_artifact.h`; descriptor field `jit_artifact`,
+  `create_kerneldesc_and_enque_jit()`; `OPS_instance` fields `lazy_executor`, `lazy_executor_ctx`, `lazy_queue`.
+- **Deviations from the plan's §4.1:** the API is C++ (not `extern "C"`: `OPS_instance` is a C++ class);
+  `ops_lazy_execute_default()` and the per-loop steps are as specified. Additions: `ops_lazy_queue_enabled()`,
+  `ops_lazy_transfer_bytes()`; `ops_lazy_account()` also increments the call count (the generated stub does that
+  for stock execution). `ops_lazy_prepare()` books its own MPI time. `ops_register_chain_executor()` flushes the
+  queue first. `ops_execute()` takes the queue before executing it, so loops enqueued by an executor go to the next one.
+- The stock eager path now uses the same helpers (behaviour unchanged: laplace2d eager / OPS_LAZY_QUEUE / OPS_TILING
+  give the same results). Fixes on the way: one descriptor-free function instead of three copies; the eager path no
+  longer leaks the descriptor of a loop with no points on this rank.
+
+## P0.6 flush triggers (OPS `697580e04`)
+
+- Confirmed by the new `apps/c/lazy_triggers` test against the unfixed library: `ops_print_dat_to_txtfile` and
+  queued loops at `ops_exit` are wrong with OPS_TILING/OPS_LAZY_QUEUE. Also fixed from reading: `ops_timing_output`
+  (queued loops were missing from the statistics: laplace2d showed `copy 99` instead of 100), MPI
+  `ops_dat_get_raw_pointer`, device single-node `ops_halo_transfer` (these two need MPI/GPU: exercised on the cluster).
+- `ops_get_data()` flushes: this covers print-to-file, NaN check and the HDF5 writers on both backends.
+- `ops_execute()` ignores nested requests while a flush is running.
+
+## P0.7 constants, P0.8 test executors (OPS `fc613577f`)
+
+- Constant registry: every `ops_decl_const`/`ops_update_const` records a snapshot + version (`ops_find_const`);
+  a changed value flushes the queue first. **Limitation (documented in the header):** stock generated CPU kernels read
+  the *live* variable when they finally run, so only snapshot users (the JIT) get enqueue-time values; the host
+  assignment precedes the `ops_update_const` call, so this cannot be fixed on the OPS side for CPU AOT code.
+- `OPS_LAZY_EXECUTOR_TEST=split|manual[,seed=N]` (argv or environment): built-in executors that must not change any
+  results; `split` hands the queue to the default path in random pieces of 1-5 loops. laplace2d and lazy_triggers pass in
+  every combination with/without OPS_TILING locally.
