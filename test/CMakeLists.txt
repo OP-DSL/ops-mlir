@@ -3,6 +3,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 # lit is vendored (third_party/lit): the pinned LLVM install ships FileCheck, not and count, but no lit.
 set(OPSJIT_LIT_PY ${CMAKE_SOURCE_DIR}/third_party/lit/lit.py)
 set(OPSJIT_LLVM_TOOLS_DIR ${LLVM_TOOLS_BINARY_DIR})
+set(OPSJIT_LLVM_LIBRARY_DIR ${LLVM_LIBRARY_DIR})
 
 configure_file(lit/lit.site.cfg.py.in ${CMAKE_CURRENT_BINARY_DIR}/lit/lit.site.cfg.py @ONLY)
 

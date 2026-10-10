@@ -12,12 +12,14 @@
 
 #include "ops-mlir/Analysis/Passes.h"
 #include "ops-mlir/Dialect/OPS/IR/OPSDialect.h"
+#include "ops-mlir/Conversion/Passes.h"
 #include "ops-mlir/Transforms/Passes.h"
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
   ops_mlir::ops::registerAnalysisPasses();
   ops_mlir::ops::registerOPSTransformsPasses();
+  ops_mlir::ops::registerOPSConversionPasses();
 
   mlir::DialectRegistry registry;
   registry.insert<ops_mlir::ops::OPSDialect, mlir::arith::ArithDialect, mlir::func::FuncDialect,

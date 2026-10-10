@@ -20,3 +20,7 @@ for key in list(config.environment):
 
 config.substitutions.append(("%opsjit_src", config.opsjit_source_dir))
 config.substitutions.append(("%opsjit_bin", config.opsjit_binary_dir))
+
+# Runtime libraries of the MLIR execution tests (mlir-runner): printing and C helpers.
+config.substitutions.append(("%mlir_runner_utils", config.llvm_lib_dir + "/libmlir_runner_utils.so"))
+config.substitutions.append(("%mlir_c_runner_utils", config.llvm_lib_dir + "/libmlir_c_runner_utils.so"))

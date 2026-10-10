@@ -160,3 +160,23 @@ Newest entries at the bottom. Cluster = `cl` (SLURM); local = WSL Ubuntu 24.04.
   the dialect:** `ops.call` (symbol user, verifies the callee is an `ops.chain` of matching signature), because the plan
   says "list of calls" and `func.call` does not accept an `ops.chain`.
 - lit: `Transforms/{fuse-point-local,forward-stores,outline-groups}.mlir`.
+
+## P1.6 `convert-ops-to-scf`
+
+- `Conversion/Passes.td`, library `OPSMLIRConversion`. A chain with exactly one `par_loop` (a group) becomes a `func.func` with the
+  ABI of plan 4.6: dat memrefs (distinct, first appearance), shifts (dat-major, dimension-minor), range lo/hi per dimension,
+  displacement per dimension, scalars (distinct chain arguments); results are the reductions. `llvm.emit_c_interface`,
+  `llvm.noalias` on the memrefs, attribute `ops.abi = {rank, num_dats, num_scalars, num_reductions, soa}`.
+- **Layout choice (made here, the plan left it open):** memory order is reversed OPS order (z, y, x), x last with static stride 1
+  (AoS with c > 1: static stride c). Multi-component dats get a **trailing component dimension** of size c: AoS strides
+  `[?, .., c, 1]`, SoA `[?, .., 1, ?]` (`soa` option). The component is just the last index, so one lowering serves both layouts and
+  the innermost stride is static (vectorisation). Index = `i_d * stencil_stride_d + o_d + shift_d`; `ops.index d` = `i_d + disp_d`.
+- Reductions: a per-point `memref.alloca` accumulator (any control flow in the body works), folded with `a < b ? a : b` for min
+  (the `OPS_MIN` macro; no NaN special-casing) and one `scf.reduce` per loop. Neutral elements +-inf / int limits.
+- Rewrites run on the cloned body (nested regions included) through `unrealized_conversion_cast` placeholders for accessors and
+  reductions that carry which operand they stand for.
+- `ops.func_name` chain attribute names the function (the runtime will use group_<hash>); a private declaration of that name in
+  the module (for a caller) is replaced. A group that an `ops.call` in the same module calls is an error: split into modules first.
+- Tests: `Conversion/ops-to-scf.mlir` (FileCheck of 2D point-wise, stencil offsets, stride-0 dat, multi-component AoS/SoA,
+  reductions) and `Conversion/exec-group-abi.mlir` (runs lowered groups with `mlir-runner` on hand-filled memrefs: stencil, shifts,
+  scalar, displacement, min+sum). lit got `%mlir_runner_utils`, `%mlir_c_runner_utils`.
