@@ -5,6 +5,7 @@
 #                   [OTHERS <regex>...]    sources that need no code generation
 #                   [EXTRA <regex>...]     sources the helper must ignore
 #                   [HDF5]                 link the HDF5 builds of the OPS libraries
+#                   [NO_SEQ_TEST]          no ctest for the sequential build (too slow: CloverLeaf, like in OPS)
 #                   [TRANSLATOR_FLAGS <flags>...] [IMPORTER_FLAGS <flags>...]
 #                   [TEST_SCRIPT <cmake_test.sh>])
 #
@@ -43,7 +44,7 @@ function(_ops_jit_add_test exe_target script mode tmp)
 endfunction()
 
 function(ops_jit_add_app name)
-  cmake_parse_arguments(ARG "HDF5" "SOURCE_DIR;TEST_SCRIPT" "ODD;OTHERS;EXTRA;TRANSLATOR_FLAGS;IMPORTER_FLAGS" ${ARGN})
+  cmake_parse_arguments(ARG "HDF5;NO_SEQ_TEST" "SOURCE_DIR;TEST_SCRIPT" "ODD;OTHERS;EXTRA;TRANSLATOR_FLAGS;IMPORTER_FLAGS" ${ARGN})
   set(tmp "${CMAKE_CURRENT_BINARY_DIR}/${name}_tmp")
   file(REMOVE_RECURSE "${tmp}")
   file(MAKE_DIRECTORY "${tmp}")
@@ -114,7 +115,9 @@ function(ops_jit_add_app name)
     target_include_directories(${exe} PRIVATE "${tmp}")
     target_compile_definitions(${exe} PRIVATE OPS_LAZY ${defs})
     target_link_libraries(${exe} PRIVATE ${libs} ${common_libs})
-    _ops_jit_add_test(${exe} "${ARG_TEST_SCRIPT}" "${mode}" "${tmp}")
+    if(NOT (ARG_NO_SEQ_TEST AND mode STREQUAL "seq"))
+      _ops_jit_add_test(${exe} "${ARG_TEST_SCRIPT}" "${mode}" "${tmp}")
+    endif()
   endfunction()
 
   _variant("" mpi_openmp/mpi_openmp_kernels.cpp "" "${hdf5_seq};OPS::ops_seq" seq)
