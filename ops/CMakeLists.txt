@@ -7,5 +7,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_BINARY_D
 
 add_subdirectory(include/ops-mlir/Dialect/OPS/IR)
 add_subdirectory(lib/Dialect/OPS/IR)
+add_subdirectory(include/ops-mlir/Transforms)
 add_subdirectory(lib/Analysis)
+add_subdirectory(lib/Transforms)
 add_subdirectory(unittests)

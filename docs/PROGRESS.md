@@ -123,3 +123,21 @@ Newest entries at the bottom. Cluster = `cl` (SLURM); local = WSL Ubuntu 24.04.
   the body), randomised oracle with and without non-zero write offsets over materialised and unmaterialised bodies. The
   oracle was checked by mutation: dropping the non-zero-write rule or the WAR rule fails it (280 mismatches).
   lit: `test/lit/Analysis/chain-dependence.mlir` (Jacobi, point-wise, reordering, boundary kernel).
+
+## P1.4 `ops-materialize-kernels`, `ops-specialize-consts`
+
+- `Transforms/Passes.td` (tablegen pass declarations, `registerOPSTransformsPasses()`), library `OPSMLIRTransforms`.
+- **Materialise:** accessor and reduction parameters map to the loop's dat and reduction block arguments by kind and order;
+  a `!ops.gbl<T, n>` parameter takes the next n scalar operands (`gbl_read %g[c]` -> scalar argument); `const_ref` without
+  index -> one chain argument per (name, offset, type), appended to the chain signature and recorded in the chain attribute
+  `ops.binding_consts` (`[{name, offset, arg}]`), passed to every loop that uses it. The loop is verified afterwards (offsets
+  against stencils). Constants with a dynamic index stay as `ops.const_ref` for specialisation.
+- **Specialise:** inputs are chain attributes `ops.const_values` (name -> `array<i8: ...>`, the bytes `ops_decl_const`
+  registered, little endian) and `ops.const_roles` (name -> "bound"); `names=` overrides the roles. Bound `binding_consts`
+  arguments are replaced by constants and removed from the chain signature (other entries renumbered); `scf.for` loops with a
+  static trip count <= `max-trip-count` that index a bound constant dynamically are fully unrolled; `const_ref` with a constant
+  index folds to the value at `offset + index * array_stride`; arith/scf canonicalisation follows. A remaining dynamic
+  `const_ref` is an error. **Deviation:** only loops containing such a reference are unrolled (the plan says all loops with
+  constant trip count <= 256, which would also unroll unrelated loops).
+- The greedy driver hoists the folded constants out of loop bodies to the chain body (par_loop regions are not isolated).
+- lit: `Transforms/{materialize-kernels,invalid-materialize,specialize-consts,invalid-specialize}.mlir`.

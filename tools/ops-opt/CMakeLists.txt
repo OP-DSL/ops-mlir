@@ -6,6 +6,7 @@ add_opsjit_tool(ops-opt ops-opt.cpp
   LINK
     OPSMLIRDialect
     OPSMLIRAnalysis
+    OPSMLIRTransforms
     ${mlir_dialect_libs}
     ${mlir_conversion_libs}
     ${mlir_extension_libs}
