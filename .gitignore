@@ -37,3 +37,4 @@ __pycache__/
 
 # subproject clones
 xdsl/*
+!test/e2e/*.cmake
