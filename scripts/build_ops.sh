@@ -37,10 +37,20 @@ if [ "$OPS_CUDA" = on ]; then
   # nvcc rejects the very new clang as a host compiler: use the system g++ for .cu files only.
   # -no-pie: nvcc's host objects are not position independent, the clang driver links PIE by default.
   args+=( -DGPU_ARCH="$GPU_ARCH" -DGPU_NUMBER=1 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++
-          -DCUDAToolkit_ROOT="$CUDA_INSTALL_PATH" -DCMAKE_EXE_LINKER_FLAGS=-no-pie )
+          -DCUDAToolkit_ROOT="$CUDA_INSTALL_PATH" )
+  ld_flags="-no-pie"
 else
   args+=( -DCMAKE_DISABLE_FIND_PACKAGE_CUDAToolkit=ON )
 fi
+# The CUDA language support adds -L/usr/lib/gcc/.../8 (the host compiler nvcc uses) to every link line. The old
+# libstdc++ found there lacks symbols that code compiled against the newer headers of the pinned clang needs
+# (std::stringstream constructors...). Put the libstdc++ of the clang toolchain first, and run with it.
+ld_flags=${ld_flags:-}
+stdcxx=$("$CXX" -print-file-name=libstdc++.so 2>/dev/null || true)
+if [ "$OPSJIT_HOST" = cluster ] && [ -f "$stdcxx" ]; then
+  ld_flags="$ld_flags -L$(dirname "$stdcxx") -Wl,-rpath,$(dirname "$stdcxx")"
+fi
+[ -n "$ld_flags" ] && args+=( -DCMAKE_EXE_LINKER_FLAGS="$ld_flags" )
 # Reproducibility: only look at what env.sh points at.
 args+=( -DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF
         -DHDF5_NO_FIND_PACKAGE_CONFIG_FILE=TRUE )
