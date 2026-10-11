@@ -46,8 +46,8 @@ void with_printf(const ACC<double> &a, ACC<double> &b) {
   printf("value %f\n", a(0, 0));
   b(0, 0) = a(0, 0);
 }
-// PRINTF: warning: with_printf: {{.*}}call to printf is dropped
 // PRINTF: ops.kernel @with_printf
+// PRINTF: ops.print "value %f\0A", %{{.*}} : f64
 // PRINTF: ops.write %arg1 [0, 0]
 
 // MISSING: missing: not imported: the definition of kernel 'missing' was not found

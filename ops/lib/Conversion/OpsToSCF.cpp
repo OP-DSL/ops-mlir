@@ -253,8 +253,11 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
         bs.push_back(v);
       }
       bs.resize(3, 1);
-      for (unsigned d = rank; d < 3; ++d)
-        if (bs[d] != 1) return chain.emitError("the block size must be 1 in the dimensions the block does not have (rank ") << rank << ", block " << block << ")";
+      // The dimensions the block does not have are folded into x (a 1-D block gets all the threads of the tile).
+      for (unsigned d = rank; d < 3; ++d) {
+        bs[0] *= bs[d];
+        bs[d] = 1;
+      }
       Value zero = arith::ConstantIndexOp::create(b, loc, 0);
       SmallVector<Value, 3> extents, grid(3, one), blockSize;
       Value nonEmpty;
