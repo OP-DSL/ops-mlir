@@ -1,13 +1,13 @@
 // convert-ops-to-scf target=gpu: the host side of a kernel launch: grid from the range, one thread per point, a mask
-// for the threads outside the range, a shuffle reduction per warp and one atomic per warp into a device buffer argument
-// per reduction; nothing is returned.
+// for the threads outside the range, a shuffle reduction per warp and one store per warp into a device buffer argument
+// per reduction (one element per warp; the caller combines them); nothing is returned.
 // RUN: ops-opt %s -convert-ops-to-scf="target=gpu block=32,4,1" | FileCheck %s
 
 // CHECK-LABEL: func.func @sum_max(
 // CHECK-SAME: %[[A:arg0]]: memref<?x?xf64, strided<[?, 1], offset: ?>> {llvm.noalias}
 // CHECK-SAME: %[[B:arg1]]: memref<?x?xf64, strided<[?, 1], offset: ?>> {llvm.noalias}
 // CHECK-SAME: %[[LO0:arg6]]: index, %[[HI0:arg7]]: index, %[[LO1:arg8]]: index, %[[HI1:arg9]]: index
-// CHECK-SAME: %[[BUF:arg12]]: memref<f64>)
+// CHECK-SAME: %[[BUF:arg12]]: memref<?xf64>)
 // CHECK-SAME: gpu = true
 // CHECK-NOT: -> f64
 // CHECK: arith.ceildivsi %{{.*}}, %[[C32:.*]] : index
@@ -23,7 +23,7 @@
 // CHECK: memref.store %{{.*}}, %[[B]]
 // CHECK: gpu.shuffle xor %{{.*}}, %{{.*}}, %{{.*}} : f64
 // CHECK: scf.if %{{.*}} {
-// CHECK: memref.atomic_rmw maxnumf %{{.*}}, %[[BUF]][] : (f64, memref<f64>) -> f64
+// CHECK: memref.store %{{.*}}, %[[BUF]][%{{.*}}] : memref<?xf64>
 // CHECK: gpu.terminator
 ops.chain @sum_max(%lo0: index, %hi0: index, %lo1: index, %hi1: index, %w: !ops.dat<f64, 2, 1>, %o: !ops.dat<f64, 2, 1>) -> f64 {
   %s = ops.par_loop range(%lo0, %hi0, %lo1, %hi1)

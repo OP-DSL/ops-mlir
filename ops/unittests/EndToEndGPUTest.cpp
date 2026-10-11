@@ -103,11 +103,13 @@ OPDSL_TEST(EndToEndGPU, ThreadPerPointKernelWithAtomicReduction) {
     for (int i = 0; i < kNx; ++i) x[j * kNx + i] = std::sin(0.1 * i) + 0.01 * j;
   void *dx = mgpuMemAlloc(bytes, nullptr, false);
   void *dy = mgpuMemAlloc(bytes, nullptr, false);
-  void *dm = mgpuMemAlloc(sizeof(double), nullptr, false);
-  double neutral = -INFINITY, result = 0;
+  // 3 x 3 blocks of 32 x 4 threads = 4 warps each: 36 partial values
+  constexpr int kUnits = 3 * 3 * 4;
+  void *dm = mgpuMemAlloc(kUnits * sizeof(double), nullptr, false);
+  std::vector<double> slots(kUnits);
+  double result = -INFINITY;
   mgpuMemcpy(dx, x.data(), bytes, nullptr);
   mgpuMemcpy(dy, y.data(), bytes, nullptr);
-  mgpuMemcpy(dm, &neutral, sizeof(double), nullptr);
 
   PackedArgs args;
   args.addMemref(dx, {kNy, kNx}, {kNx, 1});
@@ -116,11 +118,12 @@ OPDSL_TEST(EndToEndGPU, ThreadPerPointKernelWithAtomicReduction) {
   for (int64_t v : {0, 70, 0, 9}) args.addIndex(v); // lo0 hi0 lo1 hi1
   args.addIndex(0);
   args.addIndex(0); // displacement
-  args.addMemref(dm, {}, {}); // the reduction buffer
+  args.addMemref(dm, {kUnits}, {1}); // the reduction buffer: one value per warp
   args.finalize();
   args.call(code->fn);
   mgpuMemcpy(y.data(), dy, bytes, nullptr);
-  mgpuMemcpy(&result, dm, sizeof(double), nullptr);
+  mgpuMemcpy(slots.data(), dm, kUnits * sizeof(double), nullptr);
+  for (double v : slots) result = std::max(result, v);
 
   int wrong = 0;
   double expectedMax = -INFINITY;

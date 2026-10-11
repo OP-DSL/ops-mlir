@@ -23,6 +23,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -186,6 +187,27 @@ void neutralBytes(const std::string &elem, ReductionKind kind, char *slot8) {
     int32_t v = kind == ReductionKind::Add ? 0 : kind == ReductionKind::Min ? INT32_MAX : INT32_MIN;
     std::memcpy(slot8, &v, 4);
   }
+}
+
+/// The thread block for a block of `rank` dimensions: the option (x,y,z), with the dimensions the block does not have folded into x.
+std::array<int64_t, 3> gpuBlockFor(const std::string &option, int rank) {
+  std::array<int64_t, 3> b{32, 4, 1};
+  std::sscanf(option.c_str(), "%ld,%ld,%ld", &b[0], &b[1], &b[2]);
+  for (int d = rank; d < 3; ++d) {
+    b[0] *= b[d];
+    b[d] = 1;
+  }
+  return b;
+}
+
+/// Number of elements of a reduction buffer: one per warp (or per thread when the block is not whole warps) of the grid that the
+/// lowering launches for the ranges `lo/hi` (see convert-ops-to-scf, target gpu).
+int64_t gpuReductionUnits(const std::array<int64_t, 3> &block, const int64_t *extent, int rank) {
+  int64_t blocks = 1;
+  for (int d = 0; d < rank; ++d) blocks *= std::max<int64_t>(0, (std::max<int64_t>(extent[d], 0) + block[d] - 1) / block[d]);
+  const int64_t threads = block[0] * block[1] * block[2];
+  const int64_t perBlock = threads % 32 == 0 ? threads / 32 : threads;
+  return std::max<int64_t>(1, blocks * perBlock);
 }
 
 } // namespace
@@ -367,23 +389,24 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
     // Device groups return their reductions through device buffers (8 bytes each), initialised with the neutral element.
     std::vector<void *> reductionBuffers;
     std::vector<char> staging;
+    int64_t units = 0;
     if (g.device) {
       const size_t count = g.recipe.reductionOf.size();
-      staging.assign(std::max<size_t>(count, 1) * 8, 0);
-      char *base = static_cast<char *>(deviceScratch(staging.size()));
-      for (size_t r = 0; r < count; ++r) {
-        int index = g.recipe.reductionOf[r];
-        const ReductionRef &ref = plan->reductions[index >= 0 ? index : 0];
-        neutralBytes(index >= 0 ? ref.elem : "f64", index >= 0 ? ref.kind : ReductionKind::Add, &staging[8 * r]);
-        reductionBuffers.push_back(base + 8 * r);
+      int64_t extent[3] = {1, 1, 1};
+      for (int d = 0; d < g.recipe.rank; ++d) {
+        const ChainArg &lo = g.recipe.range[2 * d], &hi = g.recipe.range[2 * d + 1];
+        extent[d] = ranges[hi.loop][2 * hi.dim + 1] - ranges[lo.loop][2 * lo.dim];
       }
-      if (count) mgpuMemcpy(base, staging.data(), count * 8, nullptr);
+      units = gpuReductionUnits(gpuBlockFor(opts.gpuBlock, g.recipe.rank), extent, g.recipe.rank);
+      staging.assign(std::max<size_t>(count, 1) * units * 8, 0);
+      char *base = static_cast<char *>(deviceScratch(staging.size()));
+      for (size_t r = 0; r < count; ++r) reductionBuffers.push_back(base + r * units * 8);
     }
 
     Invocation inv;
     std::string error;
     auto tb = Clock::now();
-    if (!inv.bind(g.recipe, run.data(), ranges, slots, soa, error, g.device ? &reductionBuffers : nullptr)) {
+    if (!inv.bind(g.recipe, run.data(), ranges, slots, soa, error, g.device ? &reductionBuffers : nullptr, units)) {
       std::fprintf(stderr, "ops_jit: binding failed: %s\n", error.c_str());
       std::abort(); // loops of the run may already have executed: no way back
     }
@@ -406,6 +429,7 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
       mgpuMemcpy(staging.data(), reductionBuffers.front(), staging.size(), nullptr);
     }
     double seconds = since(t0);
+    if (opts.trace) std::fprintf(stderr, "ops_jit:   %.6f s\n", seconds);
     stats_.tExecute += seconds;
     stats_.groupsExecuted++;
     if (recorder) {
@@ -419,19 +443,23 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
       const ReductionRef &ref = plan->reductions[index];
       char *slot = ops_lazy_reduction_slot(run[ref.loop], ref.arg);
       if (g.device) {
-        // The value is in the staging copy of the device buffer.
-        if (ref.elem == "f64") {
-          double v;
-          std::memcpy(&v, &staging[8 * r], 8);
-          combineInto<double>(slot, v, ref.kind, ref.assign);
-        } else if (ref.elem == "f32") {
-          float v;
-          std::memcpy(&v, &staging[8 * r], 4);
-          combineInto<float>(slot, v, ref.kind, ref.assign);
-        } else {
-          int32_t v;
-          std::memcpy(&v, &staging[8 * r], 4);
-          combineInto<int32_t>(slot, v, ref.kind, ref.assign);
+        // The value is the combination of the partial values of the warps in the staging copy of the device buffer.
+        for (int64_t k = 0; k < units; ++k) {
+          const char *p = &staging[(r * units + k) * 8];
+          const bool first = k == 0;
+          if (ref.elem == "f64") {
+            double v;
+            std::memcpy(&v, p, 8);
+            combineInto<double>(slot, v, ref.kind, ref.assign && first);
+          } else if (ref.elem == "f32") {
+            float v;
+            std::memcpy(&v, p, 4);
+            combineInto<float>(slot, v, ref.kind, ref.assign && first);
+          } else {
+            int32_t v;
+            std::memcpy(&v, p, 4);
+            combineInto<int32_t>(slot, v, ref.kind, ref.assign && first);
+          }
         }
       } else if (ref.elem == "f64") combineInto<double>(slot, inv.resultAsDouble(r), ref.kind, ref.assign);
       else if (ref.elem == "f32") combineInto<float>(slot, static_cast<float>(inv.resultAsDouble(r)), ref.kind, ref.assign);
@@ -537,8 +565,8 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
     std::string pipeline, pipelineOptions;
     if (device) {
       // block sizes with `x` between them, ptxas options with `:` between them (the option syntax uses blanks and commas)
-      std::string block = opts.gpuBlock, ptxas = opts.ptxasOpts;
-      std::replace(block.begin(), block.end(), ',', 'x');
+      std::array<int64_t, 3> bs = gpuBlockFor(opts.gpuBlock, run[0]->block->dims);
+      std::string block = std::to_string(bs[0]) + "x" + std::to_string(bs[1]) + "x" + std::to_string(bs[2]), ptxas = opts.ptxasOpts;
       std::replace(ptxas.begin(), ptxas.end(), ' ', ':');
       std::string arch = opts.gpuArch.empty() ? opdsl::gpu::cudaDeviceArch() : opts.gpuArch;
       pipeline = "ops-jit-cuda";

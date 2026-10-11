@@ -46,10 +46,10 @@ bool buildRecipes(const Lifted &lifted, mlir::ModuleOp planned, std::vector<Grou
 class Invocation {
 public:
   /// Evaluates `recipe` for the loops `run` (with their local `ranges`). `soa`: OPS stores components apart.
-  /// `reductionBuffers`: for a group lowered for a device, one rank-0 device buffer per reduction (the compiled
-  /// function takes them after the scalars and returns nothing); null for the host.
+  /// `reductionBuffers`: for a group lowered for a device, one device buffer of `reductionUnits` elements per
+  /// reduction (the compiled function takes them after the scalars and returns nothing); null for the host.
   bool bind(const GroupRecipe &recipe, ops_kernel_descriptor *const *run, const std::vector<std::vector<int>> &ranges,
-            const std::vector<ops_dat> &slots, bool soa, std::string &error, const std::vector<void *> *reductionBuffers = nullptr);
+            const std::vector<ops_dat> &slots, bool soa, std::string &error, const std::vector<void *> *reductionBuffers = nullptr, int64_t reductionUnits = 0);
 
   /// Calls the compiled group. After it, result(i) reads the reduction values.
   void call(opdsl::JITSession::PackedFn fn) { args_.call(fn); }

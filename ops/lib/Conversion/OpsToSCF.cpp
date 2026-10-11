@@ -20,6 +20,7 @@ namespace {
 
 using namespace mlir;
 
+
 /// A dat accessor of the loop being lowered.
 struct Accessor {
   unsigned slot;                   // distinct dat (index into the function's memref arguments)
@@ -152,7 +153,7 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
     if (target != "cpu" && !gpu) return chain.emitError("option 'target' must be cpu or gpu, got '") << target << "'";
     if (gpu) {
       // The results come back through device buffers: one rank-0 memref per reduction, after the scalars.
-      for (Type t : results) inputs.push_back(MemRefType::get({}, t));
+      for (Type t : results) inputs.push_back(MemRefType::get({ShapedType::kDynamic}, t));
       results.clear();
     }
 
@@ -415,7 +416,22 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
       b.setInsertionPoint(gpuLaunch.getBody().front().getTerminator());
       const int64_t threads = gpuBlock[0] * gpuBlock[1] * gpuBlock[2];
       const bool warps = threads % 32 == 0;
-      Value lane0;
+      Value lane0, slot;
+      {
+        auto tid0 = gpuLaunch.getThreadIds();
+        auto bid = gpuLaunch.getBlockIds();
+        auto grid = gpuLaunch.getGridSize();
+        Value linThread = arith::AddIOp::create(b, loc, tid0.x,
+                    arith::MulIOp::create(b, loc, arith::ConstantIndexOp::create(b, loc, gpuBlock[0]),
+                    arith::AddIOp::create(b, loc, tid0.y, arith::MulIOp::create(b, loc, arith::ConstantIndexOp::create(b, loc, gpuBlock[1]), tid0.z))));
+        Value linBlock = arith::AddIOp::create(b, loc, bid.x, arith::MulIOp::create(b, loc, grid.x, arith::AddIOp::create(b, loc, bid.y, arith::MulIOp::create(b, loc, grid.y, bid.z))));
+        // warp (or thread, when the block is not whole warps) number over the whole grid
+        const int64_t unit = warps ? 32 : 1;
+        Value unitsPerBlock = arith::ConstantIndexOp::create(b, loc, threads / unit);
+        Value unitInBlock = arith::DivUIOp::create(b, loc, linThread, arith::ConstantIndexOp::create(b, loc, unit));
+        Value unitId = arith::AddIOp::create(b, loc, arith::MulIOp::create(b, loc, linBlock, unitsPerBlock), unitInBlock);
+        slot = unitId;
+      }
       if (warps) {
         auto tid = gpuLaunch.getThreadIds();
         Value c32 = arith::ConstantIndexOp::create(b, loc, 32);
@@ -440,11 +456,8 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
           auto onlyLane0 = scf::IfOp::create(b, loc, lane0, /*withElseRegion=*/false);
           b.setInsertionPointToStart(&onlyLane0.getThenRegion().front());
         }
-        bool isFloat = isa<FloatType>(acc.type);
-        arith::AtomicRMWKind kind = acc.kind == ReductionKind::Add ? (isFloat ? arith::AtomicRMWKind::addf : arith::AtomicRMWKind::addi)
-                                    : acc.kind == ReductionKind::Min ? (isFloat ? arith::AtomicRMWKind::minnumf : arith::AtomicRMWKind::mins)
-                                                                    : (isFloat ? arith::AtomicRMWKind::maxnumf : arith::AtomicRMWKind::maxs);
-        memref::AtomicRMWOp::create(b, loc, kind, partial, entry->getArgument(bufferBase + i), ValueRange{});
+        // The partial value of the warp (or thread) goes to its own element of the buffer; the caller combines them.
+        memref::StoreOp::create(b, loc, partial, entry->getArgument(bufferBase + i), ValueRange{slot});
       }
     } else {
       b.setInsertionPointToEnd(body);

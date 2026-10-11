@@ -118,7 +118,7 @@ bool buildRecipes(const Lifted &lifted, ModuleOp planned, std::vector<GroupRecip
 
 bool Invocation::bind(const GroupRecipe &recipe, ops_kernel_descriptor *const *run, const std::vector<std::vector<int>> &ranges,
                       const std::vector<ops_dat> &slots, bool soa, std::string &error,
-                      const std::vector<void *> *reductionBuffers) {
+                      const std::vector<void *> *reductionBuffers, int64_t reductionUnits) {
   const int rank = recipe.rank;
   args_ = PackedArgs();
   ops_kernel_descriptor *first = run[recipe.members.front()];
@@ -174,7 +174,7 @@ bool Invocation::bind(const GroupRecipe &recipe, ops_kernel_descriptor *const *r
     args_.addScalar(s.elem, src);
   }
   if (reductionBuffers) {
-    for (void *buffer : *reductionBuffers) args_.addMemref(buffer, {}, {});
+    for (void *buffer : *reductionBuffers) args_.addMemref(buffer, {reductionUnits}, {1});
     args_.setResults({});
   } else {
     args_.setResults(recipe.resultElem);
