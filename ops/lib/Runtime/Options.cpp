@@ -73,6 +73,11 @@ bool Options::set(const std::string &name, const std::string &value) {
   if (name == "OPS_JIT_DUMP_DATA") return parseBool(value, dumpData);
   if (name == "OPS_JIT_RUN_MAX") return parseInt(value, runMax, 1);
   if (name == "OPS_JIT_SYNC") return parseBool(value, sync);
+  if (name == "OPS_JIT_PRINTF") {
+    if (value != "keep" && value != "drop" && value != "decline") return false;
+    printfPolicy = value;
+    return true;
+  }
   if (name == "OPS_JIT_GPU_BLOCK") {
     // three positive integers separated by commas
     int x, y, z;
@@ -114,6 +119,7 @@ Options Options::fromEnvironment() {
                                 "OPS_JIT_DUMP_DATA",
                                 "OPS_JIT_RUN_MAX",
                                 "OPS_JIT_SYNC",
+                                "OPS_JIT_PRINTF",
                                 "OPS_JIT_GPU_BLOCK",
                                 "OPS_JIT_GPU_ARCH",
                                 "OPS_JIT_PTXAS_OPTS"};
@@ -131,6 +137,7 @@ std::string Options::codegenDigest() const {
   s += ";placement=" + fusionPlacement;
   s += fusionGuarded ? ";guarded" : ";noguarded";
   s += ";specialize=" + specialize;
+  s += ";printf=" + printfPolicy;
   s += ";gpu=" + gpuBlock + "," + gpuArch + "," + ptxasOpts;
   return s;
 }

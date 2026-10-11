@@ -532,7 +532,7 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
   std::string error;
   {
     ScopedTime timer(stats_.tLift);
-    if (!liftRun(*ctx_, run, n, ranges, artifacts, lifted, error)) return fail("lifting: " + error);
+    if (!liftRun(*ctx_, run, n, ranges, artifacts, opts.printfPolicy == "keep", lifted, error)) return fail("lifting: " + error);
   }
   {
     ScopedTime timer(stats_.tFrontend);

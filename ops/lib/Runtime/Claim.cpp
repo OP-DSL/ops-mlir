@@ -1,5 +1,7 @@
 #include "ops-mlir/Runtime/Claim.h"
 
+#include "ops-mlir/Runtime/Options.h"
+
 #include "ops_lazy_executor.h"
 
 #include <algorithm>
@@ -112,6 +114,7 @@ std::string claimReason(ops_kernel_descriptor *desc, const KernelArtifact &artif
     }
   }
 
+  if (m.prints > 0 && options().printfPolicy == "decline") return "the kernel prints (OPS_JIT_PRINTF=decline)";
   for (const ConstInfo &c : m.consts) {
     if (c.dynamicIndex && !c.bound) return "constant '" + c.name + "' is indexed by a computed value and is not a loop bound";
     if (!ops_find_const(desc->block->instance, c.name.c_str()))

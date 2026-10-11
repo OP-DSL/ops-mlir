@@ -54,6 +54,7 @@ struct Manifest {
   std::set<int> dynamicReads;           ///< accessor parameters read at data-dependent offsets
   std::vector<int> idxAxesRead;
   int droppedPrintf = 0;
+  int prints = 0; ///< printf calls the kernel keeps as ops.print
 };
 
 /// A kernel ready for the lifter: decoded manifest and the parsed `ops.kernel`.

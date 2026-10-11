@@ -114,6 +114,7 @@ public:
 
   const std::set<ConstUse> &constUses() const { return consts; }
   unsigned droppedPrintf() const { return dropped; }
+  unsigned printfs() const { return printed; }
   unsigned idxAxesRead() const { return idxAxes; }
 
 protected:
@@ -121,6 +122,7 @@ protected:
   int rank;
   std::set<ConstUse> consts;
   unsigned dropped = 0;
+  unsigned printed = 0;
   unsigned idxAxes = 0;
 
   int paramIndex(const clang::Expr *e) {
@@ -591,6 +593,32 @@ protected:
     if (!f || !f->getDeclName().isIdentifier()) return false;
     llvm::StringRef name = f->getName();
     if (name != "printf" && name != "fprintf" && name != "puts" && name != "putchar" && name != "fflush" && name != "OPS_printf") return false;
+    if (name == "printf" && call->getNumArgs() >= 1) {
+      // A printf with a literal format string becomes ops.print (the runtime decides what to do with it).
+      const auto *format = llvm::dyn_cast<clang::StringLiteral>(call->getArg(0)->IgnoreParenImpCasts());
+      if (format && format->isOrdinary()) {
+        SmallVector<Value> values;
+        bool ok = true;
+        for (unsigned i = 1; i < call->getNumArgs() && ok; ++i) {
+          Value v = emit(call->getArg(i));
+          if (!v) return true; // reported
+          // Default argument promotions of C varargs.
+          if (auto ft = dyn_cast<FloatType>(v.getType())) {
+            if (ft.getWidth() < 64) v = cast(v, b.getF64Type());
+          } else if (v.getType().isInteger(1) || (v.getType().isInteger() && v.getType().getIntOrFloatBitWidth() < 32)) {
+            v = cast(v, b.getI32Type());
+          } else if (!v.getType().isInteger(32) && !v.getType().isInteger(64)) {
+            ok = false;
+          }
+          values.push_back(v);
+        }
+        if (ok) {
+          ops::PrintOp::create(b, loc, b.getStringAttr(format->getString()), values);
+          ++printed;
+          return true;
+        }
+      }
+    }
     ++dropped;
     warn("call to " + name.str() + " is dropped", call);
     return true;
@@ -918,6 +946,7 @@ ImportResult importKernel(MLIRContext &ctx, const ImportOptions &options) {
   traits["idx_axes_read"] = std::move(idxAxes);
   traits["dynamic_reads"] = std::move(dynamicReads);
   traits["dropped_printf"] = static_cast<int64_t>(walker.droppedPrintf());
+  traits["prints"] = static_cast<int64_t>(walker.printfs());
   traits["reads"] = std::move(reads);
   traits["writes"] = std::move(writes);
 

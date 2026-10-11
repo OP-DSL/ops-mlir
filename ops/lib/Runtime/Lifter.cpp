@@ -48,7 +48,7 @@ std::vector<ops_dat> datSlots(ops_kernel_descriptor *const *run, int n) {
 }
 
 bool liftRun(MLIRContext &ctx, ops_kernel_descriptor *const *run, int n, const std::vector<std::vector<int>> &ranges,
-             const std::vector<const KernelArtifact *> &artifacts, Lifted &out, std::string &error) {
+             const std::vector<const KernelArtifact *> &artifacts, bool keepPrints, Lifted &out, std::string &error) {
   Location loc = UnknownLoc::get(&ctx);
   OpBuilder b(&ctx);
   const int rank = run[0]->block->dims;
@@ -137,6 +137,12 @@ bool liftRun(MLIRContext &ctx, ops_kernel_descriptor *const *run, int n, const s
     if (cloned.insert(name).second) b.insert(artifacts[k]->kernel->clone());
   }
 
+  if (!keepPrints) {
+    // OPS_JIT_PRINTF=drop: the output of printf in kernels is not produced (the AOT code of OPS would produce it).
+    SmallVector<Operation *> prints;
+    out.module->walk([&](PrintOp op) { prints.push_back(op); });
+    for (Operation *op : prints) op->erase();
+  }
   out.chain = ChainOp::create(b, loc, "chain", b.getFunctionType(inputs, results));
   Block *entry = out.chain.addEntryBlock();
   b.setInsertionPointToEnd(entry);

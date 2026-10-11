@@ -40,7 +40,7 @@ def ConvertOpsToSCF : Pass<"convert-ops-to-scf", "::mlir::ModuleOp"> {
                  Option<"block", "block", "std::string", /*default=*/"\"32,4,1\"",
                         "gpu: thread block size x,y,z (the dimensions the block does not have must be 1)">];
   let dependentDialects = ["::ops_mlir::ops::OPSDialect", "::mlir::arith::ArithDialect", "::mlir::func::FuncDialect",
-                           "::mlir::gpu::GPUDialect", "::mlir::memref::MemRefDialect", "::mlir::scf::SCFDialect"];
+                           "::mlir::gpu::GPUDialect", "::mlir::LLVM::LLVMDialect", "::mlir::memref::MemRefDialect", "::mlir::scf::SCFDialect"];
 }
 
 

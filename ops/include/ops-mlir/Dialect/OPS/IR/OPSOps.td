@@ -106,6 +106,17 @@ def OPS_ReduceOp : OPS_Op<"reduce", [
   let assemblyFormat = "$red `,` $value attr-dict `:` qualified(type($red))";
 }
 
+def OPS_PrintOp : OPS_Op<"print", [MemoryEffects<[MemWrite]>]> {
+  let summary = "printf from a kernel";
+  let description = [{
+    The C format string and the (already promoted) arguments of a `printf` call in a kernel. The order of the lines of
+    different points is unspecified, as with the OpenMP and CUDA code of OPS. The runtime option OPS_JIT_PRINTF decides
+    whether the operation is kept (host: `printf`, GPU: `gpu.printf`), dropped, or makes the JIT decline the loop.
+  }];
+  let arguments = (ins StrAttr:$format, Variadic<AnyTypeOf<[F64, I32, I64]>>:$values);
+  let assemblyFormat = "$format (`,` $values^ `:` type($values))? attr-dict";
+}
+
 def OPS_IndexOp : OPS_Op<"index", [Pure]> {
   let summary = "global index of the current point along dimension `dim` (OPS axis order, x first)";
   let description = [{

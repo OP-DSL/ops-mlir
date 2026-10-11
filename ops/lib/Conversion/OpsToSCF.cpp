@@ -4,6 +4,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
@@ -87,6 +88,7 @@ MemRefType datMemRefType(DatType dat, bool soa) {
 
 struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPass> {
   using ConvertOpsToSCFBase::ConvertOpsToSCFBase;
+  unsigned formatCounter = 0;
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -339,7 +341,7 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
     // Rewrite the ops of the dialect that the clones contain, nested ones included.
     SmallVector<Operation *> toRewrite;
     walkRoot->walk([&](Operation *op) {
-      if (isa<ReadOp, ReadDynOp, WriteOp, IndexOp, ReduceOp, GblReadOp, ConstRefOp>(op)) toRewrite.push_back(op);
+      if (isa<ReadOp, ReadDynOp, WriteOp, IndexOp, ReduceOp, GblReadOp, ConstRefOp, PrintOp>(op)) toRewrite.push_back(op);
     });
 
     auto accessorOf = [&](Value acc) -> const Accessor * {
@@ -388,6 +390,30 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
         unsigned d = index.getDim();
         Value v = arith::AddIOp::create(rb, l, iv(d), entry->getArgument(dispBase + d));
         index.getResult().replaceAllUsesWith(arith::IndexCastOp::create(rb, l, rb.getI32Type(), v));
+      } else if (auto print = dyn_cast<PrintOp>(op)) {
+        if (gpu) {
+          gpu::PrintfOp::create(rb, l, print.getFormat(), print.getValues());
+        } else {
+          // printf through the LLVM dialect: a global with the format string, a variadic call.
+          auto *mctx = rb.getContext();
+          auto i32 = rb.getI32Type();
+          auto ptrType = LLVM::LLVMPointerType::get(mctx);
+          OpBuilder mb(module.getBody(), module.getBody()->begin());
+          if (!module.lookupSymbol<LLVM::LLVMFuncOp>("printf")) {
+            auto printfType = LLVM::LLVMFunctionType::get(i32, {ptrType}, /*isVarArg=*/true);
+            LLVM::LLVMFuncOp::create(mb, l, "printf", printfType);
+          }
+          std::string text = print.getFormat().str();
+          text.push_back('\0');
+          auto arrayType = LLVM::LLVMArrayType::get(rb.getI8Type(), text.size());
+          std::string symbol = "ops_fmt_" + std::to_string(formatCounter++) + "_" + chain.getSymName().str();
+          LLVM::GlobalOp::create(mb, l, arrayType, /*isConstant=*/true, LLVM::Linkage::Internal, symbol, rb.getStringAttr(text));
+          Value address = LLVM::AddressOfOp::create(rb, l, ptrType, symbol);
+          SmallVector<Value> callArgs{address};
+          callArgs.append(print.getValues().begin(), print.getValues().end());
+          auto printfType = LLVM::LLVMFunctionType::get(i32, {ptrType}, /*isVarArg=*/true);
+          LLVM::CallOp::create(rb, l, printfType, "printf", callArgs);
+        }
       } else if (auto reduce = dyn_cast<ReduceOp>(op)) {
         auto cast = reduce.getRed().getDefiningOp<UnrealizedConversionCastOp>();
         auto r = cast ? cast->getAttrOfType<IntegerAttr>("ops.reduction") : IntegerAttr();

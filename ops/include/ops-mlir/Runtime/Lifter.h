@@ -71,7 +71,7 @@ std::vector<ops_dat> datSlots(ops_kernel_descriptor *const *run, int n);
 /// Builds the chain for `run[0..n)`. `ranges[k]` are the local ranges (2 * dims entries); `artifacts[k]` the decoded
 /// artifact of loop k. Fails with a diagnostic text in `error`.
 bool liftRun(mlir::MLIRContext &ctx, ops_kernel_descriptor *const *run, int n, const std::vector<std::vector<int>> &ranges,
-             const std::vector<const KernelArtifact *> &artifacts, Lifted &out, std::string &error);
+             const std::vector<const KernelArtifact *> &artifacts, bool keepPrints, Lifted &out, std::string &error);
 
 /// After ops-jit-frontend: add the constants it appended to the chain's arguments to `lifted.args`.
 bool recordBindingConsts(Lifted &lifted, std::string &error);

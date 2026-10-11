@@ -111,6 +111,7 @@ bool parseManifest(const std::string &text, Manifest &m, std::string &error) {
     if (const llvm::json::Array *axes = traits->getArray("idx_axes_read"))
       for (const llvm::json::Value &v : *axes) m.idxAxesRead.push_back(static_cast<int>(v.getAsInteger().value_or(0)));
     m.droppedPrintf = static_cast<int>(traits->getInteger("dropped_printf").value_or(0));
+    m.prints = static_cast<int>(traits->getInteger("prints").value_or(0));
   }
   return true;
 }
