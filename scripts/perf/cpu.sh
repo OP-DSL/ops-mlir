@@ -8,7 +8,7 @@
 # disk cache (not timed), then NRUNS timed runs; the best time is reported. Output: one JSON object per line.
 #
 # Environment: OPS_AOT_BUILD (default $OPSJIT_BUILD_ROOT/OPS-apps-new), JIT_BUILD (default $OPSJIT_BUILD_ROOT/OPS-jit-apps),
-# THREADS (default: all cores of the node), NRUNS (default 3), OPSJIT_RESULTS.
+# THREADS (default: all cores of the node), NRUNS (default 3), OPSJIT_RESULTS, CASES (regex of the cases to run), SKIP_AOT=1.
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck disable=SC1091
@@ -46,6 +46,8 @@ timed() {
 # perf_case <name> <aot exe> <aot dir> <jit exe> <jit dir> <deck> <deck dir>
 perf_case() {
   local name=$1 aot_exe=$2 aot_dir=$3 jit_exe=$4 jit_dir=$5 deck=$6 deck_dir=$7
+  [[ "$name" =~ ${CASES:-.*} ]] || return 0
+  [ "${SKIP_AOT:-0}" = 1 ] && aot_exe=/nonexistent
   local work=$OPSJIT_WORK/perf-run/$name
   mkdir -p "$work/aot" "$work/jit"
   cp "$aot_dir"/*.in "$work/aot/" 2>/dev/null || true
