@@ -99,12 +99,11 @@ OwningOpRef<ModuleOp> canonicalGroup(ModuleOp m, bool keepRanges) {
 }
 
 /// slot = slot (kind) value, with OPS's semantics of MIN/MAX (a < b ? a : b).
-template <typename T> void combineInto(char *slot, T value, ReductionKind kind, bool assign) {
+template <typename T> void combineInto(char *slot, T value, ReductionKind kind) {
   T cur;
   std::memcpy(&cur, slot, sizeof(T));
   T next;
-  if (assign) next = value;
-  else if (kind == ReductionKind::Add) next = cur + value;
+  if (kind == ReductionKind::Add) next = cur + value;
   else if (kind == ReductionKind::Min) next = cur < value ? cur : value;
   else next = cur > value ? cur : value;
   std::memcpy(slot, &next, sizeof(T));
@@ -172,21 +171,6 @@ std::vector<char> readDat(ops_dat d, bool device) {
 void writeDat(ops_dat d, const std::vector<char> &bytes, bool device) {
   if (device) mgpuMemcpy(d->data_d, const_cast<char *>(bytes.data()), bytes.size(), nullptr);
   else std::memcpy(d->data, bytes.data(), bytes.size());
-}
-
-/// The neutral element of a reduction as bytes of the element type, in an 8-byte slot.
-void neutralBytes(const std::string &elem, ReductionKind kind, char *slot8) {
-  std::memset(slot8, 0, 8);
-  if (elem == "f64") {
-    double v = kind == ReductionKind::Add ? 0.0 : kind == ReductionKind::Min ? INFINITY : -INFINITY;
-    std::memcpy(slot8, &v, 8);
-  } else if (elem == "f32") {
-    float v = kind == ReductionKind::Add ? 0.0f : kind == ReductionKind::Min ? INFINITY : -INFINITY;
-    std::memcpy(slot8, &v, 4);
-  } else {
-    int32_t v = kind == ReductionKind::Add ? 0 : kind == ReductionKind::Min ? INT32_MAX : INT32_MIN;
-    std::memcpy(slot8, &v, 4);
-  }
 }
 
 /// The thread block for a block of `rank` dimensions: the option (x,y,z), with the dimensions the block does not have folded into x.
@@ -475,24 +459,23 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
         // The value is the combination of the partial values of the warps in the staging copy of the device buffer.
         for (int64_t k = 0; k < units; ++k) {
           const char *p = &staging[(r * units + k) * 8];
-          const bool first = k == 0;
           if (ref.elem == "f64") {
             double v;
             std::memcpy(&v, p, 8);
-            combineInto<double>(slot, v, ref.kind, ref.assign && first);
+            combineInto<double>(slot, v, ref.kind);
           } else if (ref.elem == "f32") {
             float v;
             std::memcpy(&v, p, 4);
-            combineInto<float>(slot, v, ref.kind, ref.assign && first);
+            combineInto<float>(slot, v, ref.kind);
           } else {
             int32_t v;
             std::memcpy(&v, p, 4);
-            combineInto<int32_t>(slot, v, ref.kind, ref.assign && first);
+            combineInto<int32_t>(slot, v, ref.kind);
           }
         }
-      } else if (ref.elem == "f64") combineInto<double>(slot, inv.resultAsDouble(r), ref.kind, ref.assign);
-      else if (ref.elem == "f32") combineInto<float>(slot, static_cast<float>(inv.resultAsDouble(r)), ref.kind, ref.assign);
-      else combineInto<int32_t>(slot, static_cast<int32_t>(inv.resultAsInt(r)), ref.kind, ref.assign);
+      } else if (ref.elem == "f64") combineInto<double>(slot, inv.resultAsDouble(r), ref.kind);
+      else if (ref.elem == "f32") combineInto<float>(slot, static_cast<float>(inv.resultAsDouble(r)), ref.kind);
+      else combineInto<int32_t>(slot, static_cast<int32_t>(inv.resultAsInt(r)), ref.kind);
     }
 
     const double share = seconds / std::max<size_t>(1, g.recipe.members.size());
@@ -534,7 +517,13 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
         double rel = relativeDifference(type, snap.slotJit[i].data(), snap.slots[i].first, bytes, differing);
         if (rel > std::max(toleranceFor(type), 1e-9)) {
           bad = true;
-          std::fprintf(stderr, "ops_jit verify: [%s] a reduction differs, relative difference %.3g\n", names.c_str(), rel);
+          auto asDouble = [&](const char *p) {
+            if (bytes == 8) { double v; std::memcpy(&v, p, 8); return v; }
+            if (bytes == 4 && type[0] == 'f') { float v; std::memcpy(&v, p, 4); return double(v); }
+            int v; std::memcpy(&v, p, 4); return double(v);
+          };
+          std::fprintf(stderr, "ops_jit verify: [%s] reduction %zu differs, relative difference %.3g (before %.17g, JIT %.17g, OPS %.17g)\n",
+                       names.c_str(), i, rel, asDouble(snap.slotBefore[i].data()), asDouble(snap.slotJit[i].data()), asDouble(snap.slots[i].first));
         }
       }
       if (bad) stats_.verifyMismatches++;

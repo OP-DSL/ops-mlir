@@ -183,28 +183,26 @@ FusionPlan planDag(llvm::ArrayRef<LoopInfo> loops, const FusionOptions &options)
   int lastBarrier = -1;
   size_t firstJoinable = 0; // groups before a barrier are sealed
 
+  // The transitive closure of the group graph, one bit row per group (a group is never more than the loop count), kept up
+  // to date when an edge is added: the placement test asks `reaches` for every loop and every candidate group, and a graph
+  // search per question made long chains (hundreds of loops between two reductions) cost seconds.
+  const size_t words = (n + 63) / 64;
+  std::vector<std::vector<uint64_t>> below; // below[g]: the groups strictly after g
+  auto test = [&](const std::vector<uint64_t> &row, int bit) { return (row[bit / 64] >> (bit % 64)) & 1; };
   auto addEdge = [&](int from, int to) {
     if (from == to) return;
     auto &s = groups[from].succ;
     if (std::find(s.begin(), s.end(), to) == s.end()) s.push_back(to);
-  };
-  auto reaches = [&](int from, int to) {
-    std::vector<int> stack = {from};
-    std::vector<char> seen(groups.size(), 0);
-    seen[from] = 1;
-    while (!stack.empty()) {
-      int g = stack.back();
-      stack.pop_back();
-      if (g == to) return true;
-      for (int nx : groups[g].succ)
-        if (!seen[nx]) {
-          seen[nx] = 1;
-          stack.push_back(nx);
-        }
+    if (test(below[from], to)) return; // already implied
+    for (size_t x = 0; x < groups.size(); ++x) {
+      if (static_cast<int>(x) != from && !test(below[x], from)) continue;
+      below[x][to / 64] |= uint64_t(1) << (to % 64);
+      for (size_t w = 0; w < words; ++w) below[x][w] |= below[to][w];
     }
-    return false;
   };
+  auto reaches = [&](int from, int to) { return from == to || test(below[from], to); };
   auto newGroup = [&](size_t j) {
+    below.emplace_back(words, uint64_t(0));
     DagGroup g;
     g.loops.push_back(j);
     g.state.range = loops[j].range;
