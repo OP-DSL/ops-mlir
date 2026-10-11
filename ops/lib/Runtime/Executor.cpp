@@ -210,6 +210,30 @@ int64_t gpuReductionUnits(const std::array<int64_t, 3> &block, const int64_t *ex
   return std::max<int64_t>(1, blocks * perBlock);
 }
 
+/// The PTX version the toolkit's ptxas accepts, as an NVVM target feature (+ptx83 for CUDA 12.3): newer PTX allows larger kernel
+/// parameter blocks (32 KB from PTX 8.1) which the fused groups of big applications need.
+std::string ptxFeature() {
+  static std::string feature = [] {
+    std::string cmd = "ptxas --version 2>/dev/null";
+    const char *root = std::getenv("CUDA_ROOT");
+    if (!root) root = std::getenv("CUDA_HOME");
+    if (!root) root = std::getenv("CUDA_PATH");
+    if (root) cmd = std::string("'") + root + "/bin/ptxas' --version 2>/dev/null";
+    std::string out;
+    if (FILE *p = popen(cmd.c_str(), "r")) {
+      char buf[256];
+      while (std::fgets(buf, sizeof buf, p)) out += buf;
+      pclose(p);
+    }
+    size_t at = out.find("release ");
+    int major = 0, minor = 0;
+    if (at != std::string::npos && std::sscanf(out.c_str() + at, "release %d.%d", &major, &minor) == 2 && major == 12)
+      return "+ptx" + std::to_string(80 + std::min(minor, 7));
+    return std::string("+ptx80");
+  }();
+  return feature;
+}
+
 } // namespace
 
 Executor::Executor() {
@@ -367,6 +391,11 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
 
   std::vector<ops_dat> slots = datSlots(run.data(), m);
   for (Plan::Group &g : plan->groups) {
+    if (!g.code) {
+      // Not compiled: the loops of the group run with OPS's code, in order.
+      for (int k : g.recipe.members) ops_lazy_execute_default(instance, &run[k], 1);
+      continue;
+    }
     Snapshot snap;
     if (opts.verify) {
       std::set<ops_dat> seen;
@@ -570,18 +599,27 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
       std::replace(ptxas.begin(), ptxas.end(), ' ', ':');
       std::string arch = opts.gpuArch.empty() ? opdsl::gpu::cudaDeviceArch() : opts.gpuArch;
       pipeline = "ops-jit-cuda";
-      pipelineOptions = "chip=" + arch + " features=+ptx80 block=" + block + " specialize=" + opts.specialize + " soa=" + (soa ? "true" : "false");
+      pipelineOptions = "chip=" + arch + " features=" + ptxFeature() + " block=" + block + " specialize=" + opts.specialize + " soa=" + (soa ? "true" : "false");
       if (!ptxas.empty()) pipelineOptions += " ptxas=" + ptxas;
     } else {
       pipeline = "ops-jit-cpu";
       pipelineOptions = std::string("omp=") + (opts.omp ? "true" : "false") + " specialize=" + opts.specialize + " soa=" + (soa ? "true" : "false");
     }
     std::shared_ptr<GroupCode> code = compiler_->compile(canonical.get(), pipeline, pipelineOptions, cerror);
-    if (!code) return fail("compiling a group: " + cerror);
     Plan::Group pg;
     pg.recipe = std::move(recipes[g]);
-    pg.code = std::move(code);
     pg.device = device;
+    if (!code) {
+      // Only this group runs with OPS (e.g. a GPU kernel with more parameters than the driver allows).
+      stats_.groupsDeclined++;
+      std::string firstLine = cerror.substr(0, cerror.find('\n'));
+      stats_.declineReasons["group: " + firstLine]++;
+      if (opts.explain) {
+        std::fprintf(stderr, "ops_jit: a group of %zu loops starting with %s runs with OPS: compiling failed: %s\n", pg.recipe.members.size(),
+                     run[pg.recipe.members.front()]->name, cerror.c_str());
+      }
+    }
+    pg.code = std::move(code);
     plan->groups.push_back(std::move(pg));
   }
   plan->reductions = lifted.reductions;
@@ -589,7 +627,7 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
   if (opts.plan) {
     std::fprintf(stderr, "ops_jit: plan for %d loops: %zu groups\n", n, plan->groups.size());
     for (size_t g = 0; g < plan->groups.size(); ++g) {
-      std::fprintf(stderr, "  group %zu [%s]:", g, plan->groups[g].code->entry.c_str());
+      std::fprintf(stderr, "  group %zu [%s]:", g, plan->groups[g].code ? plan->groups[g].code->entry.c_str() : "OPS");
       for (int k : plan->groups[g].recipe.members) std::fprintf(stderr, " %s", run[k]->name);
       std::fprintf(stderr, "\n");
     }
@@ -600,10 +638,10 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
 void Executor::printStats() const {
   const Stats &s = stats_;
   const CompileStats &c = compiler_->stats();
-  std::fprintf(stderr, "ops_jit counters: flushes=%llu loops=%llu claimed=%llu declined=%llu groups=%llu plans_built=%llu plans_reused=%llu plans_failed=%llu compiled=%llu memory_hits=%llu disk_hits=%llu verify_groups=%llu verify_mismatches=%llu\n",
+  std::fprintf(stderr, "ops_jit counters: flushes=%llu loops=%llu claimed=%llu declined=%llu groups=%llu plans_built=%llu plans_reused=%llu plans_failed=%llu groups_declined=%llu compiled=%llu memory_hits=%llu disk_hits=%llu verify_groups=%llu verify_mismatches=%llu\n",
                (unsigned long long)s.flushes, (unsigned long long)s.loopsSeen, (unsigned long long)s.loopsClaimed,
                (unsigned long long)s.loopsDeclined, (unsigned long long)s.groupsExecuted, (unsigned long long)s.planBuilds,
-               (unsigned long long)s.planHits, (unsigned long long)s.planFailures, (unsigned long long)c.compiles,
+               (unsigned long long)s.planHits, (unsigned long long)s.planFailures, (unsigned long long)s.groupsDeclined, (unsigned long long)c.compiles,
                (unsigned long long)c.memoryHits, (unsigned long long)c.diskHits, (unsigned long long)s.verifyGroups,
                (unsigned long long)s.verifyMismatches);
   std::fprintf(stderr, "ops_jit statistics:\n");
