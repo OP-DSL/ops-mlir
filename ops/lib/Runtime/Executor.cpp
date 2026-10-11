@@ -11,7 +11,9 @@
 
 #include "opdsl/Support/Hash.h"
 
+#include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
 
 #include "llvm/Config/llvm-config.h"
@@ -557,22 +559,57 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
     ScopedTime timer(stats_.tLift);
     if (!liftRun(*ctx_, run, n, ranges, artifacts, opts.printfPolicy == "keep", lifted, error)) return fail("lifting: " + error);
   }
-  {
-    ScopedTime timer(stats_.tFrontend);
-    PassManager pm(ctx_.get());
-    if (llvm::Error e = registry_.build("ops-jit-frontend", "", pm)) return fail(errorText(std::move(e)));
-    if (failed(pm.run(*lifted.module))) return fail("ops-jit-frontend failed: " + diagnostics.text);
-    if (!recordBindingConsts(lifted, error)) return fail(error);
+  // The module after the plan passes is cached on disk by plan key: the key is a digest of everything the passes depend on
+  // (the kernels, the structure of the run, the bound constants, the options, the code format), so a later process
+  // skips the frontend and plan pipelines (0.4 s of a CloverLeaf 3D run).
+  const std::string diskKey = "plan-" + planKey;
+  bool fromDisk = false;
+  if (opts.cache) {
+    if (!planCache_) {
+      opdsl::CacheOptions co;
+      co.directory = opts.cacheDir;
+      planCache_ = std::make_unique<opdsl::PersistentCache>(co);
+    }
+    if (auto hit = planCache_->lookup(diskKey)) {
+      ScopedTime timer(stats_.tPlanPasses);
+      OwningOpRef<ModuleOp> cached = parseSourceString<ModuleOp>(hit->payload, ctx_.get());
+      ChainOp chain;
+      if (cached)
+        for (ChainOp c : cached->getOps<ChainOp>())
+          if (c.getSymName() == lifted.chain.getSymName()) chain = c;
+      if (chain) {
+        lifted.module = std::move(cached);
+        lifted.chain = chain;
+        if (!recordBindingConsts(lifted, error)) return fail(error);
+        fromDisk = true;
+        stats_.planDiskHits++;
+      }
+    }
   }
-  {
-    ScopedTime timer(stats_.tPlanPasses);
-    PassManager pm(ctx_.get());
-    std::string planOptions = opts.fusion ? "max-loops=" + std::to_string(opts.fusionMax) +
-                                                " reorder=" + (opts.fusionReorder ? "true" : "false") +
-                                                " placement=" + opts.fusionPlacement + " guarded=" + (opts.fusionGuarded ? "true" : "false")
-                                          : "max-loops=1";
-    if (llvm::Error e = registry_.build("ops-jit-plan", planOptions, pm)) return fail(errorText(std::move(e)));
-    if (failed(pm.run(*lifted.module))) return fail("ops-jit-plan failed: " + diagnostics.text);
+  if (!fromDisk) {
+    {
+      ScopedTime timer(stats_.tFrontend);
+      PassManager pm(ctx_.get());
+      if (llvm::Error e = registry_.build("ops-jit-frontend", "", pm)) return fail(errorText(std::move(e)));
+      if (failed(pm.run(*lifted.module))) return fail("ops-jit-frontend failed: " + diagnostics.text);
+      if (!recordBindingConsts(lifted, error)) return fail(error);
+    }
+    {
+      ScopedTime timer(stats_.tPlanPasses);
+      PassManager pm(ctx_.get());
+      std::string planOptions = opts.fusion ? "max-loops=" + std::to_string(opts.fusionMax) +
+                                                  " reorder=" + (opts.fusionReorder ? "true" : "false") +
+                                                  " placement=" + opts.fusionPlacement + " guarded=" + (opts.fusionGuarded ? "true" : "false")
+                                            : "max-loops=1";
+      if (llvm::Error e = registry_.build("ops-jit-plan", planOptions, pm)) return fail(errorText(std::move(e)));
+      if (failed(pm.run(*lifted.module))) return fail("ops-jit-plan failed: " + diagnostics.text);
+    }
+    if (planCache_) {
+      llvm::SmallString<0> bytes;
+      llvm::raw_svector_ostream os(bytes);
+      if (succeeded(writeBytecodeToFile(*lifted.module, os)))
+        if (llvm::Error e = planCache_->store(diskKey, "plan", std::string(bytes.begin(), bytes.end()))) llvm::consumeError(std::move(e));
+    }
   }
 
   dumpModule("plan_" + planKey.substr(0, 16) + ".mlir", *lifted.module);
@@ -644,8 +681,8 @@ void Executor::printStats() const {
   std::fprintf(stderr, "  flushes %llu, loops %llu: claimed %llu, declined %llu; groups executed %llu\n", (unsigned long long)s.flushes,
                (unsigned long long)s.loopsSeen, (unsigned long long)s.loopsClaimed, (unsigned long long)s.loopsDeclined,
                (unsigned long long)s.groupsExecuted);
-  std::fprintf(stderr, "  plans: %llu built, %llu reused, %llu failed; code: %llu compiled, %llu from memory, %llu from disk\n",
-               (unsigned long long)s.planBuilds, (unsigned long long)s.planHits, (unsigned long long)s.planFailures,
+  std::fprintf(stderr, "  plans: %llu built (%llu of them from disk), %llu reused, %llu failed; code: %llu compiled, %llu from memory, %llu from disk\n",
+               (unsigned long long)s.planBuilds, (unsigned long long)s.planDiskHits, (unsigned long long)s.planHits, (unsigned long long)s.planFailures,
                (unsigned long long)c.compiles, (unsigned long long)c.memoryHits, (unsigned long long)c.diskHits);
   std::fprintf(stderr, "  time [s]: claim %.3f, lift %.3f, frontend %.3f, plan passes %.3f, lowering %.3f, llvm %.3f, cache io %.3f, bind %.3f, execute %.3f\n",
                s.tClaim, s.tLift, s.tFrontend, s.tPlanPasses, c.tLowering, c.tLlvm, c.tCacheIO, s.tBind, s.tExecute);

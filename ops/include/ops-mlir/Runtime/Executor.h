@@ -48,7 +48,7 @@ struct Plan {
 
 struct Stats {
   uint64_t flushes = 0, loopsSeen = 0, loopsClaimed = 0, loopsDeclined = 0, groupsExecuted = 0;
-  uint64_t planBuilds = 0, planHits = 0, planFailures = 0, groupsDeclined = 0;
+  uint64_t planBuilds = 0, planHits = 0, planFailures = 0, groupsDeclined = 0, planDiskHits = 0;
   uint64_t verifyGroups = 0, verifyMismatches = 0;
   std::map<std::string, uint64_t> declineReasons;
   double tClaim = 0, tPlan = 0, tLift = 0, tFrontend = 0, tPlanPasses = 0, tExecute = 0, tBind = 0;
@@ -85,6 +85,7 @@ private:
   std::unique_ptr<ArtifactCache> artifacts_;
   opdsl::PipelineRegistry registry_;
   std::unique_ptr<GroupCompiler> compiler_;
+  std::unique_ptr<opdsl::PersistentCache> planCache_; ///< the modules after the plan passes, by plan key (created on first use)
   std::unordered_map<std::string, std::shared_ptr<Plan>> plans_;
   std::set<std::string> dumpedGroups_;
   Stats stats_;
