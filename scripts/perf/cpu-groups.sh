@@ -41,3 +41,8 @@ for mode in nofuse fuse; do
   echo "== $mode"; head -25 "$OUT/$mode.txt" | cut -c1-200
 done
 echo "results: $OUT"
+for f in 1 0; do
+  echo "== statistics, OPS_JIT_FUSION=$f"
+  OPS_JIT_FUSION=$f OPS_JIT_STATS=1 "$exe" >"$OUT/stats$f.out" 2>&1
+  grep -a -E "counters|time \[|Wall" "$OUT/stats$f.out" | cut -c1-300
+done
