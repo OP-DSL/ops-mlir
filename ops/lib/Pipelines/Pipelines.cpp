@@ -84,10 +84,13 @@ llvm::Error buildCPU(mlir::OpPassManager &pm, const OptionMap &o) {
   pm.addPass(createOpsHoistAccumulators());
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createSCFToControlFlowPass());
+  // expand-strided-metadata runs its patterns greedily, canonicalisation of branches included: after the control flow
+  // is in the LLVM dialect that merges the two identical successors of a `cond_br` (the loads of a conditional
+  // expression) into one block with memref arguments, which the LLVM dialect cannot have. Before it, they are cf ops.
+  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
   pm.addPass(mlir::createConvertControlFlowToLLVMPass());
   pm.addPass(mlir::createArithToLLVMConversionPass());
   pm.addPass(mlir::createConvertMathToLLVMPass());
-  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
   pm.addPass(mlir::createFinalizeMemRefToLLVMConversionPass());
   pm.addPass(mlir::createConvertFuncToLLVMPass());
   pm.addPass(createOpsMarkNoalias());

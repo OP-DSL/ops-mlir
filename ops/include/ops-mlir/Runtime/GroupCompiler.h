@@ -24,7 +24,7 @@
 namespace ops_mlir::runtime {
 
 /// Bump when the ABI, the packed wrapper or the meaning of a compiled group changes: it is part of every key.
-constexpr int kCodeFormat = 10;
+constexpr int kCodeFormat = 11;
 
 struct GroupCode {
   opdsl::JITSession::PackedFn fn = nullptr;
