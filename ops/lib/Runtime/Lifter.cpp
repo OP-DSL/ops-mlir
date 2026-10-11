@@ -247,7 +247,7 @@ bool recordBindingConsts(Lifted &lifted, std::string &error) {
     arg.offset = cast<IntegerAttr>(d.get("offset")).getInt();
     unsigned index = cast<IntegerAttr>(d.get("arg")).getInt();
     Type t = lifted.chain.getArgument(index).getType();
-    arg.elem = t.isF64() ? "f64" : t.isF32() ? "f32" : t.isInteger(32) ? "i32" : t.isInteger(64) ? "i64" : "";
+    arg.elem = t.isF64() ? "f64" : t.isF32() ? "f32" : t.isF16() ? "f16" : t.isInteger(32) ? "i32" : t.isInteger(64) ? "i64" : "";
     if (arg.elem.empty()) {
       error = "constant '" + arg.name + "' has a type the binding cannot read";
       return false;
