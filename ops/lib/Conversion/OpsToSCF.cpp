@@ -218,6 +218,9 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
     scf::ParallelOp parallel;
     Value innerIv;
     SmallVector<Value, 3> gpuIvs;
+    Operation *gpuActive = nullptr;     // the scf.if that masks the threads outside the range
+    gpu::LaunchOp gpuLaunch;
+    SmallVector<int64_t, 3> gpuBlock;
     const bool innerLoop = !gpu && rank > 1;
     auto iv = [&](unsigned d) -> Value {
       if (gpu) return gpuIvs[d];
@@ -280,6 +283,9 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
       auto active = scf::IfOp::create(b, loc, inRange, /*withElseRegion=*/false);
       body = &active.getThenRegion().front();
       walkRoot = launch;
+      gpuActive = active;
+      gpuLaunch = launch;
+      gpuBlock.assign(bs.begin(), bs.end());
       b.setInsertionPointToStart(body);
     }
 
@@ -303,6 +309,10 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
     SmallVector<Accumulator> accumulators;
     for (unsigned r = 0; r < loop->getNumResults(); ++r) {
       Type t = loop->getResult(r).getType();
+      // On the GPU every thread of a block takes part in the reduction after the body: the accumulators live outside the
+      // mask of the threads that are in the range.
+      OpBuilder::InsertionGuard accumulatorGuard(b);
+      if (gpu) b.setInsertionPoint(gpuActive);
       auto allocaOp = memref::AllocaOp::create(b, loc, MemRefType::get({}, t));
       // Re-initialised per iteration of the parallel loop: ops-hoist-accumulators moves it out of the loop.
       allocaOp->setAttr("ops.accumulator", UnitAttr::get(ctx));
@@ -390,15 +400,46 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
       op->erase();
     }
     // The placeholders have no users left.
-    for (Operation &op : llvm::make_early_inc_range(*body))
-      if (isa<UnrealizedConversionCastOp>(op) && op.use_empty()) op.erase();
+    {
+      SmallVector<Operation *> dead;
+      walkRoot->walk([&](UnrealizedConversionCastOp cast) {
+        if (cast.use_empty() && (cast->hasAttr("ops.accessor") || cast->hasAttr("ops.reduction"))) dead.push_back(cast);
+      });
+      for (Operation *op : dead) op->erase();
+    }
 
     // The partial reductions of the points.
     if (gpu) {
-      // Each thread combines its partial value into the buffer of the reduction with an atomic.
-      b.setInsertionPoint(body->getTerminator());
+      // The threads of a warp combine their partial values with shuffles and lane 0 adds the result to the buffer of the
+      // reduction with an atomic (one atomic per warp). A block that is not a whole number of warps has every thread do its own.
+      b.setInsertionPoint(gpuLaunch.getBody().front().getTerminator());
+      const int64_t threads = gpuBlock[0] * gpuBlock[1] * gpuBlock[2];
+      const bool warps = threads % 32 == 0;
+      Value lane0;
+      if (warps) {
+        auto tid = gpuLaunch.getThreadIds();
+        Value c32 = arith::ConstantIndexOp::create(b, loc, 32);
+        Value lin = arith::AddIOp::create(b, loc, tid.x,
+                    arith::MulIOp::create(b, loc, arith::ConstantIndexOp::create(b, loc, gpuBlock[0]),
+                    arith::AddIOp::create(b, loc, tid.y, arith::MulIOp::create(b, loc, arith::ConstantIndexOp::create(b, loc, gpuBlock[1]), tid.z))));
+        Value lane = arith::RemUIOp::create(b, loc, lin, c32);
+        lane0 = arith::CmpIOp::create(b, loc, arith::CmpIPredicate::eq, lane, arith::ConstantIndexOp::create(b, loc, 0));
+      }
       for (auto [i, acc] : llvm::enumerate(accumulators)) {
         Value partial = memref::LoadOp::create(b, loc, acc.memref, ValueRange{});
+        if (warps) {
+          Value width = arith::ConstantIntOp::create(b, loc, 32, 32);
+          for (int offset = 16; offset >= 1; offset /= 2) {
+            Value delta = arith::ConstantIntOp::create(b, loc, offset, 32);
+            auto shuffled = gpu::ShuffleOp::create(b, loc, partial, delta, width, gpu::ShuffleMode::XOR);
+            partial = combine(b, loc, acc.kind, partial, shuffled.getShuffleResult());
+          }
+        }
+        OpBuilder::InsertionGuard guard(b);
+        if (warps) {
+          auto onlyLane0 = scf::IfOp::create(b, loc, lane0, /*withElseRegion=*/false);
+          b.setInsertionPointToStart(&onlyLane0.getThenRegion().front());
+        }
         bool isFloat = isa<FloatType>(acc.type);
         arith::AtomicRMWKind kind = acc.kind == ReductionKind::Add ? (isFloat ? arith::AtomicRMWKind::addf : arith::AtomicRMWKind::addi)
                                     : acc.kind == ReductionKind::Min ? (isFloat ? arith::AtomicRMWKind::minnumf : arith::AtomicRMWKind::mins)

@@ -1,5 +1,6 @@
 // convert-ops-to-scf target=gpu: the host side of a kernel launch: grid from the range, one thread per point, a mask
-// for the threads outside the range, and an atomic per reduction into a device buffer argument; nothing is returned.
+// for the threads outside the range, a shuffle reduction per warp and one atomic per warp into a device buffer argument
+// per reduction; nothing is returned.
 // RUN: ops-opt %s -convert-ops-to-scf="target=gpu block=32,4,1" | FileCheck %s
 
 // CHECK-LABEL: func.func @sum_max(
@@ -16,10 +17,12 @@
 // CHECK-SAME: threads(%[[TX:[^,)]*]], %[[TY:[^,)]*]], %{{[^,)]*}}) in
 // CHECK: arith.cmpi slt, %{{.*}}, %[[HI0]]
 // CHECK: arith.cmpi slt, %{{.*}}, %[[HI1]]
-// CHECK: scf.if %{{.*}} {
 // CHECK: memref.alloca() {ops.accumulator} : memref<f64>
+// CHECK: scf.if %{{.*}} {
 // CHECK: memref.load %[[A]]
 // CHECK: memref.store %{{.*}}, %[[B]]
+// CHECK: gpu.shuffle xor %{{.*}}, %{{.*}}, %{{.*}} : f64
+// CHECK: scf.if %{{.*}} {
 // CHECK: memref.atomic_rmw maxnumf %{{.*}}, %[[BUF]][] : (f64, memref<f64>) -> f64
 // CHECK: gpu.terminator
 ops.chain @sum_max(%lo0: index, %hi0: index, %lo1: index, %hi1: index, %w: !ops.dat<f64, 2, 1>, %o: !ops.dat<f64, 2, 1>) -> f64 {
