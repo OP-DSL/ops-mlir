@@ -341,14 +341,31 @@ std::string Executor::structuralKey(ops_kernel_descriptor **run, int n, const st
         if (options().specialize == "shapes")
           for (int dd = 0; dd < d->block->dims; ++dd) h.addInt(arg.dat->size[dd]);
       } else if (arg.argtype == OPS_ARG_GBL) {
-        h.addInt(arg.dim).addInt(arg.elem_size);
+        // ops_arg_reduce does not set elem_size (it holds whatever was in memory): a reduction is described by the type of its handle.
+        if (arg.acc == OPS_READ) {
+          h.addInt(arg.dim).addInt(arg.elem_size);
+        } else {
+          ops_reduction handle = reinterpret_cast<ops_reduction>(arg.data);
+          h.addInt(arg.dim).add(handle && handle->type ? handle->type : "");
+        }
       }
     }
     for (int v : ranges[k]) h.addInt(v);
+    // The values that are folded into the code: the bytes the kernel reads, not the whole snapshot of the constant (the padding
+    // of a struct holds whatever was in memory, which would make the key differ from one process to the next).
     for (const ConstInfo &c : artifacts[k]->manifest.consts) {
-      if (!c.bound || !boundDone.insert(c.name).second) continue;
+      if (!c.bound) continue;
       const ops_const_entry *e = ops_find_const(d->block->instance, c.name.c_str());
-      if (e) h.add(llvm::StringRef(e->snapshot, static_cast<size_t>(e->dim) * e->size));
+      if (!e) continue;
+      const size_t total = static_cast<size_t>(e->dim) * e->size, width = elemBytes(c.elem);
+      if (!width) {
+        if (boundDone.insert(c.name).second) h.add(llvm::StringRef(e->snapshot, total));
+        continue;
+      }
+      if (!boundDone.insert(c.name + "@" + std::to_string(c.offset) + "/" + c.elem).second) continue;
+      h.add(c.name).addInt(c.offset);
+      const size_t stride = c.dynamicIndex && c.arrayStride > 0 ? static_cast<size_t>(c.arrayStride) : total + 1;
+      for (size_t off = static_cast<size_t>(c.offset); off + width <= total; off += stride) h.add(llvm::StringRef(e->snapshot + off, width));
     }
   }
   return h.hex();
@@ -612,8 +629,16 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
     if (planCache_) {
       llvm::SmallString<0> bytes;
       llvm::raw_svector_ostream os(bytes);
-      if (succeeded(writeBytecodeToFile(*lifted.module, os)))
-        if (llvm::Error e = planCache_->store(diskKey, "plan", std::string(bytes.begin(), bytes.end()))) llvm::consumeError(std::move(e));
+      if (succeeded(writeBytecodeToFile(*lifted.module, os))) {
+        if (llvm::Error e = planCache_->store(diskKey, "plan", std::string(bytes.begin(), bytes.end()))) {
+          if (opts.explain) std::fprintf(stderr, "ops_jit: plan %.12s not stored: %s\n", planKey.c_str(), errorText(std::move(e)).c_str());
+          else llvm::consumeError(std::move(e));
+        } else if (opts.explain) {
+          std::fprintf(stderr, "ops_jit: plan %.12s stored (%zu bytes)\n", planKey.c_str(), bytes.size());
+        }
+      } else if (opts.explain) {
+        std::fprintf(stderr, "ops_jit: plan %.12s: the module cannot be written as bytecode\n", planKey.c_str());
+      }
     }
   }
 
