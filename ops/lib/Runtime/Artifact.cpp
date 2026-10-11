@@ -12,6 +12,7 @@ std::string elemName(const std::string &opsType) {
   if (opsType == "double" || opsType == "real(8)") return "f64";
   if (opsType == "float" || opsType == "real(4)") return "f32";
   if (opsType == "int" || opsType == "integer(4)") return "i32";
+  if (opsType == "half" || opsType == "_Float16" || opsType == "real(2)") return "f16";
   return "";
 }
 

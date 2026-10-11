@@ -12,6 +12,7 @@
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/SCFToOpenMP/SCFToOpenMP.h"
+#include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/GPU/Pipelines/Passes.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
@@ -70,6 +71,12 @@ llvm::Error buildCPU(mlir::OpPassManager &pm, const OptionMap &o) {
   pm.addPass(createConvertOpsToSCF(lower));
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
+  // Arithmetic on half precision values is done in single precision (rounded back after every operation): the CPU has
+  // no half precision arithmetic, only conversions.
+  mlir::arith::ArithEmulateUnsupportedFloatsOptions half;
+  half.sourceTypeStrs = {"f16"};
+  half.targetTypeStr = "f32";
+  pm.addPass(mlir::arith::createArithEmulateUnsupportedFloats(half));
   if (omp) pm.addPass(mlir::createConvertSCFToOpenMPPass());
   // The accumulators of reductions go to the entry of the parallel region (or the function). The OpenMP conversion
   // wraps the loop body in a memref.alloca_scope: with nothing left to allocate, canonicalisation removes it (a scope

@@ -63,6 +63,13 @@ ops.kernel @largest(%x: !ops.acc<f64, 2, 1>, %r: !ops.red<f64>) {
   ops.reduce %r, %v : !ops.red<f64>
   ops.return
 }
+ops.kernel @halve(%x: !ops.acc<f16, 2, 1>, %y: !ops.acc<f16, 2, 1>) {
+  %v = ops.read %x[0, 0] : !ops.acc<f16, 2, 1> -> f16
+  %half = arith.constant 0.5 : f16
+  %w = arith.mulf %v, %half : f16
+  ops.write %y[0, 0], %w : !ops.acc<f16, 2, 1>
+  ops.return
+}
 ops.kernel @repeat(%x: !ops.acc<f64, 2, 1>, %y: !ops.acc<f64, 2, 1>) {
   %n = ops.const_ref @nreps : i32
   %c0 = arith.constant 0 : index
@@ -98,6 +105,9 @@ const KernelDef kDefs[] = {
     {"largest", R"({"manifest_version":1,"kernel":"largest","status":"ok","importer":"test","digest":"t-largest","ndim":2,
       "params":[{"kind":"acc","elem":"f64","ncomp":1,"const":true},{"kind":"reduce","elem":"f64","dim":1,"style":"accumulate"}],
       "consts":[],"traits":{"reads":{"0":[[0,0]]},"writes":{"0":[]},"dynamic_reads":[],"idx_axes_read":[],"dropped_printf":0}})"},
+    {"halve", R"({"manifest_version":1,"kernel":"halve","status":"ok","importer":"test","digest":"t-halve","ndim":2,
+      "params":[{"kind":"acc","elem":"f16","ncomp":1,"const":true},{"kind":"acc","elem":"f16","ncomp":1,"const":false}],
+      "consts":[],"traits":{"reads":{"0":[[0,0]],"1":[]},"writes":{"0":[],"1":[[0,0]]},"dynamic_reads":[],"idx_axes_read":[],"dropped_printf":0}})"},
     {"repeat", R"({"manifest_version":1,"kernel":"repeat","status":"ok","importer":"test","digest":"t-repeat","ndim":2,
       "params":[{"kind":"acc","elem":"f64","ncomp":1,"const":true},{"kind":"acc","elem":"f64","ncomp":1,"const":false}],
       "consts":[{"name":"nreps","elem":"i32","offset":0,"role":"bound"}],
@@ -161,6 +171,7 @@ struct World {
   ops_dat a, b, c;
   ops_stencil s00, s5;
   ops_reduction sum, maxh;
+  ops_dat ha, hb;
   double offset = 0.5, scale = 2.0;
   int nreps = 3;
 
@@ -172,6 +183,8 @@ struct World {
     a = ops_decl_dat(block, 1, size, base, dm, dp, (double *)NULL, "double", "a");
     b = ops_decl_dat(block, 1, size, base, dm, dp, (double *)NULL, "double", "b");
     c = ops_decl_dat(block, 1, size, base, dm, dp, (double *)NULL, "double", "c");
+    ha = ops_decl_dat(block, 1, size, base, dm, dp, (_Float16 *)NULL, "half", "ha");
+    hb = ops_decl_dat(block, 1, size, base, dm, dp, (_Float16 *)NULL, "half", "hb");
     int p00[2] = {0, 0};
     int p5[10] = {0, 0, 1, 0, -1, 0, 0, 1, 0, -1};
     s00 = ops_decl_stencil(2, 1, p00, "00");
@@ -451,4 +464,26 @@ OPDSL_TEST(Runtime, ReductionsCombineIntoTheHandle) {
   flush();
   std::memcpy(&got, w.maxh->data, sizeof(double));
   OPDSL_EXPECT_EQ(got, 1.0 + 0.25 * (kNx - 1) + 0.5 * (kNy - 1)); // b holds smaller values: the maximum stays
+}
+
+OPDSL_TEST(Runtime, HalfPrecisionDatsAreComputedInSinglePrecisionAndRoundedBack) {
+  startExecutor();
+  World &w = world();
+  int inner[4] = {0, kNx, 0, kNy};
+  _Float16 *a = reinterpret_cast<_Float16 *>(w.ha->data), *b = reinterpret_cast<_Float16 *>(w.hb->data);
+  const size_t n = w.ha->mem / sizeof(_Float16);
+  for (size_t i = 0; i < n; ++i) {
+    a[i] = (_Float16)(0.37f * float(i % 29) - 3.0f);
+    b[i] = (_Float16)0;
+  }
+  ops_arg args[2] = {ops_arg_dat(w.ha, 1, w.s00, "half", OPS_READ), ops_arg_dat(w.hb, 1, w.s00, "half", OPS_WRITE)};
+  enqueue("halve", "halve", args, 2, inner);
+  flush();
+  int wrong = 0;
+  for (int j = 0; j < kNy; ++j)
+    for (int i = 0; i < kNx; ++i) {
+      size_t k = (i + 1) + size_t(j + 1) * w.ha->size[0];
+      if (b[k] != (_Float16)(0.5f * float(a[k]))) ++wrong;
+    }
+  OPDSL_EXPECT_EQ(wrong, 0);
 }

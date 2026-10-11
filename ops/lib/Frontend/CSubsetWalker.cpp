@@ -72,7 +72,8 @@ void CSubsetWalker::warn(const llvm::Twine &message, const clang::Stmt *at) {
 
 Type CSubsetWalker::scalarType(clang::QualType t) {
   t = t.getNonReferenceType().getUnqualifiedType().getCanonicalType();
-  if (t->isHalfType() || t->isSpecificBuiltinType(clang::BuiltinType::Float16) || t->isSpecificBuiltinType(clang::BuiltinType::BFloat16)) return {};
+  if (t->isSpecificBuiltinType(clang::BuiltinType::BFloat16)) return {};
+  if (t->isHalfType() || t->isSpecificBuiltinType(clang::BuiltinType::Float16)) return b.getF16Type();
   if (t->isSpecificBuiltinType(clang::BuiltinType::Double)) return b.getF64Type();
   if (t->isSpecificBuiltinType(clang::BuiltinType::Float)) return b.getF32Type();
   if (t->isBooleanType()) return b.getI1Type();

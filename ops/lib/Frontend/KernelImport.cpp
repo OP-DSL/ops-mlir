@@ -780,9 +780,10 @@ ImportResult importKernel(MLIRContext &ctx, const ImportOptions &options) {
     if (p.kind == Param::Idx) continue;
     if (elem.isNull()) return failWith("cannot determine the element type of parameter '" + p.decl->getNameAsString() + "'");
     clang::QualType canon = elem.getNonReferenceType().getUnqualifiedType().getCanonicalType();
-    if (canon->isHalfType() || canon->isSpecificBuiltinType(clang::BuiltinType::Float16) || canon->isSpecificBuiltinType(clang::BuiltinType::BFloat16)) return failWith("f16 not yet supported (parameter '" + p.decl->getNameAsString() + "')");
+    if (canon->isSpecificBuiltinType(clang::BuiltinType::BFloat16)) return failWith("bfloat16 is not supported (parameter '" + p.decl->getNameAsString() + "')");
     Type mlirType;
-    if (canon->isSpecificBuiltinType(clang::BuiltinType::Double)) mlirType = bld.getF64Type();
+    if (canon->isHalfType() || canon->isSpecificBuiltinType(clang::BuiltinType::Float16)) mlirType = bld.getF16Type();
+    else if (canon->isSpecificBuiltinType(clang::BuiltinType::Double)) mlirType = bld.getF64Type();
     else if (canon->isSpecificBuiltinType(clang::BuiltinType::Float)) mlirType = bld.getF32Type();
     else if (canon->isIntegerType() && !canon->isBooleanType() && !canon->isEnumeralType()) mlirType = bld.getIntegerType(astCtx.getTypeSize(canon));
     if (!mlirType || !isSupportedElementType(mlirType))
