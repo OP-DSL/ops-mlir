@@ -25,22 +25,20 @@ import tempfile
 
 
 def kernel_function_text(cir, kernel):
-    """The text of the cir.func of `kernel` (a C++ function: the mangled name contains the name with its length)."""
-    pattern = re.compile(r"cir\.func\s+[^@\n]*@(_Z\d*" + re.escape(str(len(kernel))) + re.escape(kernel) + r"[A-Za-z0-9_]*)\b")
-    m = pattern.search(cir)
-    if not m:
-        return None, None
-    start = cir.index("{", m.end())
-    depth, i = 0, start
-    while i < len(cir):
-        if cir[i] == "{":
-            depth += 1
-        elif cir[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return m.group(1), cir[start:i + 1]
-        i += 1
-    return m.group(1), cir[start:]
+    """The text of the cir.func of `kernel` (a C++ function: the mangled name contains the name with its length).
+    The function ends at the first line that closes it with the indentation of its first line."""
+    lines = cir.splitlines()
+    pattern = re.compile(r"cir\.func\s+[^@\n]*@(_Z[A-Za-z0-9_]*?" + str(len(kernel)) + re.escape(kernel) + r"[A-Za-z0-9_]*)")
+    for i, line in enumerate(lines):
+        m = pattern.search(line)
+        if not m or not line.rstrip().endswith("{"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        for j in range(i + 1, len(lines)):
+            if lines[j].startswith(" " * indent + "}") and len(lines[j]) - len(lines[j].lstrip()) == indent:
+                return m.group(1), "\n".join(lines[i + 1:j])
+        return m.group(1), "\n".join(lines[i + 1:])
+    return None, None
 
 
 OP = re.compile(r"^\s*(?:%[\w#:,\s]+=\s*)?(cir\.[\w.]+)", re.M)
@@ -90,7 +88,7 @@ def main():
                     if r.returncode != 0 or not os.path.exists(out):
                         rec["ok"] = False
                         lines = [l for l in (r.stderr or "").splitlines() if "error" in l or "NYI" in l or "not implemented" in l]
-                        rec["reason"] = (lines[0] if lines else (r.stderr or "no output").strip().splitlines()[-1:] or [""])[0][:200]
+                        rec["reason"] = (lines[0] if lines else ((r.stderr or "no output").strip().splitlines() or [""])[-1])[:200]
                         failures[re.sub(r"^.*?(error|NYI)", r"\1", rec["reason"])[:100]] += 1
                         print(json.dumps(rec))
                         continue
