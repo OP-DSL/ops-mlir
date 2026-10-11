@@ -3,6 +3,7 @@ add_mlir_library(OPSMLIRConversion
   MarkNoalias.cpp
   HoistAccumulators.cpp
   FpContract.cpp
+  GpuKernelAttrs.cpp
 
   DEPENDS
   OPSMLIRConversionIncGen

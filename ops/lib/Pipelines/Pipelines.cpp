@@ -3,17 +3,26 @@
 #include "ops-mlir/Conversion/Passes.h"
 #include "ops-mlir/Transforms/Passes.h"
 
+#include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
+#include "mlir/Conversion/GPUCommon/GPUCommonPass.h"
+#include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
+#include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
+#include "mlir/Conversion/NVGPUToNVVM/NVGPUToNVVM.h"
+#include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
+#include "mlir/Conversion/VectorToSCF/VectorToSCF.h"
 #include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
 #include "mlir/Conversion/OpenMPToLLVM/ConvertOpenMPToLLVM.h"
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/SCFToOpenMP/SCFToOpenMP.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/GPU/Pipelines/Passes.h"
+#include "mlir/Dialect/GPU/Transforms/Passes.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
@@ -133,7 +142,50 @@ llvm::Error buildCUDA(mlir::OpPassManager &pm, const OptionMap &o) {
   nvvm.optLevel = 3;
   // The result is a module in the LLVM dialect with a gpu.binary and gpu.launch_func: the translation to LLVM IR
   // (JITSession) turns the launches into calls of the mgpu* runtime functions (opdsl GpuShim).
-  mlir::gpu::buildLowerToNVVMPassPipeline(pm, nvvm);
+  // The stages of mlir::gpu::buildLowerToNVVMPassPipeline (GPUToNVVMPipeline.cpp), with ops-gpu-kernel-attrs between the
+  // conversion of the kernels and the serialisation.
+  pm.addPass(mlir::createConvertNVGPUToNVVMPass());
+  pm.addPass(mlir::createGpuKernelOutliningPass());
+  pm.addPass(mlir::createConvertVectorToSCFPass());
+  pm.addPass(mlir::createSCFToControlFlowPass());
+  pm.addPass(mlir::createConvertNVVMToLLVMPass());
+  pm.addPass(mlir::createConvertFuncToLLVMPass());
+  pm.addPass(mlir::memref::createExpandStridedMetadataPass());
+  mlir::GpuNVVMAttachTargetOptions target;
+  target.triple = nvvm.cubinTriple;
+  target.chip = nvvm.cubinChip;
+  target.features = nvvm.cubinFeatures;
+  target.optLevel = nvvm.optLevel;
+  target.cmdOptions = nvvm.cmdOptions;
+  pm.addPass(mlir::createGpuNVVMAttachTarget(target));
+  pm.addPass(mlir::createLowerAffinePass());
+  pm.addPass(mlir::createArithToLLVMConversionPass());
+  mlir::ConvertIndexToLLVMPassOptions index;
+  index.indexBitwidth = nvvm.indexBitWidth;
+  pm.addPass(mlir::createConvertIndexToLLVMPass(index));
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::createCSEPass());
+
+  mlir::ConvertGpuOpsToNVVMOpsOptions kernels;
+  kernels.useBarePtrCallConv = nvvm.kernelUseBarePtrCallConv;
+  kernels.indexBitwidth = nvvm.indexBitWidth;
+  kernels.allowPatternRollback = nvvm.allowPatternRollback;
+  pm.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createConvertGpuOpsToNVVMOps(kernels));
+  if (o.getBool("restrict", true)) pm.addNestedPass<mlir::gpu::GPUModuleOp>(createOpsGpuKernelAttrs());
+  pm.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createCanonicalizerPass());
+  pm.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createCSEPass());
+  pm.addNestedPass<mlir::gpu::GPUModuleOp>(mlir::createReconcileUnrealizedCastsPass());
+  mlir::GpuToLLVMConversionPassOptions host;
+  host.hostBarePtrCallConv = nvvm.hostUseBarePtrCallConv;
+  host.kernelBarePtrCallConv = nvvm.kernelUseBarePtrCallConv;
+  pm.addPass(mlir::createGpuToLLVMConversionPass(host));
+  mlir::GpuModuleToBinaryPassOptions binary;
+  binary.compilationTarget = nvvm.cubinFormat;
+  pm.addPass(mlir::createGpuModuleToBinaryPass(binary));
+  pm.addPass(mlir::createConvertMathToLLVMPass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  pm.addPass(mlir::createCSEPass());
+  pm.addPass(mlir::createReconcileUnrealizedCastsPass());
   return llvm::Error::success();
 }
 
@@ -166,7 +218,8 @@ void registerOPSPipelines(PipelineRegistry &registry) {
                  {"ptxas", "string", "options for ptxas"},
                  {"specialize", "string", "none, ranges or shapes"},
                  {"soa", "bool", "structure-of-arrays layout of multi-component dats"},
-                 {"fma", "bool", "allow fused multiply-adds (contract fast-math flags)"}},
+                 {"fma", "bool", "allow fused multiply-adds (contract fast-math flags)"},
+                 {"restrict", "bool", "mark the dat pointers of the kernels noalias (default true)"}},
                 buildCUDA});
 }
 

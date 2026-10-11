@@ -80,4 +80,15 @@ def OpsFpContract : Pass<"ops-fp-contract", "::mlir::ModuleOp"> {
   let dependentDialects = ["::mlir::arith::ArithDialect"];
 }
 
+def OpsGpuKernelAttrs : Pass<"ops-gpu-kernel-attrs", "::mlir::gpu::GPUModuleOp"> {
+  let summary = "mark the dat pointers of the kernels of a gpu.module noalias";
+  let description = [{
+    Run after `convert-gpu-to-nvvm`: a memref argument of a kernel is expanded to a descriptor (allocated pointer, aligned
+    pointer, offset, sizes, strides) and the pointers a kernel loads and stores through are the aligned ones. The dats of a
+    group never overlap (the lifter deduplicates by dat), which is the `__restrict__` of the stock CUDA code: with it the
+    code generator may move loads past stores and share loads of the same address.
+  }];
+  let dependentDialects = ["::mlir::LLVM::LLVMDialect", "::mlir::gpu::GPUDialect"];
+}
+
 #endif // OPS_MLIR_CONVERSION_PASSES

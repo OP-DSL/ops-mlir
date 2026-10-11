@@ -26,6 +26,13 @@ add_mlir_library(OPSMLIRPipelines
   MLIRRegisterAllExtensions
   MLIRGPUDialect
   MLIRGPUPipelines
+  MLIRGPUTransforms
+  MLIRAffineToStandard
+  MLIRIndexToLLVM
+  MLIRNVGPUToNVVM
+  MLIRNVVMToLLVM
+  MLIRVectorToSCF
+  MLIRGPUToNVVMTransforms
   MLIRGPUToLLVMIRTranslation
   MLIRGPUToGPURuntimeTransforms
   MLIRNVVMDialect
