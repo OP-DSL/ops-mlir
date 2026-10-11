@@ -77,6 +77,11 @@ export OPSJIT_OMP_LIB_DIR=$LLVM_INSTALL_PATH/lib/x86_64-unknown-linux-gnu   # li
 export OPSJIT_CUDA_RUNTIME=$LLVM_INSTALL_PATH/lib/libmlir_cuda_runtime.so
 export OPS_COMPILER=${OPS_COMPILER:-clang}
 
+# Host compiler nvcc uses (the cluster has /usr/bin/g++; this WSL image only g++-12).
+if [ -z "${OPS_CUDA_HOST_CXX:-}" ] && [ ! -x /usr/bin/g++ ]; then
+  export OPS_CUDA_HOST_CXX=$(ls /usr/bin/g++-* 2>/dev/null | sort -V | tail -1)
+fi
+
 # Source trees. Locally they live directly under ~/ops-mlir-work; on the cluster the work trees are
 # updated by cluster/v2/sync.sh and live under ~/ops-jit-cl/work.
 if [ "$OPSJIT_HOST" = cluster ]; then

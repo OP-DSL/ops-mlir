@@ -20,7 +20,7 @@ args=( -S "$here/../apps" -B "$BUILD" -G Ninja
        -DOPSJIT_APPS_CUDA="$CUDA" -DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF )
 if [ "$CUDA" = ON ]; then
   GPU_ARCH=${GPU_ARCH:-$([ "$OPSJIT_HOST" = cluster ] && echo "70;80" || echo 89)}
-  args+=( -DCMAKE_CUDA_ARCHITECTURES="$GPU_ARCH" -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++
+  args+=( -DCMAKE_CUDA_ARCHITECTURES="$GPU_ARCH" -DCMAKE_CUDA_HOST_COMPILER=${OPS_CUDA_HOST_CXX:-/usr/bin/g++}
           -DCUDAToolkit_ROOT="$CUDA_INSTALL_PATH" )
 fi
 # Same linker setup as scripts/build_ops.sh (libstdc++ of the clang toolchain on the cluster; -no-pie for nvcc objects).

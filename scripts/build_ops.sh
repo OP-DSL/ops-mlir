@@ -36,7 +36,7 @@ if [ "$OPS_CUDA" = on ]; then
   GPU_ARCH=${GPU_ARCH:-$([ "$OPSJIT_HOST" = cluster ] && echo "70;80" || echo 89)}
   # nvcc rejects the very new clang as a host compiler: use the system g++ for .cu files only.
   # -no-pie: nvcc's host objects are not position independent, the clang driver links PIE by default.
-  args+=( -DGPU_ARCH="$GPU_ARCH" -DGPU_NUMBER=1 -DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++
+  args+=( -DGPU_ARCH="$GPU_ARCH" -DGPU_NUMBER=1 -DCMAKE_CUDA_HOST_COMPILER=${OPS_CUDA_HOST_CXX:-/usr/bin/g++}
           -DCUDAToolkit_ROOT="$CUDA_INSTALL_PATH" )
   ld_flags="-no-pie"
 else
