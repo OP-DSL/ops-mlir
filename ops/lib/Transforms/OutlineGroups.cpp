@@ -28,6 +28,7 @@ struct OutlineGroupsPass : public impl::OutlineGroupsBase<OutlineGroupsPass> {
 
   LogicalResult outline(ChainOp chain, SymbolTable &symbols) {
     auto ranges = chain->getAttrOfType<ArrayAttr>("ops.range_values");
+    auto shapes = chain->getAttrOfType<ArrayAttr>("ops.shape_values");
     SmallVector<ParLoopOp> loops;
     for (Operation &op : chain.getBody().front())
       if (auto loop = dyn_cast<ParLoopOp>(&op)) loops.push_back(loop);
@@ -70,6 +71,18 @@ struct OutlineGroupsPass : public impl::OutlineGroupsBase<OutlineGroupsPass> {
       ReturnOp::create(b, loop.getLoc(), clone->getResults());
 
       if (ranges && n < ranges.size()) group->setAttr("ops.range_values", ArrayAttr::get(ctx, {ranges[n]}));
+      if (shapes) {
+        // The sizes of the group's own arguments (the chain's argument of the same value).
+        SmallVector<Attribute> own;
+        for (Value v : operands) {
+          auto arg = dyn_cast<BlockArgument>(v);
+          if (arg && arg.getOwner() == &chain.getBody().front() && arg.getArgNumber() < shapes.size())
+            own.push_back(shapes[arg.getArgNumber()]);
+          else
+            own.push_back(DenseI64ArrayAttr::get(ctx, {}));
+        }
+        group->setAttr("ops.shape_values", ArrayAttr::get(ctx, own));
+      }
 
       // In the chain: replace the loop by a call.
       OpBuilder cb(loop);

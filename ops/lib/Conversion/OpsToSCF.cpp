@@ -72,16 +72,28 @@ Value combine(OpBuilder &b, Location loc, ReductionKind kind, Value acc, Value v
   llvm_unreachable("unknown reduction kind");
 }
 
-MemRefType datMemRefType(DatType dat, bool soa) {
+/// The memref type of a dat argument: dynamic sizes and strides, or (mode=shapes) the static ones of `sizes` (OPS order, x
+/// first); the offset (the base shift of the dat) stays dynamic.
+MemRefType datMemRefType(DatType dat, bool soa, ArrayRef<int64_t> sizes = {}) {
   MLIRContext *ctx = dat.getContext();
   int64_t rank = dat.getRank(), ncomp = dat.getNcomp();
+  const bool known = static_cast<int64_t>(sizes.size()) == rank;
   SmallVector<int64_t> shape(rank, ShapedType::kDynamic), strides(rank, ShapedType::kDynamic);
   // The last memref dimension of the block is x, the fastest: unit stride, or ncomp when the components of a point
   // are adjacent.
-  strides[rank - 1] = (ncomp > 1 && !soa) ? ncomp : 1;
+  int64_t stride = (ncomp > 1 && !soa) ? ncomp : 1, points = 1;
+  strides[rank - 1] = stride;
+  if (known) {
+    for (int64_t d = 0; d < rank; ++d) {
+      shape[rank - 1 - d] = sizes[d];
+      strides[rank - 1 - d] = stride;
+      stride *= sizes[d];
+      points *= sizes[d];
+    }
+  }
   if (ncomp > 1) {
     shape.push_back(ncomp);
-    strides.push_back(soa ? ShapedType::kDynamic : 1);
+    strides.push_back(soa ? (known ? points : ShapedType::kDynamic) : 1);
   }
   return MemRefType::get(shape, dat.getElementType(), StridedLayoutAttr::get(ctx, ShapedType::kDynamic, strides));
 }
@@ -146,7 +158,13 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
     unsigned numDats = datArgs.size();
 
     SmallVector<Type> inputs;
-    for (BlockArgument d : datArgs) inputs.push_back(datMemRefType(cast<DatType>(d.getType()), soa));
+    auto shapes = chain->getAttrOfType<ArrayAttr>("ops.shape_values"); // mode=shapes: static memref shapes
+    for (BlockArgument d : datArgs) {
+      ArrayRef<int64_t> sizes;
+      if (shapes && d.getArgNumber() < shapes.size())
+        if (auto a = dyn_cast<DenseI64ArrayAttr>(shapes[d.getArgNumber()])) sizes = a.asArrayRef();
+      inputs.push_back(datMemRefType(cast<DatType>(d.getType()), soa, sizes));
+    }
     Type indexType = IndexType::get(ctx);
     for (unsigned i = 0; i < numDats * rank + 2 * rank + rank; ++i) inputs.push_back(indexType);
     for (BlockArgument s : scalarArgs) inputs.push_back(s.getType());

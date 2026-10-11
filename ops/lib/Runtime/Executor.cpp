@@ -87,7 +87,10 @@ OwningOpRef<ModuleOp> canonicalGroup(ModuleOp m, bool keepRanges) {
   Builder b(m.getContext());
   for (ChainOp chain : copy->getOps<ChainOp>()) {
     chain.setSymName("group");
-    if (!keepRanges) chain->removeAttr("ops.range_values");
+    if (!keepRanges) {
+      chain->removeAttr("ops.range_values");
+      chain->removeAttr("ops.shape_values");
+    }
     chain->removeAttr("ops.const_values");
     chain->removeAttr("ops.const_roles");
     chain->removeAttr("ops.binding_consts");
@@ -335,6 +338,8 @@ std::string Executor::structuralKey(ops_kernel_descriptor **run, int n, const st
         h.addInt(arg.stencil->points).addInt(arg.stencil->type);
         for (int p = 0; p < arg.stencil->points * arg.stencil->dims; ++p) h.addInt(arg.stencil->stencil[p]);
         for (int dd = 0; dd < arg.stencil->dims; ++dd) h.addInt(arg.stencil->stride[dd]);
+        if (options().specialize == "shapes")
+          for (int dd = 0; dd < d->block->dims; ++dd) h.addInt(arg.dat->size[dd]);
       } else if (arg.argtype == OPS_ARG_GBL) {
         h.addInt(arg.dim).addInt(arg.elem_size);
       }

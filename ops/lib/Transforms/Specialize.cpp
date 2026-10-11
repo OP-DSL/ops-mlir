@@ -19,16 +19,19 @@ struct OpsSpecializePass : public impl::OpsSpecializeBase<OpsSpecializePass> {
 
   void runOnOperation() override {
     if (mode == "none") return;
-    if (mode == "shapes") {
-      getOperation().emitError("ops-specialize: mode=shapes is not implemented yet");
-      return signalPassFailure();
-    }
-    if (mode != "ranges") {
+    if (mode != "ranges" && mode != "shapes") {
       getOperation().emitError("ops-specialize: unknown mode '") << mode << "' (none, ranges or shapes)";
       return signalPassFailure();
     }
-    for (ChainOp chain : getOperation().getOps<ChainOp>())
+    for (ChainOp chain : getOperation().getOps<ChainOp>()) {
+      // mode=shapes: the sizes of the dats are given by `ops.shape_values` (one entry per chain argument, empty for the
+      // arguments that are not dats); convert-ops-to-scf gives the memrefs static shapes and strides.
+      if (mode == "shapes" && !chain->getAttrOfType<ArrayAttr>("ops.shape_values")) {
+        chain.emitError("ops-specialize mode=shapes needs an `ops.shape_values` entry for each argument of the chain");
+        return signalPassFailure();
+      }
       if (failed(specializeRanges(chain))) return signalPassFailure();
+    }
   }
 
   /// The range operands of each loop become the constants of `ops.range_values`. The chain keeps its arguments:

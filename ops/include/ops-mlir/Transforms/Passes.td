@@ -104,7 +104,9 @@ def OpsSpecialize : Pass<"ops-specialize", "::mlir::ModuleOp"> {
     `mode=ranges`: the range operands of every loop become the constants of the chain attribute `ops.range_values`
     (compile-time trip counts, so the code generator can unroll and vectorise without remainder checks). The chain
     keeps its arguments, the ABI does not change. The compiled code is only valid for these ranges: the cache key
-    must contain them. `mode=shapes` (also the extents of the dats) is not implemented yet. `mode=none` does nothing.
+    must contain them. `mode=shapes` does that and also uses the extents of the dats (the chain attribute `ops.shape_values`,
+    per argument the sizes in OPS order): `convert-ops-to-scf` gives the memrefs static shapes and strides, which makes the
+    address arithmetic constant. `mode=none` does nothing.
   }];
   let options = [Option<"mode", "mode", "std::string", /*default=*/"\"none\"", "none, ranges or shapes">];
   let dependentDialects = ["::mlir::arith::ArithDialect"];

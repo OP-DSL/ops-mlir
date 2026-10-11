@@ -1,5 +1,7 @@
 #include "ops-mlir/Runtime/Lifter.h"
 
+#include "ops-mlir/Runtime/Options.h"
+
 #include "ops_lazy_executor.h"
 
 #include "mlir/IR/Builders.h"
@@ -210,6 +212,17 @@ bool liftRun(MLIRContext &ctx, ops_kernel_descriptor *const *run, int n, const s
   }
   ReturnOp::create(b, loc, returned);
   out.chain->setAttr("ops.range_values", b.getArrayAttr(rangeValues));
+  if (options().specialize == "shapes") {
+    // The sizes of the dats (OPS order: x first) are part of the code: static memref types, constant strides.
+    SmallVector<Attribute> shapeValues;
+    for (const ChainArg &arg : out.args) {
+      SmallVector<int64_t> sizes;
+      if (arg.kind == ChainArg::Dat)
+        for (int d = 0; d < rank; ++d) sizes.push_back(slots[arg.slot]->size[d]);
+      shapeValues.push_back(b.getDenseI64ArrayAttr(sizes));
+    }
+    out.chain->setAttr("ops.shape_values", b.getArrayAttr(shapeValues));
+  }
 
   // Constants whose values are folded into the code (role bound): their values as of now, and the roles.
   SmallVector<NamedAttribute> roles, values;
