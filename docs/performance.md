@@ -24,9 +24,24 @@ Machines: CPU nodes of the `cpu` partition (euclid: 48 cores; hajos, kemeny: 64 
   kernels are within 2% of the AOT code; the loops that were slow before the fixes below were the loops of the 1-D coordinate dats.
 * TGV (OpenSBLI, many large point-wise and stencil kernels per time step) is 4-10 times faster than the stock OpenMP code: the JIT fuses
   point-local chains and specialises the ranges and the constants; the stock code streams every temporary through memory.
-* Fusion is not always a win on the CPU: TGV single is 34% faster *without* it (122 s against 163 s) and CloverLeaf 3D 10% slower. The
-  fused groups of the DAG planner are large; there is no register or cache model yet (plan item P7: register-aware fusion). `OPS_JIT_FUSION_MAX`
-  limits the group size; the sweep is in the section "Fusion size".
+* Fusion is a small win or neutral on the CPU, and machine dependent: CloverLeaf 3D is 10% faster fused (as soon as pairs of loops are fused), TGV double
+  7% faster at 64 threads; TGV single is neutral at 64 threads but 34% *slower* fused on euclid (163 s against 122 s). There is no register or cache model
+  yet (plan item P7.4: register-aware fusion). The size sweep is in the section "Fusion size".
+
+
+### Fusion size
+
+`OPS_JIT_FUSION_MAX` (largest group; 1 = no fusion), 64 threads on hajos/kemeny, wall time [s] of the whole run, `scripts/perf/cpu-fusion-sweep.sh`:
+
+| Case | 1 | 2 | 4 | 8 | 16 | 32 |
+|---|---:|---:|---:|---:|---:|---:|
+| CloverLeaf 3D | 59.4 | 54.3 | 53.7 | 54.0 | 53.8 | 54.1 |
+| TGV single | 164.9 | 161.9 | 160.2 | 163.8 | 167.8 | 169.8 |
+| TGV double | 322.7 | 317.5 | 311.4 | 308.4 | 303.3 | 300.0 |
+
+CloverLeaf gets all of its gain from pairs of loops (the loops of a CloverLeaf step are mostly memory-bound sweeps whose temporaries do not survive a pair);
+TGV double keeps gaining up to the largest groups, TGV single loses from 8 loops on. The default (`OPS_JIT_FUSION_MAX=32`) is a compromise; a per-case
+choice needs the register-aware cost model of plan item P7.4.
 
 ### What the first cluster run found
 
@@ -56,7 +71,12 @@ threads) and 3D at 124.8 s against 39.2 s. Causes, in the order of their weight:
 * The 10% are host side start-up: for CloverLeaf 3D the executor spends 2.96 s executing (kernel launches and reduction copies) of a 5.6 to 8.5 s
   run, and about 1 s on the plans (`frontend 0.25 s`, `plan passes 0.20 s`), the cache (`cache io 0.19 s`, loading 90 modules) and `bind 0.09 s`. A persistent
   plan cache (plans are rebuilt in every process) and module loading in the background are the planned reductions.
-* Correctness: the whole CUDA suite (`ctest -L jit-app -R cuda`: laplace2d, poisson, lazy_triggers, CloverLeaf 2D and 3D, TeaLeaf, lowdim, TGV DP/SP/SPDP
+* Per kernel (CloverLeaf 3D, 20 steps, `scripts/perf/gpu-kernels.sh`: OPS's timing table of the AOT code against the JIT without fusion and with
+  `OPS_JIT_SYNC=1`): the sum over the kernels is 0.900 s for AOT and 0.961 s for the JIT (+6.8%). Most kernels are within 1-3%; the exceptions are
+  `accelerate_kernel` (+58%), `advec_mom_kernel1_*_nonvector` (+13-16%), `viscosity_kernel` (+11%), `PdV_kernel_nopredict` (+9%) and `calc_dt_kernel` (+9%).
+  Allowing fused multiply-adds (`OPS_JIT_FMA=1`: the contract flag on the floating point operations, what nvcc does by default) changes nothing: the kernels are
+  memory bound; the difference is in the loads (no `__restrict__`/read-only information on the kernel pointers yet) and in the 64-bit index arithmetic.
+* Correctness: the whole CUDA suite (`ctest -L jit-app -R cuda`: laplace2d, poisson, lazy_triggers, CloverLeaf 2D and 3D, TeaLeaf, lowdim, TGV DP/SP/SPDP/HP
   and HPSP, with and without MPI) passes on the A100 in verify mode (every group is compared with OPS's stock code).
 
 ## Compilation cost
