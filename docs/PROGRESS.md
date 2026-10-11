@@ -357,3 +357,22 @@ loads the cached object (no lowering, no compile) and produces the same results.
 - **Test:** `EndToEndGPUTest` (a stencil with an atomic max over a range that is not a multiple of the block) passes on the local RTX 4050 (sm_89).
 - **P4.3** the executor runs loops with `isdevice` on the GPU (data from `data_d`, reductions through per-group device buffers initialised with the
   neutral element and copied back, combined into the handle slot like on the host); verify mode reads and restores the device copies.
+
+## Performance investigation: CloverLeaf CPU (found with the first cluster perf run)
+
+- **Symptom:** CloverLeaf 2D 3840^2, 48 threads: AOT 18 s, JIT 46 s; 3D: 39 s against 125 s; fusion on or off made no difference. TGV DP: AOT 1257 s, JIT 253 s.
+  The executor statistics said the JIT spent 21 s executing and 45 s in total.
+- **Cause 1, OPS:** `ops_enqueue_kernel` flushes the queue and runs the loop eagerly (stock code) for every loop that reads an edge dat (the 1-D coordinate dats of
+  CloverLeaf: `celldx`, `vertexdy`...) after a write to it. The dirty bit is only cleared by the MPI halo-exchange code, so on one process the rule fired for
+  every such loop, for ever. The executor never saw these loops (about 6% of them, but the heavy advection and viscosity ones), and each one forced a flush.
+  Now the rule only applies with more than one process (`ops_num_procs() > 1`); the earlier "12834 of 12836 loops claimed" was a statement about the loops the
+  executor saw, not about the loops of the application.
+- **Cause 2, claim:** edge dats were declined. They are claimed on one process now (they are plain dats with size 1 in a dimension, read through stride-0 stencils);
+  with MPI the loops that use them still run with OPS. A write through a stride-0 dimension is accepted when the loop has one point in that dimension.
+- **Not a cause of the numbers above, but found on the way, translator** (a regression of the commit that fixed OpenSBLI, never in the cluster build of that run): the `ops_init(` search of the program translator used `re.match` with `(^|\s)`, which matches zero or one
+  leading blank, so applications that indent `ops_init(` by two or more (CloverLeaf, TeaLeaf) were translated without `ops_init_backend()`: the JIT was never
+  initialised and the run was the stock lazy code. Fixed (`\s*ops_init\(`, `is not None`).
+- **Cause 4, materialise:** `ops.const_ref` and `ops.gbl_read` inside the regions of a kernel (under an `if`) stayed in the loop body and the group failed to lower
+  (the group then ran with OPS). They are now materialised like the ones at the top level (`Transforms/materialize-nested.mlir`).
+- **After:** CloverLeaf 2D (3840^2, 87 steps) on the 16-thread development machine, 8 threads: 149 s -> 50 s; 13623 of 13625 loops claimed, verify clean
+  (the two declined loops are the one-off initialisation of `xx`/`yy`).
