@@ -16,7 +16,7 @@ STEPS=${STEPS:-20}
 DIM=${DIM:-3}
 OUT=${OPSJIT_RESULTS:-$OPSJIT_WORK/results}/cpu-kernels-${OPSJIT_JOB:-local}
 mkdir -p "$OUT"
-export OMP_NUM_THREADS=$THREADS OPS_DIAGS=2
+export OMP_NUM_THREADS=$THREADS
 export OPS_JIT_CACHE_DIR=${OPS_JIT_CACHE_DIR:-$OPSJIT_WORK/cache/perf}
 mkdir -p "$OPS_JIT_CACHE_DIR"
 
@@ -35,15 +35,15 @@ sed -i '/^\*endclover/d' "$work/clover.in"; echo "*endclover" >>"$work/clover.in
 
 run() { # run <label> <command...>
   local label=$1; shift
-  (cd "$work" && "$@" >"$OUT/$label.out" 2>&1)
+  (cd "$work" && rm -f prof.out && "$@" OPS_DIAGS=2 >"$OUT/$label.out" 2>&1; cp prof.out "$OUT/$label.prof" 2>/dev/null)
   # OPS's table: header "Name  Count  Time  ..." then one line per kernel
-  awk '/^Name +Count/ {t=1; next} t && NF>=3 {print}' "$OUT/$label.out" >"$OUT/$label.txt"
+  awk '/^Name +Count/ {t=1; next} t && NF>=3 {print}' "$OUT/$label.prof" >"$OUT/$label.txt"
 }
 run aot "$aot_exe"
-(cd "$work" && OPS_JIT_FUSION=1 "$jit_exe" >"$OUT/jit-warm.out" 2>&1)
+(cd "$work" && OPS_JIT_FUSION=1 "$jit_exe" OPS_DIAGS=2 >"$OUT/jit-warm.out" 2>&1)
 OPS_JIT_FUSION=0 run jit-nofuse "$jit_exe"
 OPS_JIT_FUSION=1 run jit "$jit_exe"
 # join by kernel name: name, AOT time, JIT-nofuse time
 awk 'FNR==NR {a[$1]=$3; next} ($1 in a) {printf "%-40s %10s %10s\n", $1, a[$1], $3}' "$OUT/aot.txt" "$OUT/jit-nofuse.txt" | sort -k2 -n -r >"$OUT/kernels.txt"
-head -30 "$OUT/kernels.txt"
+head -12 "$OUT/aot.prof"; head -30 "$OUT/kernels.txt"
 echo "results: $OUT"
