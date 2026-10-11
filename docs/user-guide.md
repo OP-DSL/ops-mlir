@@ -64,6 +64,7 @@ same from code, before the first loop):
 | `OPS_JIT_GPU_ARCH` | the device | e.g. `sm_80` |
 | `OPS_JIT_PTXAS_OPTS` | | e.g. `-v` to see register use |
 | `OPS_JIT_SYNC` | 0 | synchronise after every GPU launch (debugging) |
+| `OPS_JIT_FMA` | 0 | let the CPU code generator fuse multiply-adds (no measurable gain on the machines tried; the last bits of the results change, so `OPS_JIT_VERIFY` reports differences) |
 | `CUDA_ROOT` | `$CUDA_INSTALL_PATH` | CUDA toolkit (ptxas, libdevice) used to compile kernels |
 
 Diagnostics:

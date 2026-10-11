@@ -41,7 +41,7 @@ struct JITOptions {
   std::string features;
   /// Allow the code generator to contract a*b+c into fused multiply-adds (what clang does within an expression by default;
   /// the results then differ in the last bit from unfused code).
-  bool fpContract = true;
+  bool fpContract = false;
   /// Shared libraries whose symbols the compiled code may use (libomp, runtime shims), loaded into the process.
   std::vector<std::string> sharedLibraries;
 };

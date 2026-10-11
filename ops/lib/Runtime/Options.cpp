@@ -140,6 +140,7 @@ std::string Options::codegenDigest() const {
   s += fusionGuarded ? ";guarded" : ";noguarded";
   s += ";specialize=" + specialize;
   s += ";printf=" + printfPolicy;
+  s += fma ? ";fma" : ";nofma";
   s += ";gpu=" + gpuBlock + "," + gpuArch + "," + ptxasOpts;
   return s;
 }
