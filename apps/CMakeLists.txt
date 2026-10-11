@@ -79,7 +79,7 @@ if(HDF5_FOUND AND TARGET OPS::ops_hdf5_seq)
   foreach(variant DP SP SPDP)
     if(EXISTS "${TGV_ROOT}/TGsym_${variant}")
       if(NOT OPSJIT_APPS OR tgv_${variant} IN_LIST OPSJIT_APPS)
-      ops_jit_add_app(tgv_${variant} SOURCE_DIR "${TGV_ROOT}/TGsym_${variant}" HDF5
+      ops_jit_add_app(tgv_${variant} SOURCE_DIR "${TGV_ROOT}/TGsym_${variant}" HDF5 AOT_BASELINE
                       IMPORTER_FLAGS -I${HDF5_INCLUDE_DIRS})
       endif()
       if(NOT OPSJIT_APPS OR tgvs_${variant} IN_LIST OPSJIT_APPS)

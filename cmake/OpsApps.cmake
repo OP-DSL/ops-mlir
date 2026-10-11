@@ -93,13 +93,11 @@ function(_ops_jit_add_verify_test exe_target mode tmp)
   set_tests_properties(${exe_target}_verify PROPERTIES LABELS "${labels}" RESOURCE_LOCK "${tmp}")
 endfunction()
 
-function(ops_jit_add_app name)
-  cmake_parse_arguments(ARG "HDF5;NO_SEQ_TEST;VERIFY_ONLY" "SOURCE_DIR;TEST_SCRIPT;PATCH_FILE" "ODD;OTHERS;EXTRA;TRANSLATOR_FLAGS;IMPORTER_FLAGS;INPUT_COPY;PATCH" ${ARGN})
-  set(tmp "${CMAKE_CURRENT_BINARY_DIR}/${name}_tmp")
+# Copies the sources of an application to <tmp>, applies PATCH, runs the translator (with --jit or without) and sets
+# <prefix>_ops_sources, <prefix>_others in the caller's scope.
+function(_ops_jit_prepare prefix tmp jit)
   file(REMOVE_RECURSE "${tmp}")
   file(MAKE_DIRECTORY "${tmp}")
-
-  # Same preparation as OPS's build_ops_c_sample: copy the sources, run the translator on the ones that have loops.
   file(GLOB cpp "${ARG_SOURCE_DIR}/*.cpp")
   list(FILTER cpp EXCLUDE REGEX "ops.cpp")
   file(COPY ${cpp} DESTINATION "${tmp}")
@@ -142,12 +140,16 @@ function(ops_jit_add_app name)
     list(APPEND names "${file}")
   endforeach()
 
+  set(jit_flag "")
+  if(jit)
+    set(jit_flag --jit)
+  endif()
   execute_process(
     COMMAND ${OPS_PYTHON} ${OPS_TRANSLATOR} -DOPS_ACC_IGNORE -I ${OPS_INSTALL}/include ${ARG_TRANSLATOR_FLAGS}
-            --jit --file_paths ${names}
+            ${jit_flag} --file_paths ${names}
     WORKING_DIRECTORY "${tmp}" RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE err)
   if(NOT rc EQUAL 0)
-    message(FATAL_ERROR "ops-translator --jit failed for ${name} (${rc}):\n${out}\n${err}")
+    message(FATAL_ERROR "ops-translator ${jit_flag} failed for ${name} (${rc}):\n${out}\n${err}")
   endif()
 
   file(GLOB ops_sources "${tmp}/*ops*.cpp")
@@ -162,6 +164,16 @@ function(ops_jit_add_app name)
   foreach(pattern ${ARG_EXTRA})
     list(FILTER others EXCLUDE REGEX "${pattern}")
   endforeach()
+  set(${prefix}_ops_sources "${ops_sources}" PARENT_SCOPE)
+  set(${prefix}_others "${others}" PARENT_SCOPE)
+endfunction()
+
+function(ops_jit_add_app name)
+  cmake_parse_arguments(ARG "HDF5;NO_SEQ_TEST;VERIFY_ONLY;AOT_BASELINE" "SOURCE_DIR;TEST_SCRIPT;PATCH_FILE" "ODD;OTHERS;EXTRA;TRANSLATOR_FLAGS;IMPORTER_FLAGS;INPUT_COPY;PATCH" ${ARGN})
+  set(tmp "${CMAKE_CURRENT_BINARY_DIR}/${name}_tmp")
+  _ops_jit_prepare(jit "${tmp}" TRUE)
+  set(ops_sources "${jit_ops_sources}")
+  set(others "${jit_others}")
 
   # The artifacts, imported once per application: they depend on the application's headers, not on the backend.
   add_library(${name}_jit_artifacts OBJECT)
@@ -203,6 +215,34 @@ function(ops_jit_add_app name)
       _variant("_mpi_cuda" cuda/cuda_kernels.cu "OPS_MPI;MPICH_IGNORE_CXX_SEEK"
                "${hdf5_mpi};OPS::ops_mpi_cuda;MPI::MPI_CXX;CUDA::cudart_static;-lcurand;-lnvidia-ml" "mpi_cuda 1")
       target_compile_options(${name}_jit_mpi_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>)
+    endif()
+  endif()
+
+  # The ahead-of-time code of the same application (no --jit, eager execution, no libopsjit), for comparisons: the standard
+  # OPS builds `<name>_aot` (sequential/OpenMP), `_aot_mpi`, `_aot_cuda`, `_aot_mpi_cuda`.
+  if(ARG_AOT_BASELINE)
+    set(aot_tmp "${CMAKE_CURRENT_BINARY_DIR}/${name}_aot_tmp")
+    _ops_jit_prepare(aot "${aot_tmp}" FALSE)
+    set(aot_common_libs OpenMP::OpenMP_CXX)
+    function(_aot suffix kernels defs libs)
+      set(exe ${name}_aot${suffix})
+      add_executable(${exe} ${aot_ops_sources} ${aot_others} "${aot_tmp}/${kernels}")
+      target_include_directories(${exe} PRIVATE "${aot_tmp}")
+      target_compile_definitions(${exe} PRIVATE ${defs})
+      target_link_libraries(${exe} PRIVATE ${libs} ${aot_common_libs})
+    endfunction()
+    _aot("" mpi_openmp/mpi_openmp_kernels.cpp "" "${hdf5_seq};OPS::ops_seq")
+    if(TARGET OPS::ops_mpi)
+      _aot("_mpi" mpi_openmp/mpi_openmp_kernels.cpp "OPS_MPI" "${hdf5_mpi};OPS::ops_mpi;MPI::MPI_CXX")
+    endif()
+    if(OPSJIT_APPS_CUDA AND TARGET OPS::ops_cuda)
+      _aot("_cuda" cuda/cuda_kernels.cu "" "${hdf5_seq};OPS::ops_cuda;CUDA::cudart_static;-lcurand;-lnvidia-ml")
+      target_compile_options(${name}_aot_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>)
+      if(TARGET OPS::ops_mpi_cuda)
+        _aot("_mpi_cuda" cuda/cuda_kernels.cu "OPS_MPI;MPICH_IGNORE_CXX_SEEK"
+             "${hdf5_mpi};OPS::ops_mpi_cuda;MPI::MPI_CXX;CUDA::cudart_static;-lcurand;-lnvidia-ml")
+        target_compile_options(${name}_aot_mpi_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>)
+      endif()
     endif()
   endif()
 endfunction()
