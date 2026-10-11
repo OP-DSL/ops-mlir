@@ -16,6 +16,7 @@ source "$here/../env.sh"
 
 AOT=${OPS_AOT_BUILD:-$OPSJIT_BUILD_ROOT/OPS-apps-new}
 JIT=${JIT_BUILD:-$OPSJIT_BUILD_ROOT/OPS-jit-apps}
+TGV=${TGV_BUILD:-$OPSJIT_BUILD_ROOT/OPS-jit-tgv}
 THREADS=${THREADS:-$(nproc)}
 NRUNS=${NRUNS:-3}
 OUT=${OPSJIT_RESULTS:-$OPSJIT_WORK/results}/cpu-${OPSJIT_JOB:-local}.json
@@ -49,8 +50,10 @@ perf_case() {
   mkdir -p "$work/aot" "$work/jit"
   cp "$aot_dir"/*.in "$work/aot/" 2>/dev/null || true
   cp "$jit_dir"/*.in "$work/jit/" 2>/dev/null || true
-  cp "$deck_dir/$deck" "$work/aot/clover.in"
-  cp "$deck_dir/$deck" "$work/jit/clover.in"
+  if [ -n "$deck" ]; then
+    cp "$deck_dir/$deck" "$work/aot/clover.in"
+    cp "$deck_dir/$deck" "$work/jit/clover.in"
+  fi
   [ -f "$aot_exe" ] && timed "$name/aot" "$work/aot" "$aot_exe"
   if [ -f "$jit_exe" ]; then
     (cd "$work/jit" && OPS_JIT_FUSION=1 "$jit_exe" >warm.out 2>&1)
@@ -64,4 +67,7 @@ perf_case clover2d-bm16short "$AOT/apps/c/CloverLeaf/clover_leaf_openmp" "$AOT/a
           "$JIT/clover_leaf_jit" "$JIT/clover_leaf_tmp" clover_bm16_short.in "$C/CloverLeaf"
 perf_case clover3d-bm1sshort "$AOT/apps/c/CloverLeaf_3D/clover_leaf_3D_openmp" "$AOT/apps/c/CloverLeaf_3D/tmp" \
           "$JIT/clover_leaf_3D_jit" "$JIT/clover_leaf_3D_tmp" clover_bm1s_short.in "$C/CloverLeaf_3D"
+for p in DP SP SPDP; do
+  perf_case tgv-$p "$TGV/tgv_${p}_aot" "$TGV/tgv_${p}_aot_tmp" "$TGV/tgv_${p}_jit" "$TGV/tgv_${p}_tmp" "" ""
+done
 echo "results: $OUT"
