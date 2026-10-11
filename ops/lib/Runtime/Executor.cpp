@@ -147,6 +147,9 @@ double relativeDifference(const char *type, const char *a, const char *b, size_t
   std::string t = type ? type : "";
   if (t == "double") compareElements<double>(a, b, bytes / 8, maxDiff, maxAbs, differing);
   else if (t == "float") compareElements<float>(a, b, bytes / 4, maxDiff, maxAbs, differing);
+#ifdef __FLT16_MAX__
+  else if (t == "half") compareElements<_Float16>(a, b, bytes / 2, maxDiff, maxAbs, differing);
+#endif
   else compareElements<int32_t>(a, b, bytes / 4, maxDiff, maxAbs, differing);
   if (maxDiff == 0) return 0;
   return maxAbs > 0 ? maxDiff / maxAbs : maxDiff;
@@ -156,6 +159,7 @@ double toleranceFor(const char *type) {
   std::string t = type ? type : "";
   if (t == "double") return 1e-12;
   if (t == "float") return 1e-5;
+  if (t == "half") return 1e-2; // 11 bits of mantissa, and the arithmetic of a fused group is rounded in another order
   return 0;
 }
 
