@@ -9,24 +9,26 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$here/../env.sh"
 
 JIT=${JIT_BUILD:-$OPSJIT_BUILD_ROOT/OPS-jit-apps}
+DIM=${DIM:-2}
 THREADS=${THREADS:-$(nproc)}
 STEPS=${STEPS:-87}
-DECK=${DECK:-clover_bm16_short.in}
+DECK=${DECK:-$([ "$DIM" = 3 ] && echo clover_bm1s_short.in || echo clover_bm16_short.in)}
 OUT=${OPSJIT_RESULTS:-$OPSJIT_WORK/results}/sample-${OPSJIT_JOB:-local}.txt
 export OMP_NUM_THREADS=$THREADS
 export OPS_JIT_CACHE_DIR=${OPS_JIT_CACHE_DIR:-$OPSJIT_WORK/cache/perf}
 work=$OPSJIT_WORK/perf-run/sample
 rm -rf "$work"; mkdir -p "$work"
-sed "s/end_step=.*/end_step=$STEPS/" "$OPS_SRC/apps/c/CloverLeaf/$DECK" >"$work/clover.in"
+APP=$([ "$DIM" = 3 ] && echo CloverLeaf_3D || echo CloverLeaf); EXE=$([ "$DIM" = 3 ] && echo clover_leaf_3D_jit || echo clover_leaf_jit)
+sed "s/end_step=.*/end_step=$STEPS/" "$OPS_SRC/apps/c/$APP/$DECK" >"$work/clover.in"
 cd "$work"
-"$JIT/clover_leaf_jit" >run.out 2>&1 &
+"$JIT/$EXE" >run.out 2>&1 &
 pid=$!
-sleep 8 # past the start-up
+sleep ${DELAY:-8} # past the start-up
 : >"$OUT"
 while kill -0 "$pid" 2>/dev/null; do
   gdb -p "$pid" -batch -ex "thread 1" -ex "bt 12" 2>/dev/null | grep -E '^#' | cut -c1-170 >>"$OUT"
   echo "----" >>"$OUT"
-  sleep 1
+  sleep ${PERIOD:-1}
 done
 wait "$pid"
 echo "results: $OUT"
