@@ -425,7 +425,7 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
         Value cur = memref::LoadOp::create(rb, l, acc.memref, ValueRange{});
         memref::StoreOp::create(rb, l, combine(rb, l, acc.kind, cur, reduce.getValue()), acc.memref, ValueRange{});
       } else {
-        return op->emitError("must not remain in a loop body when lowering a group (materialise and specialise first)");
+        return op->emitError("'") << op->getName() << "' must not remain in a loop body when lowering a group (materialise and specialise first)";
       }
       op->erase();
     }

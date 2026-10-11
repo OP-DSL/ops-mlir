@@ -86,8 +86,10 @@ Diagnostics:
 A loop is run by the JIT when its kernel was imported (`ops-kernel-import`, provider A: a clang AST walker; see `coverage.md`) and
 the arguments are in the supported set: dats of type double, float or int; regular (non multigrid) stencils; read-only globals;
 reductions (INC/MIN/MAX); the loop index; constants registered with `ops_decl_const`. Optional dat arguments that are switched off
-are fine. Declined (run by OPS, reason in `OPS_JIT_EXPLAIN`): multigrid stencils, edge dats, stride-0 dimensions on dats that are
-written, kernels the importer cannot read (loops with data-dependent trip counts, pointer arithmetic, calls other than the math
+are fine. Edge dats (size 1 in a dimension, read through stride-0 stencils) are plain dats on one process; with MPI they are
+replicated and exchanged by OPS, and the loops that use them run with OPS. Declined (run by OPS, reason in `OPS_JIT_EXPLAIN`):
+multigrid stencils, edge dats under MPI, stride-0 dimensions on dats that are written in loops of more than one point in that
+dimension, kernels the importer cannot read (loops with data-dependent trip counts, pointer arithmetic, calls other than the math
 library and helper functions defined in the same file, writes to globals...), and `isdevice` loops when no CUDA device is usable.
 `printf` in a kernel is dropped with a warning.
 

@@ -126,32 +126,59 @@ struct MaterializeKernelsPass : public impl::MaterializeKernelsBase<MaterializeK
     b.setInsertionPoint(body.getTerminator());
     DenseMap<std::pair<StringRef, std::pair<int64_t, const void *>>, Value> constInLoop;
 
+    // The loop operand (and block argument) of a constant at a fixed offset, one per distinct constant.
+    auto constValue = [&](ConstRefOp ref) -> Value {
+      auto key = std::make_pair(ref.getName(), std::make_pair(static_cast<int64_t>(ref.getOffset()),
+                                                            ref.getType().getAsOpaquePointer()));
+      auto found = constInLoop.find(key);
+      if (found == constInLoop.end()) {
+        unsigned chainArg = constArgument(state, ref.getName(), static_cast<int64_t>(ref.getOffset()), ref.getType(), ref.getLoc());
+        // New scalar operand, and its block argument after the existing scalars.
+        unsigned pos = loop.getNumDats() + loop.getScalars().size();
+        loop.getScalarsMutable().append(state.chain.getArgument(chainArg));
+        BlockArgument blockArg = body.insertArgument(pos, ref.getType(), ref.getLoc());
+        found = constInLoop.try_emplace(key, blockArg).first;
+      }
+      return found->second;
+    };
+    auto globalValue = [&](GblReadOp read, Value &out) -> LogicalResult {
+      auto it = gbls.find(read.getGbl());
+      if (it == gbls.end()) return read.emitError("global read of a value that is not a kernel parameter");
+      BlockArgument scalar = loop.getScalarArg(it->second.base + read.getIndex());
+      if (scalar.getType() != read.getType())
+        return read.emitError("global component has type ") << read.getType() << " but the loop passes " << scalar.getType();
+      out = scalar;
+      return success();
+    };
+
     for (Operation &op : kernelBlock.without_terminator()) {
       if (auto read = dyn_cast<GblReadOp>(&op)) {
-        auto it = gbls.find(read.getGbl());
-        if (it == gbls.end()) return read.emitError("global read of a value that is not a kernel parameter");
-        BlockArgument scalar = loop.getScalarArg(it->second.base + read.getIndex());
-        if (scalar.getType() != read.getType())
-          return read.emitError("global component has type ") << read.getType() << " but the loop passes " << scalar.getType();
+        Value scalar;
+        if (failed(globalValue(read, scalar))) return failure();
         mapper.map(read.getResult(), scalar);
         continue;
       }
       if (auto ref = dyn_cast<ConstRefOp>(&op); ref && !ref.getIndex()) {
-        auto key = std::make_pair(ref.getName(), std::make_pair(static_cast<int64_t>(ref.getOffset()),
-                                                              ref.getType().getAsOpaquePointer()));
-        auto found = constInLoop.find(key);
-        if (found == constInLoop.end()) {
-          unsigned chainArg = constArgument(state, ref.getName(), static_cast<int64_t>(ref.getOffset()), ref.getType(), ref.getLoc());
-          // New scalar operand, and its block argument after the existing scalars.
-          unsigned pos = loop.getNumDats() + loop.getScalars().size();
-          loop.getScalarsMutable().append(state.chain.getArgument(chainArg));
-          BlockArgument blockArg = body.insertArgument(pos, ref.getType(), ref.getLoc());
-          found = constInLoop.try_emplace(key, blockArg).first;
-        }
-        mapper.map(ref.getResult(), found->second);
+        mapper.map(ref.getResult(), constValue(ref));
         continue;
       }
-      b.clone(op, mapper);
+      Operation *cloned = b.clone(op, mapper);
+      // Constants and globals read inside the regions of the operation (under an `if`, in a loop).
+      SmallVector<Operation *> nested;
+      cloned->walk([&](Operation *n) {
+        if (n != cloned && isa<ConstRefOp, GblReadOp>(n)) nested.push_back(n);
+      });
+      for (Operation *n : nested) {
+        if (auto read = dyn_cast<GblReadOp>(n)) {
+          Value scalar;
+          if (failed(globalValue(read, scalar))) return failure();
+          read.getResult().replaceAllUsesWith(scalar);
+          read->erase();
+        } else if (auto ref = cast<ConstRefOp>(n); !ref.getIndex()) {
+          ref.getResult().replaceAllUsesWith(constValue(ref));
+          ref->erase();
+        }
+      }
     }
     // The loop is now valid or not: report what is wrong with the kernel against this loop's stencils.
     if (failed(verify(loop))) return failure();

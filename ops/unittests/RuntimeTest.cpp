@@ -304,9 +304,12 @@ OPDSL_TEST(Runtime, ClaimDeclinesWithReasons) {
     OPDSL_EXPECT(claimReason(d, *axpy, false).find("device") != std::string::npos);
     d->isdevice = 0;
     OPDSL_EXPECT(claimReason(d, *cross, false).find("parameters") != std::string::npos); // 2 parameters, 3 arguments
-    w.a->e_dat = 1;
-    OPDSL_EXPECT(claimReason(d, *axpy, false).find("edge dat") != std::string::npos);
+    w.a->e_dat = 1; // on one process an edge dat is a dat like any other
+    OPDSL_EXPECT_EQ(claimReason(d, *axpy, false), std::string());
     w.a->e_dat = 0;
+    w.a->stride[0] = 2;
+    OPDSL_EXPECT(claimReason(d, *axpy, false).find("multigrid") != std::string::npos);
+    w.a->stride[0] = 1;
     ops_arg written = ops_arg_dat(w.a, 1, w.s00, "double", OPS_WRITE);
     ops_arg savedArg = args[0];
     args[0] = written; // the kernel only reads parameter 0: a write access is allowed, a stencil that is too small is not
@@ -432,12 +435,12 @@ OPDSL_TEST(Runtime, DeclinedLoopsRunWithTheStockCode) {
   int inner[4] = {0, kNx, 0, kNy};
   double g = 1.0;
   uint64_t declined = stats.loopsDeclined;
-  w.a->e_dat = 1; // not supported: the loop falls back
+  w.a->stride[0] = 2; // a coarse dat of a multigrid hierarchy is not supported: the loop falls back
   ops_arg args[3] = {ops_arg_dat(w.a, 1, w.s00, "double", OPS_READ), ops_arg_dat(w.b, 1, w.s00, "double", OPS_WRITE),
                      ops_arg_gbl(&g, 1, "double", OPS_READ)};
   enqueue("axpy", "axpy", args, 3, inner);
   flush();
-  w.a->e_dat = 0;
+  w.a->stride[0] = 1;
   OPDSL_EXPECT_EQ(aotCalls, 1);
   OPDSL_EXPECT_EQ(stats.loopsDeclined, declined + 1);
 }

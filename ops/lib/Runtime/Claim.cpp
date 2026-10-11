@@ -68,13 +68,20 @@ std::string claimReason(ops_kernel_descriptor *desc, const KernelArtifact &artif
       if (elem != p.elem) return where + "dat of type " + elem + " but the kernel's accessor is " + p.elem;
       if (!a.stencil) return where + "no stencil";
       if (a.stencil->type != 0) return where + "multigrid (restrict/prolong) stencil";
-      if (dat->e_dat) return where + "edge dat";
+      // Edge dats (size 1 in a dimension, read with stride-0 stencils) are replicated and exchanged between processes by
+      // OPS's MPI code: only on one process are they plain dats.
+      if (dat->e_dat && ops_num_procs() > 1) return where + "edge dat (more than one process)";
       for (int d = 0; d < dims; ++d)
         if (dat->stride[d] > 1) return where + "coarse dat of a multigrid hierarchy";
       if (a.stencil->dims != dims) return where + "stencil of another dimension than the block";
       if (p.ncomp > dat->dim) return where + "the kernel uses " + std::to_string(p.ncomp) + " components of a dat that has " + std::to_string(dat->dim);
-      for (int d = 0; d < dims; ++d)
-        if (a.stencil->stride[d] == 0 && a.acc != OPS_READ) return where + "stride-0 dimension on a dat that is written";
+      for (int d = 0; d < dims; ++d) {
+        if (a.stencil->stride[d] != 0 || a.acc == OPS_READ) continue;
+        // Writing through a stride-0 dimension is one point per iteration only if the loop has one point in it (the
+        // coordinates of CloverLeaf are initialised in loops over a single row).
+        if (int64_t(desc->orig_range[2 * d + 1]) - desc->orig_range[2 * d] > 1)
+          return where + "stride-0 dimension on a dat that is written, in a loop of more than one point in that dimension";
+      }
       auto writes = m.writes.find(i);
       if (a.acc == OPS_READ && writes != m.writes.end() && !writes->second.empty()) return where + "the kernel writes a dat passed as OPS_READ";
       auto reads = m.reads.find(i);
