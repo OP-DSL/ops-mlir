@@ -4,7 +4,7 @@
 // RUN: FileCheck %s --check-prefix=WHILE-MANIFEST --input-file=%t.json
 // RUN: ops-kernel-import --kernel writes_dynamic --source %s --ndim 2 -o - --manifest %t.json -- -I%ops_include 2>&1 | FileCheck %s --check-prefix=DYNWRITE
 // RUN: ops-kernel-import --kernel unknown_call --source %s --ndim 2 -o - --manifest %t.json -- -I%ops_include 2>&1 | FileCheck %s --check-prefix=CALL
-// RUN: ops-kernel-import --kernel half_input --source %s --ndim 2 -o - --manifest %t.json -- -I%ops_include 2>&1 | FileCheck %s --check-prefix=HALF
+// RUN: ops-kernel-import --kernel bf16_input --source %s --ndim 2 -o - --manifest %t.json -- -I%ops_include 2>&1 | FileCheck %s --check-prefix=BF16
 // RUN: ops-kernel-import --kernel writes_global --source %s --ndim 2 -o - --manifest %t.json -- -I%ops_include 2>&1 | FileCheck %s --check-prefix=GBLWRITE
 // RUN: ops-kernel-import --kernel gbl_by_variable --source %s --ndim 2 -o - --manifest %t.json -- -I%ops_include 2>&1 | FileCheck %s --check-prefix=GBLVAR
 // RUN: ops-kernel-import --kernel with_printf --source %s --ndim 2 -o - --manifest %t.json -- -I%ops_include 2>&1 | FileCheck %s --check-prefix=PRINTF
@@ -31,8 +31,8 @@ double erfcinv_not_in_the_library(double);
 void unknown_call(const ACC<double> &a, ACC<double> &b) { b(0, 0) = erfcinv_not_in_the_library(a(0, 0)); }
 // CALL: unknown_call: not imported: {{.*}}call to unsupported function 'erfcinv_not_in_the_library'
 
-void half_input(const ACC<_Float16> &a, ACC<double> &b) { b(0, 0) = a(0, 0); }
-// HALF: half_input: not imported: f16 not yet supported
+void bf16_input(const ACC<__bf16> &a, ACC<double> &b) { b(0, 0) = a(0, 0); }
+// BF16: bf16_input: not imported: bfloat16 is not supported
 
 void writes_global(const ACC<double> &a, double *out) { out[1] = a(0, 0); }
 // GBLWRITE: writes_global: not imported: {{.*}}write to the global or reduction argument 'out'
