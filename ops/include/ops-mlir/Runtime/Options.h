@@ -33,6 +33,7 @@ struct Options {
   bool dumpData = false;         ///< OPS_JIT_DUMP_DATA: also record the first call of every group (inputs, checksums) for ops-jit-replay
   int runMax = 512;              ///< OPS_JIT_RUN_MAX: most loops compiled and planned together
   bool sync = false;             ///< OPS_JIT_SYNC (device builds)
+  double verifyHalfTol = 1e-2;   ///< OPS_JIT_VERIFY_HALF_TOL: relative tolerance of verify mode for half precision dats
   bool fma = false;              ///< OPS_JIT_FMA: let the CPU code generator fuse multiply-adds (results change in the last bits: verify mode then reports differences)
   std::string printfPolicy = "drop"; ///< OPS_JIT_PRINTF: keep | drop | decline (what to do with printf in kernels)
   std::string gpuBlock = "32,4,1"; ///< OPS_JIT_GPU_BLOCK: thread block (x,y,z) of the generated kernels

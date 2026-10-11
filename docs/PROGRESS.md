@@ -376,3 +376,19 @@ loads the cached object (no lowering, no compile) and produces the same results.
   (the group then ran with OPS). They are now materialised like the ones at the top level (`Transforms/materialize-nested.mlir`).
 - **After:** CloverLeaf 2D (3840^2, 87 steps) on the 16-thread development machine, 8 threads: 149 s -> 50 s; 13623 of 13625 loops claimed, verify clean
   (the two declined loops are the one-off initialisation of `xx`/`yy`).
+- **Fusion planner cost:** the DAG planner asked a graph search (with a freshly allocated visited vector) for every loop and every candidate group; a CloverLeaf 3D
+  flush has ~500 loops between two reductions and "plan passes" was 4 s of a 22 s run. The transitive closure of the group graph is now kept as bit rows and updated
+  when an edge is added (`reaches` is O(1)).
+- **Reductions (found by verify once the loops reached the JIT):** an assign-style reduction (`*r = v`) replaced the value of the OPS handle; OPS adds (INC) or
+  min/max-combines the loop value into the handle, which keeps accumulating when the application never reads the result back (`zl_pos` of CloverLeaf 3D).
+  The JIT combines the same way; verify prints the values of a differing reduction.
+- **`ops-jit-cpu` pass order:** `expand-strided-metadata` ran after `convert-cf-to-llvm`; its greedy canonicalisation merged the two identical successors of an
+  `llvm.cond_br` (a conditional expression that loads from two dats) into a block with memref arguments, which the LLVM dialect cannot have. The group failed to
+  compile and ran with OPS (CloverLeaf 3D `calc_dt_kernel`: 2.7 s against 0.4 s per 20 steps, the only kernel slower than AOT). Moved before the control flow
+  conversion (`Pipelines/conditional-loads.mlir`; `kCodeFormat` 11).
+- **FMA:** `OPS_JIT_FMA=1` lets the code generator fuse multiply-adds (clang does it within an expression by default for the AOT code). No measurable gain on the
+  machines tried, and the last bits of the results change (relative 1e-9 in the second derivatives of TGV, so verify, tolerance 1e-12, reports them): off by default.
+- **Half precision:** constants of type half can be bound (the plans of the HP applications failed on them); verify compares half dats as half (tolerance 1e-2; it
+  compared them as pairs of int32 before); OPS's `half` is `_Float16` under clang (`__FLT16_MIN__`), the host side of the HP applications did not compile.
+- **Result (cluster, 64 threads, 20 steps of the 256^3 case, per kernel, OPS_DIAGS=2 table):** the 38 heaviest kernels of CloverLeaf 3D are within 2% of AOT
+  (`scripts/perf/cpu-kernels.sh`); whole runs: see `performance.md`.

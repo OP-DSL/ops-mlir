@@ -159,7 +159,7 @@ double toleranceFor(const char *type) {
   std::string t = type ? type : "";
   if (t == "double") return 1e-12;
   if (t == "float") return 1e-5;
-  if (t == "half") return 1e-2; // 11 bits of mantissa, and the arithmetic of a fused group is rounded in another order
+  if (t == "half") return options().verifyHalfTol; // 11 bits of mantissa; the AOT code rounds a whole expression once, the JIT every operation
   return 0;
 }
 

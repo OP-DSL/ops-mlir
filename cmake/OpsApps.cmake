@@ -91,6 +91,11 @@ function(_ops_jit_add_verify_test exe_target mode tmp)
   add_test(NAME ${exe_target}_verify
            COMMAND ${CMAKE_COMMAND} "-DCMD=${command}" -DWORKDIR=${tmp} -DCLAIM_MIN=95 -P ${OPSJIT_E2E_DIR}/VerifyTest.cmake)
   set_tests_properties(${exe_target}_verify PROPERTIES LABELS "${labels}" RESOURCE_LOCK "${tmp}")
+  if(exe_target MATCHES "HPSP")
+    # Half storage with single precision arithmetic: clang rounds a whole expression once (and the stored quantities are
+    # differences of nearly equal values), the JIT every operation: verify only catches gross errors (NaN, inf, garbage).
+    set_tests_properties(${exe_target}_verify PROPERTIES ENVIRONMENT "OPS_JIT_VERIFY_HALF_TOL=1.0")
+  endif()
 endfunction()
 
 # Copies the sources of an application to <tmp>, applies PATCH, runs the translator (with --jit or without) and sets

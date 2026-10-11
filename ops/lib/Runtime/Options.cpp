@@ -74,6 +74,13 @@ bool Options::set(const std::string &name, const std::string &value) {
   if (name == "OPS_JIT_RUN_MAX") return parseInt(value, runMax, 1);
   if (name == "OPS_JIT_SYNC") return parseBool(value, sync);
   if (name == "OPS_JIT_FMA") return parseBool(value, fma);
+  if (name == "OPS_JIT_VERIFY_HALF_TOL") {
+    char *end = nullptr;
+    double v = std::strtod(value.c_str(), &end);
+    if (end == value.c_str() || *end || !(v >= 0)) return false;
+    verifyHalfTol = v;
+    return true;
+  }
   if (name == "OPS_JIT_PRINTF") {
     if (value != "keep" && value != "drop" && value != "decline") return false;
     printfPolicy = value;
@@ -121,6 +128,7 @@ Options Options::fromEnvironment() {
                                 "OPS_JIT_RUN_MAX",
                                 "OPS_JIT_SYNC",
                                 "OPS_JIT_FMA",
+                                "OPS_JIT_VERIFY_HALF_TOL",
                                 "OPS_JIT_PRINTF",
                                 "OPS_JIT_GPU_BLOCK",
                                 "OPS_JIT_GPU_ARCH",
