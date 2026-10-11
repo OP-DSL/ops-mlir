@@ -62,9 +62,9 @@ ops_app(laplace2d "${c_apps}/laplace2d_tutorial/step7")
 ops_app(poisson "${c_apps}/poisson")
 ops_app(lazy_triggers "${c_apps}/lazy_triggers")
 ops_app(clover_leaf "${c_apps}/CloverLeaf"
-        INPUT_COPY clover_bm_short.in clover.in NO_SEQ_TEST ODD profile OTHERS start.cpp time_step.cpp build_field.cpp read_input.cpp initialise.cpp advection.cpp)
+        INPUT_COPY clover_bm_short.in clover.in NO_SEQ_TEST AOT_BASELINE ODD profile OTHERS start.cpp time_step.cpp build_field.cpp read_input.cpp initialise.cpp advection.cpp)
 ops_app(clover_leaf_3D "${c_apps}/CloverLeaf_3D"
-        NO_SEQ_TEST ODD profile OTHERS start.cpp time_step.cpp build_field.cpp read_input.cpp initialise.cpp advection.cpp)
+        NO_SEQ_TEST AOT_BASELINE ODD profile OTHERS start.cpp time_step.cpp build_field.cpp read_input.cpp initialise.cpp advection.cpp)
 ops_app(tea_leaf "${c_apps}/TeaLeaf"
         OTHERS build_field.cpp diffuse.cpp initialise.cpp read_input.cpp tea_solve.cpp timestep.cpp)
 # mblock and multiDim use the legacy header (ops_seq.h with per-loop globals xdim0...): OPS itself does not build them
