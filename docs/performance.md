@@ -61,23 +61,28 @@ threads) and 3D at 124.8 s against 39.2 s. Causes, in the order of their weight:
 
 | Case | AOT CUDA [s] | JIT [s] | JIT, no fusion [s] | JIT / AOT |
 |---|---:|---:|---:|---:|
-| CloverLeaf 2D, 3840^2 | 5.88 | 6.46 | 6.57 | 1.10 |
-| CloverLeaf 3D, 256^3 | 7.64 | 8.59 | 8.85 | 1.12 |
-| TGV single, 512^3 | 13.16 | 14.47 | 19.50 | 1.10 (0.74 unfused) |
+| CloverLeaf 2D, 3840^2 | 5.86 | 6.49 | 6.60 | 1.11 |
+| CloverLeaf 3D, 256^3 | 7.64 | 8.19 | 8.53 | 1.07 |
+| TGV single, 512^3 | 13.17 | 13.95 | 19.63 | 1.06 (1.49 unfused) |
 
 * TGV double and single/double do not fit in 40 GB with either code (AOT and JIT both run out of memory at the benchmark size).
 * The thread block (`OPS_JIT_GPU_BLOCK`, default `32,4,1`, the one OPS uses) is the best or tied in a sweep of twelve shapes of 128 to 512 threads
   (`scripts/perf/gpu-blocks.sh`): 2D 6.45 s for every shape, 3D from 8.58 s (default) to 9.19 s, TGV from 14.47 s (default) to 16.17 s.
-* The 10% are host side start-up: for CloverLeaf 3D the executor spends 2.96 s executing (kernel launches and reduction copies) of a 5.6 to 8.5 s
-  run, and about 1 s on the plans (`frontend 0.25 s`, `plan passes 0.20 s`), the cache (`cache io 0.19 s`, loading 90 modules) and `bind 0.09 s`. A persistent
-  plan cache (plans are rebuilt in every process) and module loading in the background are the planned reductions.
-* Per kernel (CloverLeaf 3D, 20 steps, `scripts/perf/gpu-kernels.sh`: OPS's timing table of the AOT code against the JIT without fusion and with
-  `OPS_JIT_SYNC=1`): the sum over the kernels is 0.900 s for AOT and 0.961 s for the JIT (+6.8%). Most kernels are within 1-3%; the exceptions are
-  `accelerate_kernel` (+58%), `advec_mom_kernel1_*_nonvector` (+13-16%), `viscosity_kernel` (+11%), `PdV_kernel_nopredict` (+9%) and `calc_dt_kernel` (+9%).
-  Allowing fused multiply-adds (`OPS_JIT_FMA=1`: the contract flag on the floating point operations, what nvcc does by default) changes nothing: the kernels are
-  memory bound; the difference is in the loads (no `__restrict__`/read-only information on the kernel pointers yet) and in the 64-bit index arithmetic.
+* **Per kernel** (CloverLeaf 3D, 20 steps, `scripts/perf/gpu-kernels.sh`: OPS's timing table of the AOT code against the JIT without fusion and with
+  `OPS_JIT_SYNC=1`): the sum over the kernels is 0.900 s for AOT and 0.925 s for the JIT with `OPS_JIT_SPECIALIZE=shapes` (+2.8%), 0.933 s with `ranges`,
+  0.940 s with none (+4.4%). The first version of the lowering was at 0.961 s (+6.8%): the kernels of ours were not told that the dats do not overlap
+  (`ops-gpu-kernel-attrs`: `noalias` on the dat pointers, what `__restrict__` does in the stock code; `accelerate_kernel` 0.0486 -> 0.0357 s, AOT 0.0307 s).
+  Allowing fused multiply-adds (`OPS_JIT_FMA=1`) changes nothing. What is left is the address arithmetic: the SASS of `accelerate_kernel` has 448-480 instructions
+  against 256 for the stock code, the same floating point instructions (30 DMUL, 20 DFMA, 19 DADD, 22 LDG) and about 200 more 64-bit integer instructions (MLIR
+  indices are 64 bit; nvcc computes with 32-bit `int`). A 32-bit index path in the GPU lowering is the next step.
+* **Host side.** The fixed cost of the JIT is small: a one-step 16^2 run takes 2.38 s with the JIT and 2.25 s with the stock code on the A100 node (CUDA
+  initialisation is most of both; `OPS_JIT=0` on the JIT executable: 2.26 s), i.e. about 0.13 s to load the library, the plans and the cached modules. The rest of the gap is
+  per step and not yet attributed: kernel time explains +0.1 s of the 0.55 s of CloverLeaf 3D (87 steps); the executor's own work is small (`bind 0.09 s`, `claim 0.03 s`
+  per run) so the candidates are the read-back of reductions (a synchronous copy per reduction group) and the launches (9090 fused groups of the 2D run). The persistent plan
+  cache (the plan after the frontend and plan passes, by plan key) removed 0.4 s (3D: 8.59 -> 8.19 s).
 * Correctness: the whole CUDA suite (`ctest -L jit-app -R cuda`: laplace2d, poisson, lazy_triggers, CloverLeaf 2D and 3D, TeaLeaf, lowdim, TGV DP/SP/SPDP/HP
-  and HPSP, with and without MPI) passes on the A100 in verify mode (every group is compared with OPS's stock code).
+  and HPSP, with and without MPI) passes on the A100 in verify mode (every group is compared with OPS's stock code), and CloverLeaf 2D/3D and TeaLeaf pass with two
+  MPI ranks on the two A100s.
 
 ## Compilation cost
 

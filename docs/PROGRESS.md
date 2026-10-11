@@ -392,3 +392,21 @@ loads the cached object (no lowering, no compile) and produces the same results.
   compared them as pairs of int32 before); OPS's `half` is `_Float16` under clang (`__FLT16_MIN__`), the host side of the HP applications did not compile.
 - **Result (cluster, 64 threads, 20 steps of the 256^3 case, per kernel, OPS_DIAGS=2 table):** the 38 heaviest kernels of CloverLeaf 3D are within 2% of AOT
   (`scripts/perf/cpu-kernels.sh`); whole runs: see `performance.md`.
+
+## P4 / P5 / P7: GPU results, half precision, caches, ClangIR
+
+- **GPU (A100, `docs/performance.md`):** the whole CUDA suite is verify-clean (laplace2d, poisson, lazy_triggers, CloverLeaf 2D/3D, TeaLeaf, lowdim, TGV DP/SP/SPDP/HP/HPSP),
+  also with MPI (np=1 on one GPU; np=2 on the two A100s for CloverLeaf 2D/3D and TeaLeaf). Wall time 6-11% above the stock CUDA code (CloverLeaf 2D 6.49 s against 5.86 s, 3D 8.19
+  against 7.64, TGV single 13.95 against 13.17); the per-kernel sum is +2.8% (`OPS_JIT_SPECIALIZE=shapes`) to +4.4%. The V100 node was not used.
+- **GPU kernels:** `ops-gpu-kernel-attrs` marks the dat pointers `noalias` (`accelerate_kernel` 0.0486 -> 0.0357 s; AOT 0.0307 s); `OPS_JIT_FMA` (the `ops-fp-contract` pass) makes no
+  difference on the GPU; thread block sweep: the default `32,4,1` is the best or tied. What is left in the kernels is the 64-bit index arithmetic (SASS of `accelerate_kernel`:
+  448-480 instructions against 256, the same floating point instructions).
+- **`ops-specialize mode=shapes`** was a stub: the lifter records the dat sizes (`ops.shape_values`), the plan and group keys contain them, `convert-ops-to-scf` gives the memrefs static shapes
+  and strides.
+- **Half precision (P7.13):** constants of type half are bound; verify compares half dats as half (`OPS_JIT_VERIFY_HALF_TOL`, 1e-2; the HPSP tests use 1.0 and `OPS_JIT_VERIFY_FLOAT_TOL` 1e-2:
+  the host code rounds a whole expression once, the JIT every operation); OPS's `half` is `_Float16` under clang.
+- **Persistent plan cache:** the module after the plan passes is cached on disk by plan key (CloverLeaf 3D 87 steps, A100: 8.59 -> 8.19 s). It never hit at first: the plan key contained the
+  uninitialised `elem_size` of reduction arguments and the padding bytes of struct constants (a different key in every process); the key now uses the handle type and the bytes the kernel reads.
+- **ClangIR (P5):** `docs/cir-spike.md`: 38 of 62 translation units emit CIR (the 24 failures are the `OPS_ACCn` macros of the pointer-style 3D kernels), 33 operation kinds in 992 kernels,
+  no NYI; recommendation: keep frontend A, B stays an option (a second, CIR-enabled LLVM build and a moving dialect; no coverage gain). No raiser was written.
+- **Docs:** `docs/REVIEW_GUIDE.md` (commits, OPS changes, open items, decisions), `docs/passes.md` (generated), `docs/performance.md`, `docs/baseline.md`.
