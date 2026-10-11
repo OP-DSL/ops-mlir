@@ -3,7 +3,7 @@
 #
 #     scripts/build_apps.sh                 # needs: scripts/build_ops.sh (OPS install), ops-mlir built (ninja opsjit ops-kernel-import)
 #
-# Environment: as scripts/env.sh, plus APPS_BUILD (default $OPSJIT_BUILD_ROOT/OPS-jit-apps), OPSJIT_BUILD, JOBS, OPSJIT_APPS_CUDA=ON|OFF
+# Environment: as scripts/env.sh, plus APPS_CMAKE_ARGS (extra cmake arguments, e.g. -DOPSJIT_APPS=tgv_DP;tgv_SP), APPS_BUILD (default $OPSJIT_BUILD_ROOT/OPS-jit-apps), OPSJIT_BUILD, JOBS, OPSJIT_APPS_CUDA=ON|OFF
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck disable=SC1091
@@ -35,6 +35,6 @@ if [ -n "${HDF5_INSTALL_PATH:-}" ]; then
   wrappers=$OPSJIT_BUILD_ROOT/hdf5-wrappers
   args+=( -DHDF5_ROOT="$HDF5_INSTALL_PATH" -DHDF5_C_COMPILER_EXECUTABLE="$wrappers/h5pcc" -DHDF5_NO_FIND_PACKAGE_CONFIG_FILE=TRUE )
 fi
-cmake "${args[@]}" "$@"
+cmake "${args[@]}" ${APPS_CMAKE_ARGS:-} "$@"
 cmake --build "$BUILD" -j "$JOBS" -- -k 0
 echo "== apps built in $BUILD; run: ctest --test-dir $BUILD -L jit-app"
