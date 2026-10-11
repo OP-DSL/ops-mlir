@@ -230,6 +230,7 @@ Executor::Executor() {
   co.useCache = options().cache;
   co.cacheDir = options().cacheDir;
   co.dumpDir = options().dumpDir;
+  co.jit.fpContract = options().fma;
   compiler_ = std::make_unique<GroupCompiler>(*ctx_, registry_, co);
 }
 

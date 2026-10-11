@@ -73,6 +73,7 @@ bool Options::set(const std::string &name, const std::string &value) {
   if (name == "OPS_JIT_DUMP_DATA") return parseBool(value, dumpData);
   if (name == "OPS_JIT_RUN_MAX") return parseInt(value, runMax, 1);
   if (name == "OPS_JIT_SYNC") return parseBool(value, sync);
+  if (name == "OPS_JIT_FMA") return parseBool(value, fma);
   if (name == "OPS_JIT_PRINTF") {
     if (value != "keep" && value != "drop" && value != "decline") return false;
     printfPolicy = value;
@@ -119,6 +120,7 @@ Options Options::fromEnvironment() {
                                 "OPS_JIT_DUMP_DATA",
                                 "OPS_JIT_RUN_MAX",
                                 "OPS_JIT_SYNC",
+                                "OPS_JIT_FMA",
                                 "OPS_JIT_PRINTF",
                                 "OPS_JIT_GPU_BLOCK",
                                 "OPS_JIT_GPU_ARCH",

@@ -163,12 +163,13 @@ llvm::Expected<std::unique_ptr<JITSession>> JITSession::create(const JITOptions 
   if (!options.features.empty()) jtmb->addFeatures(std::vector<std::string>{options.features});
   jtmb->setCodeGenOptLevel(static_cast<llvm::CodeGenOptLevel>(options.optLevel));
   jtmb->setRelocationModel(llvm::Reloc::PIC_);
+  if (options.fpContract) jtmb->getOptions().AllowFPOpFusion = llvm::FPOpFusion::Fast;
 
   auto tm = jtmb->createTargetMachine();
   if (!tm) return tm.takeError();
   impl.targetMachine = std::move(*tm);
   impl.target = impl.targetMachine->getTargetTriple().str() + " " + impl.targetMachine->getTargetCPU().str() + " " +
-                impl.targetMachine->getTargetFeatureString().str();
+                impl.targetMachine->getTargetFeatureString().str() + (options.fpContract ? " fma=fast" : "");
 
   auto jit = llvm::orc::LLJITBuilder().setJITTargetMachineBuilder(std::move(*jtmb)).create();
   if (!jit) return jit.takeError();
