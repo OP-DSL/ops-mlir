@@ -7,7 +7,7 @@
 // RUN: ops-opt %s -ops-jit-plan="max-loops=2 reorder=false" | FileCheck %s
 // RUN: ops-opt %s -ops-jit-plan="max-loops=2,reorder=false" | FileCheck %s
 
-// BOGUS: unknown option 'bogus' (known: omp, specialize, soa)
+// BOGUS: unknown option 'bogus' (known: omp, specialize, soa, fma)
 // BADBOOL: option 'omp' expects true or false, got 'maybe'
 // BADMODE: option 'specialize' must be none, ranges or shapes, got 'everything'
 // PLACEMENT: option 'placement' must be earliest or latest, got 'middle'

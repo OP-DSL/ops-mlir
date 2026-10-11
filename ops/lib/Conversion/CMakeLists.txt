@@ -2,6 +2,7 @@ add_mlir_library(OPSMLIRConversion
   OpsToSCF.cpp
   MarkNoalias.cpp
   HoistAccumulators.cpp
+  FpContract.cpp
 
   DEPENDS
   OPSMLIRConversionIncGen

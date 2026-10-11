@@ -158,7 +158,7 @@ double relativeDifference(const char *type, const char *a, const char *b, size_t
 double toleranceFor(const char *type) {
   std::string t = type ? type : "";
   if (t == "double") return 1e-12;
-  if (t == "float") return 1e-5;
+  if (t == "float") return options().verifyFloatTol;
   if (t == "half") return options().verifyHalfTol; // 11 bits of mantissa; the AOT code rounds a whole expression once, the JIT every operation
   return 0;
 }
@@ -595,9 +595,11 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
       pipeline = "ops-jit-cuda";
       pipelineOptions = "chip=" + arch + " features=" + ptxFeature() + " block=" + block + " specialize=" + opts.specialize + " soa=" + (soa ? "true" : "false");
       if (!ptxas.empty()) pipelineOptions += " ptxas=" + ptxas;
+      if (opts.fma) pipelineOptions += " fma=true";
     } else {
       pipeline = "ops-jit-cpu";
       pipelineOptions = std::string("omp=") + (opts.omp ? "true" : "false") + " specialize=" + opts.specialize + " soa=" + (soa ? "true" : "false");
+      if (opts.fma) pipelineOptions += " fma=true";
     }
     std::shared_ptr<GroupCode> code = compiler_->compile(canonical.get(), pipeline, pipelineOptions, cerror);
     Plan::Group pg;

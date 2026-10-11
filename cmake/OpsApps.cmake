@@ -94,7 +94,7 @@ function(_ops_jit_add_verify_test exe_target mode tmp)
   if(exe_target MATCHES "HPSP")
     # Half storage with single precision arithmetic: clang rounds a whole expression once (and the stored quantities are
     # differences of nearly equal values), the JIT every operation: verify only catches gross errors (NaN, inf, garbage).
-    set_tests_properties(${exe_target}_verify PROPERTIES ENVIRONMENT "OPS_JIT_VERIFY_HALF_TOL=1.0")
+    set_tests_properties(${exe_target}_verify PROPERTIES ENVIRONMENT "OPS_JIT_VERIFY_HALF_TOL=1.0;OPS_JIT_VERIFY_FLOAT_TOL=1e-2")
   endif()
 endfunction()
 

@@ -66,6 +66,7 @@ same from code, before the first loop):
 | `OPS_JIT_SYNC` | 0 | synchronise after every GPU launch (debugging) |
 | `OPS_JIT_FMA` | 0 | let the CPU code generator fuse multiply-adds (no measurable gain on the machines tried; the last bits of the results change, so `OPS_JIT_VERIFY` reports differences) |
 | `OPS_JIT_VERIFY_HALF_TOL` | 1e-2 | relative tolerance of verify mode for half precision dats (the host code rounds a whole expression once, the JIT every operation) |
+| `OPS_JIT_VERIFY_FLOAT_TOL` | 1e-5 | relative tolerance of verify mode for single precision dats |
 | `CUDA_ROOT` | `$CUDA_INSTALL_PATH` | CUDA toolkit (ptxas, libdevice) used to compile kernels |
 
 Diagnostics:

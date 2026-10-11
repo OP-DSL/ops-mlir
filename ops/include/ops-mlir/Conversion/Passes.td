@@ -69,4 +69,15 @@ def OpsMarkNoalias : Pass<"ops-mark-noalias", "::mlir::ModuleOp"> {
   let dependentDialects = ["::mlir::LLVM::LLVMDialect"];
 }
 
+
+def OpsFpContract : Pass<"ops-fp-contract", "::mlir::ModuleOp"> {
+  let summary = "allow floating point operations to be contracted into fused multiply-adds";
+  let description = [{
+    Sets the `contract` fast-math flag on every floating point `arith` operation, so that the code generator may fuse a
+    multiplication and an addition (what nvcc and clang do by default within an expression). The results then differ from
+    unfused code in the last bits. Run after `convert-ops-to-scf`.
+  }];
+  let dependentDialects = ["::mlir::arith::ArithDialect"];
+}
+
 #endif // OPS_MLIR_CONVERSION_PASSES

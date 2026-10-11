@@ -71,6 +71,7 @@ llvm::Error buildCPU(mlir::OpPassManager &pm, const OptionMap &o) {
   pm.addPass(createConvertOpsToSCF(lower));
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
+  if (o.getBool("fma", false)) pm.addPass(createOpsFpContract());
   // Arithmetic on half precision values is done in single precision (rounded back after every operation): the CPU has
   // no half precision arithmetic, only conversions.
   mlir::arith::ArithEmulateUnsupportedFloatsOptions half;
@@ -121,6 +122,7 @@ llvm::Error buildCUDA(mlir::OpPassManager &pm, const OptionMap &o) {
   pm.addPass(createConvertOpsToSCF(lower));
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
+  if (o.getBool("fma", false)) pm.addPass(createOpsFpContract());
 
   mlir::gpu::GPUToNVVMPipelineOptions nvvm;
   nvvm.cubinChip = o.getString("chip", "sm_80");
@@ -153,7 +155,8 @@ void registerOPSPipelines(PipelineRegistry &registry) {
                 "lower a group to the LLVM dialect for the host CPU",
                 {{"omp", "bool", "parallelise with OpenMP"},
                  {"specialize", "string", "none, ranges or shapes"},
-                 {"soa", "bool", "structure-of-arrays layout of multi-component dats"}},
+                 {"soa", "bool", "structure-of-arrays layout of multi-component dats"},
+                 {"fma", "bool", "allow fused multiply-adds (contract fast-math flags)"}},
                 buildCPU});
   registry.add({"ops-jit-cuda",
                 "lower a group to a CUDA kernel launch (host code in the LLVM dialect, kernel as a fatbin)",
@@ -162,7 +165,8 @@ void registerOPSPipelines(PipelineRegistry &registry) {
                  {"block", "string", "thread block size, e.g. 32x4x1 (x fastest)"},
                  {"ptxas", "string", "options for ptxas"},
                  {"specialize", "string", "none, ranges or shapes"},
-                 {"soa", "bool", "structure-of-arrays layout of multi-component dats"}},
+                 {"soa", "bool", "structure-of-arrays layout of multi-component dats"},
+                 {"fma", "bool", "allow fused multiply-adds (contract fast-math flags)"}},
                 buildCUDA});
 }
 
