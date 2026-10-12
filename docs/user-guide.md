@@ -56,7 +56,8 @@ same from code, before the first loop):
 | `OPS_JIT_CPU` | omp | `seq`: no OpenMP in generated code |
 | `OPS_JIT_FUSION` | 1 | 0: one group per loop |
 | `OPS_JIT_FUSION_MAX` | 8 | most loops in a group |
-| `OPS_JIT_FUSION_REORDER`, `_PLACEMENT`, `_GUARDED` | 1, earliest, 0 | planner options (see `design.md`) |
+| `OPS_JIT_FUSION_REORDER`, `_PLACEMENT` | 1, earliest | planner options (see `design.md`) |
+| `OPS_JIT_FUSION_GUARDED` | 0 | fusing loops of different ranges: not implemented (setting it prints a message and is ignored) |
 | `OPS_JIT_SPECIALIZE` | none | `ranges`, `shapes`: fold loop ranges / dat shapes into the code (one compile per distinct value) |
 | `OPS_JIT_CACHE`, `OPS_JIT_CACHE_DIR` | 1, `~/.cache/opdsl-jit` | persistent cache of compiled code (also `$XDG_CACHE_HOME/opdsl-jit`) |
 | `OPS_JIT_RUN_MAX` | 512 | most loops planned together |

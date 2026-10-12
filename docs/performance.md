@@ -40,7 +40,7 @@ Machines: CPU nodes of the `cpu` partition (euclid: 48 cores; hajos, kemeny: 64 
 | TGV double | 322.7 | 317.5 | 311.4 | 308.4 | 303.3 | 300.0 |
 
 CloverLeaf gets all of its gain from pairs of loops (the loops of a CloverLeaf step are mostly memory-bound sweeps whose temporaries do not survive a pair);
-TGV double keeps gaining up to the largest groups, TGV single loses from 8 loops on. The default (`OPS_JIT_FUSION_MAX=32`) is a compromise; a per-case
+TGV double keeps gaining up to the largest groups (2.7% from 8 to 32), TGV single loses from 8 loops on. The default (`OPS_JIT_FUSION_MAX=8`) is a compromise; a per-case
 choice needs the register-aware cost model of plan item P7.4.
 
 ### What the first cluster run found

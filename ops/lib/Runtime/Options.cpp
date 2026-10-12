@@ -50,7 +50,13 @@ bool Options::set(const std::string &name, const std::string &value) {
     fusionPlacement = value;
     return true;
   }
-  if (name == "OPS_JIT_FUSION_GUARDED") return parseBool(value, fusionGuarded);
+  if (name == "OPS_JIT_FUSION_GUARDED") {
+    bool wanted = false;
+    if (!parseBool(value, wanted)) return false;
+    if (wanted) std::fprintf(stderr, "ops_jit: OPS_JIT_FUSION_GUARDED (fusing loops of different ranges) is not implemented: ignored\n");
+    fusionGuarded = false;
+    return true;
+  }
   if (name == "OPS_JIT_SPECIALIZE") {
     if (value != "none" && value != "ranges" && value != "shapes") return false;
     specialize = value;
