@@ -59,6 +59,9 @@ for replay and tests); `OPS_JIT_FMA`, `OPS_JIT_VERIFY_{FLOAT,HALF}_TOL`; the per
   with OPS's stock code) on: CPU (one process and `mpirun -np 4`), A100 (CUDA), CUDA with MPI (np=1, and np=2 on the two A100s for CloverLeaf 2D/3D and
   TeaLeaf). The suite is `ctest -L jit-app` in the application build trees (`scripts/build_apps.sh`); `docs/PROGRESS.md` has the history. HPSP verify only catches
   gross errors (the host code rounds a half precision expression once, the JIT every operation). **Not run:** the V100 node, CUDA-aware MPI.
+* **Last full run** (cluster, the final commit of `v2`; `ctest -L jit-app`): CPU nodes 58 of 58 application tests (one process and `mpirun -np 4`; default, no fusion, verify, cache)
+  and 10 of 10 TGV tests; A100 38 of 38 and 10 of 10 (CUDA, MPI+CUDA np=1); `OPS_JIT_SPECIALIZE=shapes` and `=ranges` pass the same suites (one parallel-ctest flake of
+  `lowdim_jit_verify`, concurrent HDF5 files, passes alone). `ninja check-ops-mlir-lit` 47, `check-ops-mlir-unit` 12.
 * **Claim rate.** CloverLeaf 2D 13623 of 13625 loop executions, 3D 52568 of 52577, TGV all; with MPI the loops that use 1-D coordinate dats stay with OPS
   (94% in 2D, 97% in 3D at np=2) because OPS exchanges those dats itself.
 * **Performance** (`docs/performance.md`): CPU: CloverLeaf at parity (2D 1.01x, 3D 0.96x of AOT time), TGV 4-10x faster; A100: within 6-10% of AOT
