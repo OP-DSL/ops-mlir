@@ -27,6 +27,8 @@
 #include <chrono>
 #include <map>
 #include <memory>
+#include "ops-mlir/Pipelines/GroupModules.h"
+
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -70,16 +72,18 @@ public:
   bool deviceReady();
 
 private:
-  struct EffectiveRun;
   /// Runs descs[0..n) (all claimed) with the JIT. False: could not (the caller runs them with OPS).
   bool runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int n, const std::vector<const KernelArtifact *> &artifacts);
   std::shared_ptr<Plan> buildPlan(ops_kernel_descriptor **run, int n, const std::vector<std::vector<int>> &ranges,
                                   const std::vector<const KernelArtifact *> &artifacts, const std::string &planKey);
+  /// Runs one compiled group on the current data of its loops (see Executor.cpp).
+  void runGroup(OPS_instance *instance, const Plan &plan, const Plan::Group &group, ops_kernel_descriptor **run,
+                const std::vector<std::vector<int>> &ranges, const std::vector<ops_dat> &slots, bool soa);
+  int64_t stageDeviceReductions(const Plan::Group &group, const std::vector<std::vector<int>> &ranges, std::vector<void *> &buffers,
+                                std::vector<char> &staging);
+  void compileGroups(Plan &plan, std::vector<ops::GroupModule> &groups, std::vector<GroupRecipe> &recipes, ops_kernel_descriptor **run);
   std::string structuralKey(ops_kernel_descriptor **run, int n, const std::vector<std::vector<int>> &ranges,
                             const std::vector<const KernelArtifact *> &artifacts, bool soa);
-  /// OPS_JIT_VERIFY: the group has just run; compare it with the stock OPS code on the same inputs (see Executor.cpp).
-  struct VerifyState;
-
   mlir::DialectRegistry dialects_;
   std::unique_ptr<mlir::MLIRContext> ctx_;
   std::unique_ptr<ArtifactCache> artifacts_;

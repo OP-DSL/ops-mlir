@@ -227,6 +227,120 @@ std::string ptxFeature() {
   return feature;
 }
 
+/// Verify mode: the dats and reduction handles the members of a group write, and their values before the group ran. Each member is
+/// prepared (OPS's bookkeeping before a loop).
+Snapshot prepareGroup(const Plan::Group &g, ops_kernel_descriptor **run, bool verify) {
+  Snapshot snap;
+  if (!verify) {
+    for (int k : g.recipe.members) ops_lazy_prepare(run[k]);
+    return snap;
+  }
+  std::set<ops_dat> seen;
+  for (int k : g.recipe.members)
+    for (int a = 0; a < run[k]->nargs; ++a) {
+      const ops_arg &arg = run[k]->args[a];
+      if (arg.argtype == OPS_ARG_DAT && arg.acc != OPS_READ && seen.insert(arg.dat).second) snap.dats.push_back(arg.dat);
+      if (arg.argtype == OPS_ARG_GBL && arg.acc != OPS_READ) {
+        char *slot = ops_lazy_reduction_slot(run[k], a);
+        snap.slots.push_back({slot, (size_t)arg.dim * elemBytes(elemName(((ops_reduction)arg.data)->type))});
+      }
+    }
+  for (int k : g.recipe.members) ops_lazy_prepare(run[k]);
+  for (ops_dat d : snap.dats) snap.before.push_back(readDat(d, g.device));
+  for (auto &s : snap.slots) snap.slotBefore.push_back(copyBytes(s.first, s.second));
+  return snap;
+}
+
+/// Folds the reductions of a group that has run into the OPS handles of the loops that asked for them. On the device the value is the
+/// combination of the partial values of the warps in the staging copy of the device buffer.
+void combineReductions(const Plan &plan, const Plan::Group &g, ops_kernel_descriptor **run, const Invocation &inv,
+                       const std::vector<char> &staging, int64_t units) {
+  for (size_t r = 0; r < g.recipe.reductionOf.size(); ++r) {
+    int index = g.recipe.reductionOf[r];
+    if (index < 0) continue;
+    const ReductionRef &ref = plan.reductions[index];
+    char *slot = ops_lazy_reduction_slot(run[ref.loop], ref.arg);
+    if (g.device) {
+      // The value is the combination of the partial values of the warps in the staging copy of the device buffer.
+      for (int64_t k = 0; k < units; ++k) {
+        const char *p = &staging[(r * units + k) * 8];
+        if (ref.elem == "f64") {
+          double v;
+          std::memcpy(&v, p, 8);
+          combineInto<double>(slot, v, ref.kind);
+        } else if (ref.elem == "f32") {
+          float v;
+          std::memcpy(&v, p, 4);
+          combineInto<float>(slot, v, ref.kind);
+        } else {
+          int32_t v;
+          std::memcpy(&v, p, 4);
+          combineInto<int32_t>(slot, v, ref.kind);
+        }
+      }
+    } else if (ref.elem == "f64") combineInto<double>(slot, inv.resultAsDouble(r), ref.kind);
+    else if (ref.elem == "f32") combineInto<float>(slot, static_cast<float>(inv.resultAsDouble(r)), ref.kind);
+    else combineInto<int32_t>(slot, static_cast<int32_t>(inv.resultAsInt(r)), ref.kind);
+  }
+}
+
+/// OPS_JIT_VERIFY: the group has just run. Read its results, go back to the state before it, run the stock OPS code for each member in
+/// order and compare. True when they differ.
+bool verifyGroup(OPS_instance *instance, Snapshot &snap, const Plan::Group &g, ops_kernel_descriptor **run) {
+  // Back to the state before the group, then the stock code for each member in order.
+  for (size_t i = 0; i < snap.dats.size(); ++i) writeDat(snap.dats[i], snap.before[i], g.device);
+  for (size_t i = 0; i < snap.slots.size(); ++i) std::memcpy(snap.slots[i].first, snap.slotBefore[i].data(), snap.slotBefore[i].size());
+  for (int k : g.recipe.members) ops_lazy_execute_default(instance, &run[k], 1);
+  std::string names;
+  for (int k : g.recipe.members) names += std::string(names.empty() ? "" : ", ") + run[k]->name;
+  bool bad = false;
+  for (size_t i = 0; i < snap.dats.size(); ++i) {
+    size_t differing = 0;
+    std::vector<char> aot = readDat(snap.dats[i], g.device);
+    double rel = relativeDifference(snap.dats[i]->type, snap.jit[i].data(), aot.data(), snap.jit[i].size(), differing);
+    if (rel > toleranceFor(snap.dats[i]->type)) {
+      bad = true;
+      std::fprintf(stderr, "ops_jit verify: [%s] dat %s: %zu elements differ, relative difference %.3g (tolerance %.1g)\n", names.c_str(),
+                   snap.dats[i]->name ? snap.dats[i]->name : "?", differing, rel, toleranceFor(snap.dats[i]->type));
+    }
+  }
+  for (size_t i = 0; i < snap.slots.size(); ++i) {
+    // Reduction values: compared in relative terms; the handles are doubles, floats or ints.
+    size_t bytes = snap.slotJit[i].size();
+    size_t differing = 0;
+    const char *type = bytes == 8 ? "double" : bytes == 4 ? "float" : "int";
+    double rel = relativeDifference(type, snap.slotJit[i].data(), snap.slots[i].first, bytes, differing);
+    if (rel > std::max(toleranceFor(type), 1e-9)) {
+      bad = true;
+      auto asDouble = [&](const char *p) {
+        if (bytes == 8) { double v; std::memcpy(&v, p, 8); return v; }
+        if (bytes == 4 && type[0] == 'f') { float v; std::memcpy(&v, p, 4); return double(v); }
+        int v; std::memcpy(&v, p, 4); return double(v);
+      };
+      std::fprintf(stderr, "ops_jit verify: [%s] reduction %zu differs, relative difference %.3g (before %.17g, JIT %.17g, OPS %.17g)\n",
+                   names.c_str(), i, rel, asDouble(snap.slotBefore[i].data()), asDouble(snap.slotJit[i].data()), asDouble(snap.slots[i].first));
+    }
+  }
+  return bad;
+}
+
+/// Writes the module after the plan passes to the persistent cache (best effort; `explain` says why not).
+void storePlanModule(opdsl::PersistentCache &cache, const std::string &diskKey, const std::string &planKey, ModuleOp module, bool explain) {
+  llvm::SmallString<0> bytes;
+  llvm::raw_svector_ostream os(bytes);
+  if (succeeded(writeBytecodeToFile(module, os))) {
+    if (llvm::Error e = cache.store(diskKey, "plan", std::string(bytes.begin(), bytes.end()))) {
+      if (explain) std::fprintf(stderr, "ops_jit: plan %.12s not stored: %s\n", planKey.c_str(), errorText(std::move(e)).c_str());
+      else llvm::consumeError(std::move(e));
+    } else if (explain) {
+      std::fprintf(stderr, "ops_jit: plan %.12s stored (%zu bytes)\n", planKey.c_str(), bytes.size());
+    }
+  } else if (explain) {
+    std::fprintf(stderr, "ops_jit: plan %.12s: the module cannot be written as bytecode\n", planKey.c_str());
+  }
+}
+
+
 } // namespace
 
 Executor::Executor() {
@@ -405,161 +519,99 @@ bool Executor::runJit(OPS_instance *instance, ops_kernel_descriptor **descs, int
   std::vector<ops_dat> slots = datSlots(run.data(), m);
   for (Plan::Group &g : plan->groups) {
     if (!g.code) {
-      // Not compiled: the loops of the group run with OPS's code, in order.
+      // Not compiled: the loops of the group run with OPS's code, in order. This is the fail-safe: a loop whose kernel the frontend
+      // could not capture, a group the pipeline could not lower and a run the planner declined all end up here, and the results are
+      // those of OPS (see OPS_JIT_EXPLAIN for the reason).
       for (int k : g.recipe.members) ops_lazy_execute_default(instance, &run[k], 1);
       continue;
     }
-    Snapshot snap;
-    if (opts.verify) {
-      std::set<ops_dat> seen;
-      for (int k : g.recipe.members)
-        for (int a = 0; a < run[k]->nargs; ++a) {
-          const ops_arg &arg = run[k]->args[a];
-          if (arg.argtype == OPS_ARG_DAT && arg.acc != OPS_READ && seen.insert(arg.dat).second) snap.dats.push_back(arg.dat);
-          if (arg.argtype == OPS_ARG_GBL && arg.acc != OPS_READ) {
-            char *slot = ops_lazy_reduction_slot(run[k], a);
-            snap.slots.push_back({slot, (size_t)arg.dim * elemBytes(elemName(((ops_reduction)arg.data)->type))});
-          }
-        }
-      for (int k : g.recipe.members) ops_lazy_prepare(run[k]);
-      for (ops_dat d : snap.dats) snap.before.push_back(readDat(d, g.device));
-      for (auto &s : snap.slots) snap.slotBefore.push_back(copyBytes(s.first, s.second));
-    } else {
-      for (int k : g.recipe.members) ops_lazy_prepare(run[k]);
-    }
-
-    // Device groups return their reductions through device buffers (8 bytes each), initialised with the neutral element.
-    std::vector<void *> reductionBuffers;
-    std::vector<char> staging;
-    int64_t units = 0;
-    if (g.device) {
-      const size_t count = g.recipe.reductionOf.size();
-      int64_t extent[3] = {1, 1, 1};
-      for (int d = 0; d < g.recipe.rank; ++d) {
-        const ChainArg &lo = g.recipe.range[2 * d], &hi = g.recipe.range[2 * d + 1];
-        extent[d] = ranges[hi.loop][2 * hi.dim + 1] - ranges[lo.loop][2 * lo.dim];
-      }
-      units = gpuReductionUnits(gpuBlockFor(opts.gpuBlock, g.recipe.rank), extent, g.recipe.rank);
-      staging.assign(std::max<size_t>(count, 1) * units * 8, 0);
-      char *base = static_cast<char *>(deviceScratch(staging.size()));
-      for (size_t r = 0; r < count; ++r) reductionBuffers.push_back(base + r * units * 8);
-    }
-
-    Invocation inv;
-    std::string error;
-    auto tb = Clock::now();
-    if (!inv.bind(g.recipe, run.data(), ranges, slots, soa, error, g.device ? &reductionBuffers : nullptr, units)) {
-      std::fprintf(stderr, "ops_jit: binding failed: %s\n", error.c_str());
-      std::abort(); // loops of the run may already have executed: no way back
-    }
-    stats_.tBind += since(tb);
-    if (opts.trace) {
-      std::fprintf(stderr, "ops_jit: running %s:", g.code->entry.c_str());
-      for (int k : g.recipe.members) std::fprintf(stderr, " %s", run[k]->name);
-      std::fprintf(stderr, "\n");
-    }
-    std::unique_ptr<CallRecorder> recorder;
-    if (opts.dumpData && !opts.dumpDir.empty() && dumpedGroups_.insert(g.code->entry).second) {
-      std::vector<std::string> elems;
-      for (int slot : g.recipe.datSlots) elems.push_back(elemName(slots[slot]->type ? slots[slot]->type : ""));
-      recorder = std::make_unique<CallRecorder>(opts.dumpDir, g.code->entry, g.code->pipeline, g.code->pipelineOptions, inv.args(), elems);
-    }
-    auto t0 = Clock::now();
-    inv.call(g.code->fn);
-    if (g.device && !reductionBuffers.empty()) {
-      // The copy waits for the kernel (default stream) and for the host to have the values.
-      mgpuMemcpy(staging.data(), reductionBuffers.front(), staging.size(), nullptr);
-    }
-    double seconds = since(t0);
-    if (opts.trace) std::fprintf(stderr, "ops_jit:   %.6f s\n", seconds);
-    stats_.tExecute += seconds;
-    stats_.groupsExecuted++;
-    if (recorder) {
-      std::string rerror;
-      if (!recorder->finish(rerror)) std::fprintf(stderr, "ops_jit: cannot record %s: %s\n", g.code->entry.c_str(), rerror.c_str());
-    }
-
-    for (size_t r = 0; r < g.recipe.reductionOf.size(); ++r) {
-      int index = g.recipe.reductionOf[r];
-      if (index < 0) continue;
-      const ReductionRef &ref = plan->reductions[index];
-      char *slot = ops_lazy_reduction_slot(run[ref.loop], ref.arg);
-      if (g.device) {
-        // The value is the combination of the partial values of the warps in the staging copy of the device buffer.
-        for (int64_t k = 0; k < units; ++k) {
-          const char *p = &staging[(r * units + k) * 8];
-          if (ref.elem == "f64") {
-            double v;
-            std::memcpy(&v, p, 8);
-            combineInto<double>(slot, v, ref.kind);
-          } else if (ref.elem == "f32") {
-            float v;
-            std::memcpy(&v, p, 4);
-            combineInto<float>(slot, v, ref.kind);
-          } else {
-            int32_t v;
-            std::memcpy(&v, p, 4);
-            combineInto<int32_t>(slot, v, ref.kind);
-          }
-        }
-      } else if (ref.elem == "f64") combineInto<double>(slot, inv.resultAsDouble(r), ref.kind);
-      else if (ref.elem == "f32") combineInto<float>(slot, static_cast<float>(inv.resultAsDouble(r)), ref.kind);
-      else combineInto<int32_t>(slot, static_cast<int32_t>(inv.resultAsInt(r)), ref.kind);
-    }
-
-    const double share = seconds / std::max<size_t>(1, g.recipe.members.size());
-    for (int k : g.recipe.members) {
-      ops_lazy_finish(run[k]);
-      if (instance->OPS_diags > 1) {
-        std::vector<int> local = ranges[k];
-        local.resize(2 * OPS_MAX_DIM, 0);
-        ops_lazy_account(run[k], share, ops_lazy_transfer_bytes(run[k], local.data()));
-      }
-    }
-
-    if (opts.verify) {
-      for (ops_dat d : snap.dats) snap.jit.push_back(readDat(d, g.device));
-      for (auto &s : snap.slots) snap.slotJit.push_back(copyBytes(s.first, s.second));
-      // Back to the state before the group, then the stock code for each member in order.
-      for (size_t i = 0; i < snap.dats.size(); ++i) writeDat(snap.dats[i], snap.before[i], g.device);
-      for (size_t i = 0; i < snap.slots.size(); ++i) std::memcpy(snap.slots[i].first, snap.slotBefore[i].data(), snap.slotBefore[i].size());
-      for (int k : g.recipe.members) ops_lazy_execute_default(instance, &run[k], 1);
-      stats_.verifyGroups++;
-      std::string names;
-      for (int k : g.recipe.members) names += std::string(names.empty() ? "" : ", ") + run[k]->name;
-      bool bad = false;
-      for (size_t i = 0; i < snap.dats.size(); ++i) {
-        size_t differing = 0;
-        std::vector<char> aot = readDat(snap.dats[i], g.device);
-        double rel = relativeDifference(snap.dats[i]->type, snap.jit[i].data(), aot.data(), snap.jit[i].size(), differing);
-        if (rel > toleranceFor(snap.dats[i]->type)) {
-          bad = true;
-          std::fprintf(stderr, "ops_jit verify: [%s] dat %s: %zu elements differ, relative difference %.3g (tolerance %.1g)\n", names.c_str(),
-                       snap.dats[i]->name ? snap.dats[i]->name : "?", differing, rel, toleranceFor(snap.dats[i]->type));
-        }
-      }
-      for (size_t i = 0; i < snap.slots.size(); ++i) {
-        // Reduction values: compared in relative terms; the handles are doubles, floats or ints.
-        size_t bytes = snap.slotJit[i].size();
-        size_t differing = 0;
-        const char *type = bytes == 8 ? "double" : bytes == 4 ? "float" : "int";
-        double rel = relativeDifference(type, snap.slotJit[i].data(), snap.slots[i].first, bytes, differing);
-        if (rel > std::max(toleranceFor(type), 1e-9)) {
-          bad = true;
-          auto asDouble = [&](const char *p) {
-            if (bytes == 8) { double v; std::memcpy(&v, p, 8); return v; }
-            if (bytes == 4 && type[0] == 'f') { float v; std::memcpy(&v, p, 4); return double(v); }
-            int v; std::memcpy(&v, p, 4); return double(v);
-          };
-          std::fprintf(stderr, "ops_jit verify: [%s] reduction %zu differs, relative difference %.3g (before %.17g, JIT %.17g, OPS %.17g)\n",
-                       names.c_str(), i, rel, asDouble(snap.slotBefore[i].data()), asDouble(snap.slotJit[i].data()), asDouble(snap.slots[i].first));
-        }
-      }
-      if (bad) stats_.verifyMismatches++;
-    }
+    runGroup(instance, *plan, g, run.data(), ranges, slots, soa);
   }
   return true;
 }
+
+/// Device groups return their reductions through device buffers (8 bytes each per warp), initialised with the neutral element:
+/// `buffers` are the device addresses, `staging` the host copy. Returns the number of partial values per reduction.
+int64_t Executor::stageDeviceReductions(const Plan::Group &g, const std::vector<std::vector<int>> &ranges, std::vector<void *> &buffers,
+                                        std::vector<char> &staging) {
+  const size_t count = g.recipe.reductionOf.size();
+  int64_t extent[3] = {1, 1, 1};
+  for (int d = 0; d < g.recipe.rank; ++d) {
+    const ChainArg &lo = g.recipe.range[2 * d], &hi = g.recipe.range[2 * d + 1];
+    extent[d] = ranges[hi.loop][2 * hi.dim + 1] - ranges[lo.loop][2 * lo.dim];
+  }
+  const int64_t units = gpuReductionUnits(gpuBlockFor(options().gpuBlock, g.recipe.rank), extent, g.recipe.rank);
+  staging.assign(std::max<size_t>(count, 1) * units * 8, 0);
+  char *base = static_cast<char *>(deviceScratch(staging.size()));
+  for (size_t r = 0; r < count; ++r) buffers.push_back(base + r * units * 8);
+  return units;
+}
+
+/// Runs one compiled group on the current data of its loops: prepare, bind, call, fold the reductions into the OPS handles, finish
+/// the loops (and, in verify mode, compare with the stock code).
+void Executor::runGroup(OPS_instance *instance, const Plan &plan, const Plan::Group &g, ops_kernel_descriptor **run,
+                        const std::vector<std::vector<int>> &ranges, const std::vector<ops_dat> &slots, bool soa) {
+  const Options &opts = options();
+  Snapshot snap = prepareGroup(g, run, opts.verify);
+
+  std::vector<void *> reductionBuffers;
+  std::vector<char> staging;
+  const int64_t units = g.device ? stageDeviceReductions(g, ranges, reductionBuffers, staging) : 0;
+
+  Invocation inv;
+  std::string error;
+  auto tb = Clock::now();
+  if (!inv.bind(g.recipe, run, ranges, slots, soa, error, g.device ? &reductionBuffers : nullptr, units)) {
+    std::fprintf(stderr, "ops_jit: binding failed: %s\n", error.c_str());
+    std::abort(); // loops of the run may already have executed: no way back
+  }
+  stats_.tBind += since(tb);
+  if (opts.trace) {
+    std::fprintf(stderr, "ops_jit: running %s:", g.code->entry.c_str());
+    for (int k : g.recipe.members) std::fprintf(stderr, " %s", run[k]->name);
+    std::fprintf(stderr, "\n");
+  }
+  std::unique_ptr<CallRecorder> recorder;
+  if (opts.dumpData && !opts.dumpDir.empty() && dumpedGroups_.insert(g.code->entry).second) {
+    std::vector<std::string> elems;
+    for (int slot : g.recipe.datSlots) elems.push_back(elemName(slots[slot]->type ? slots[slot]->type : ""));
+    recorder = std::make_unique<CallRecorder>(opts.dumpDir, g.code->entry, g.code->pipeline, g.code->pipelineOptions, inv.args(), elems);
+  }
+  auto t0 = Clock::now();
+  inv.call(g.code->fn);
+  if (g.device && !reductionBuffers.empty()) {
+    // The copy waits for the kernel (default stream) and for the host to have the values.
+    mgpuMemcpy(staging.data(), reductionBuffers.front(), staging.size(), nullptr);
+  }
+  double seconds = since(t0);
+  if (opts.trace) std::fprintf(stderr, "ops_jit:   %.6f s\n", seconds);
+  stats_.tExecute += seconds;
+  stats_.groupsExecuted++;
+  if (recorder) {
+    std::string rerror;
+    if (!recorder->finish(rerror)) std::fprintf(stderr, "ops_jit: cannot record %s: %s\n", g.code->entry.c_str(), rerror.c_str());
+  }
+
+  combineReductions(plan, g, run, inv, staging, units);
+
+  const double share = seconds / std::max<size_t>(1, g.recipe.members.size());
+  for (int k : g.recipe.members) {
+    ops_lazy_finish(run[k]);
+    if (instance->OPS_diags > 1) {
+      std::vector<int> local = ranges[k];
+      local.resize(2 * OPS_MAX_DIM, 0);
+      ops_lazy_account(run[k], share, ops_lazy_transfer_bytes(run[k], local.data()));
+    }
+  }
+
+  if (opts.verify) {
+    for (ops_dat d : snap.dats) snap.jit.push_back(readDat(d, g.device));
+    for (auto &s : snap.slots) snap.slotJit.push_back(copyBytes(s.first, s.second));
+    stats_.verifyGroups++;
+    if (verifyGroup(instance, snap, g, run)) stats_.verifyMismatches++;
+  }
+}
+
 
 std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, const std::vector<std::vector<int>> &ranges,
                                           const std::vector<const KernelArtifact *> &artifacts, const std::string &planKey) {
@@ -626,20 +678,7 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
       if (llvm::Error e = registry_.build("ops-jit-plan", planOptions, pm)) return fail(errorText(std::move(e)));
       if (failed(pm.run(*lifted.module))) return fail("ops-jit-plan failed: " + diagnostics.text);
     }
-    if (planCache_) {
-      llvm::SmallString<0> bytes;
-      llvm::raw_svector_ostream os(bytes);
-      if (succeeded(writeBytecodeToFile(*lifted.module, os))) {
-        if (llvm::Error e = planCache_->store(diskKey, "plan", std::string(bytes.begin(), bytes.end()))) {
-          if (opts.explain) std::fprintf(stderr, "ops_jit: plan %.12s not stored: %s\n", planKey.c_str(), errorText(std::move(e)).c_str());
-          else llvm::consumeError(std::move(e));
-        } else if (opts.explain) {
-          std::fprintf(stderr, "ops_jit: plan %.12s stored (%zu bytes)\n", planKey.c_str(), bytes.size());
-        }
-      } else if (opts.explain) {
-        std::fprintf(stderr, "ops_jit: plan %.12s: the module cannot be written as bytecode\n", planKey.c_str());
-      }
-    }
+    if (planCache_) storePlanModule(*planCache_, diskKey, planKey, *lifted.module, opts.explain);
   }
 
   dumpModule("plan_" + planKey.substr(0, 16) + ".mlir", *lifted.module);
@@ -647,6 +686,23 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
   std::vector<GroupRecipe> recipes;
   if (!buildRecipes(lifted, *lifted.module, recipes, error)) return fail(error);
   if (groups.size() != recipes.size()) return fail("internal: groups and recipes disagree");
+  compileGroups(*plan, groups, recipes, run);
+  plan->reductions = lifted.reductions;
+
+  if (opts.plan) {
+    std::fprintf(stderr, "ops_jit: plan for %d loops: %zu groups\n", n, plan->groups.size());
+    for (size_t g = 0; g < plan->groups.size(); ++g) {
+      std::fprintf(stderr, "  group %zu [%s]:", g, plan->groups[g].code ? plan->groups[g].code->entry.c_str() : "OPS");
+      for (int k : plan->groups[g].recipe.members) std::fprintf(stderr, " %s", run[k]->name);
+      std::fprintf(stderr, "\n");
+    }
+  }
+  return plan;
+}
+
+/// Compiles each group of the planned module (memory cache, disk cache, or the pipeline); a group that cannot be compiled runs with OPS.
+void Executor::compileGroups(Plan &plan, std::vector<GroupModule> &groups, std::vector<GroupRecipe> &recipes, ops_kernel_descriptor **run) {
+  const Options &opts = options();
   const bool soa = ops_lazy_soa(run[0]->block->instance) != 0;
   for (size_t g = 0; g < groups.size(); ++g) {
     OwningOpRef<ModuleOp> canonical = canonicalGroup(groups[g].module.get(), opts.specialize != "none");
@@ -683,20 +739,10 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
       }
     }
     pg.code = std::move(code);
-    plan->groups.push_back(std::move(pg));
+    plan.groups.push_back(std::move(pg));
   }
-  plan->reductions = lifted.reductions;
-
-  if (opts.plan) {
-    std::fprintf(stderr, "ops_jit: plan for %d loops: %zu groups\n", n, plan->groups.size());
-    for (size_t g = 0; g < plan->groups.size(); ++g) {
-      std::fprintf(stderr, "  group %zu [%s]:", g, plan->groups[g].code ? plan->groups[g].code->entry.c_str() : "OPS");
-      for (int k : plan->groups[g].recipe.members) std::fprintf(stderr, " %s", run[k]->name);
-      std::fprintf(stderr, "\n");
-    }
-  }
-  return plan;
 }
+
 
 void Executor::printStats() const {
   const Stats &s = stats_;
