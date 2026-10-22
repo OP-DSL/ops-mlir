@@ -19,6 +19,7 @@
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/SCFToOpenMP/SCFToOpenMP.h"
+#include "mlir/Dialect/Affine/Transforms/Passes.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/GPU/Pipelines/Passes.h"
@@ -29,8 +30,10 @@
 #include "mlir/Transforms/Passes.h"
 
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <mutex>
 
 namespace ops_mlir::ops {
 
@@ -67,6 +70,25 @@ llvm::Error buildPlan(mlir::OpPassManager &pm, const OptionMap &o) {
   return llvm::Error::success();
 }
 
+/// The affine stage of the CPU pipeline: the passes the user asked for (a textual pass pipeline, written with `+` for `,` and `;`
+/// for a blank because the option syntax separates options with those: `func.func(affine-loop-tile{tile-sizes=32+32})`), then
+/// lower-affine back to scf. The passes of MLIR's affine dialect are registered here; a pass of another origin has to be linked
+/// into this library and registered with MLIR's pass registry before the pipeline is built.
+llvm::Error addAffineStage(mlir::OpPassManager &pm, std::string passes) {
+  if (!passes.empty()) {
+    static std::once_flag registered;
+    std::call_once(registered, [] { mlir::affine::registerAffinePasses(); });
+    std::replace(passes.begin(), passes.end(), '+', ',');
+    std::replace(passes.begin(), passes.end(), ';', ' ');
+    std::string error;
+    llvm::raw_string_ostream os(error);
+    if (mlir::failed(mlir::parsePassPipeline(passes, pm, os))) return pipelineError("option 'affine-passes': " + error);
+  }
+  pm.addPass(mlir::createLowerAffinePass());
+  pm.addPass(mlir::createCanonicalizerPass());
+  return llvm::Error::success();
+}
+
 llvm::Error buildCPU(mlir::OpPassManager &pm, const OptionMap &o) {
   OpsSpecializeOptions specialize;
   specialize.mode = o.getString("specialize", "none");
@@ -74,12 +96,20 @@ llvm::Error buildCPU(mlir::OpPassManager &pm, const OptionMap &o) {
     return pipelineError("option 'specialize' must be none, ranges or shapes, got '" + specialize.mode + "'");
   ConvertOpsToSCFOptions lower;
   lower.soa = o.getBool("soa", false);
+  lower.loopStyle = o.getString("loops", "scf");
+  if (lower.loopStyle != "scf" && lower.loopStyle != "affine")
+    return pipelineError("option 'loops' must be scf or affine, got '" + lower.loopStyle + "'");
   bool omp = o.getBool("omp", true);
+  std::string affinePasses = o.getString("affine-passes", "");
+  if (!affinePasses.empty() && lower.loopStyle != "affine") return pipelineError("option 'affine-passes' needs loops=affine");
 
   pm.addPass(createOpsSpecialize(specialize));
   pm.addPass(createConvertOpsToSCF(lower));
   pm.addPass(mlir::createCanonicalizerPass());
   pm.addPass(mlir::createCSEPass());
+  if (lower.loopStyle == "affine") {
+    if (llvm::Error e = addAffineStage(pm, affinePasses)) return e;
+  }
   if (o.getBool("fma", false)) pm.addPass(createOpsFpContract());
   // Arithmetic on half precision values is done in single precision (rounded back after every operation): the CPU has
   // no half precision arithmetic, only conversions.
@@ -208,7 +238,9 @@ void registerOPSPipelines(PipelineRegistry &registry) {
                 {{"omp", "bool", "parallelise with OpenMP"},
                  {"specialize", "string", "none, ranges or shapes"},
                  {"soa", "bool", "structure-of-arrays layout of multi-component dats"},
-                 {"fma", "bool", "allow fused multiply-adds (contract fast-math flags)"}},
+                 {"fma", "bool", "allow fused multiply-adds (contract fast-math flags)"},
+                 {"loops", "string", "scf (default) or affine: the loops and accesses of the group are affine ops until lower-affine"},
+                 {"affine-passes", "string", "with loops=affine: a pass pipeline run on the affine form (+ for comma, ; for blank)"}},
                 buildCPU});
   registry.add({"ops-jit-cuda",
                 "lower a group to a CUDA kernel launch (host code in the LLVM dialect, kernel as a fatbin)",

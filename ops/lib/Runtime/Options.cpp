@@ -80,6 +80,15 @@ bool Options::set(const std::string &name, const std::string &value) {
   if (name == "OPS_JIT_RUN_MAX") return parseInt(value, runMax, 1);
   if (name == "OPS_JIT_SYNC") return parseBool(value, sync);
   if (name == "OPS_JIT_FMA") return parseBool(value, fma);
+  if (name == "OPS_JIT_LOOPS") {
+    if (value != "scf" && value != "affine") return false;
+    loops = value;
+    return true;
+  }
+  if (name == "OPS_JIT_AFFINE_PASSES") {
+    affinePasses = value;
+    return true;
+  }
   if (name == "OPS_JIT_VERIFY_FLOAT_TOL") {
     char *end = nullptr;
     double v = std::strtod(value.c_str(), &end);
@@ -141,6 +150,8 @@ Options Options::fromEnvironment() {
                                 "OPS_JIT_RUN_MAX",
                                 "OPS_JIT_SYNC",
                                 "OPS_JIT_FMA",
+                                "OPS_JIT_LOOPS",
+                                "OPS_JIT_AFFINE_PASSES",
                                 "OPS_JIT_VERIFY_HALF_TOL",
                                 "OPS_JIT_VERIFY_FLOAT_TOL",
                                 "OPS_JIT_PRINTF",

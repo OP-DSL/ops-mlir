@@ -1,6 +1,7 @@
 #include "ops-mlir/Conversion/Passes.h"
 #include "ops-mlir/Dialect/OPS/IR/OPSOps.h"
 
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -108,6 +109,7 @@ public:
     bool soa;
     std::string target; // cpu or gpu
     std::string block;  // gpu: threads per dimension, x,y,z
+    bool affine;        // cpu: affine.parallel / affine.for and affine accesses (loops without reductions)
   };
 
   GroupLowering(ChainOp chain, ModuleOp module, ParLoopOp loop, Config config, unsigned &formatCounter)
@@ -159,6 +161,8 @@ private:
   Block *body = nullptr;
   Operation *walkRoot = nullptr;
   scf::ParallelOp parallel;
+  affine::AffineParallelOp affineParallel;
+  bool useAffine = false;
   Value innerIv;
   SmallVector<Value, 3> gpuIvs;
   Operation *gpuActive = nullptr; // the scf.if that masks the threads outside the range
@@ -290,8 +294,35 @@ private:
   LogicalResult buildLoopShell() {
     innerLoop = !gpu && rank > 1;
     if (gpu) return buildGpuShell();
-    buildCpuShell();
+    // A reduction is a different construct in affine.parallel (reductions with results) and the accumulators of
+    // ops-hoist-accumulators belong to scf.parallel / omp.parallel: loops with reductions keep the scf form.
+    useAffine = config.affine && loop->getNumResults() == 0;
+    if (config.affine) func->setAttr("ops.loops", StringAttr::get(ctx, useAffine ? "affine" : "scf"));
+    if (useAffine) buildAffineCpuShell();
+    else buildCpuShell();
     return success();
+  }
+
+  /// The bound of an affine loop that is a single value: a function argument or a constant, both symbols.
+  AffineMap symbolBound() { return AffineMap::get(/*dimCount=*/0, /*symbolCount=*/1, getAffineSymbolExpr(0, ctx)); }
+
+  /// The shell of buildCpuShell with affine.parallel (z, y) and, in openInnerLoop, an affine.for (x).
+  void buildAffineCpuShell() {
+    SmallVector<AffineMap> lbMaps, ubMaps;
+    SmallVector<Value> lbOperands, ubOperands;
+    SmallVector<int64_t> steps;
+    for (int d = rank - 1; d >= (innerLoop ? 1 : 0); --d) { // outermost (z) first
+      lbMaps.push_back(symbolBound());
+      lbOperands.push_back(rangeValue(2 * d));
+      ubMaps.push_back(symbolBound());
+      ubOperands.push_back(rangeValue(2 * d + 1));
+      steps.push_back(1);
+    }
+    affineParallel = affine::AffineParallelOp::create(b, loc, TypeRange{}, ArrayRef<arith::AtomicRMWKind>{}, lbMaps, lbOperands, ubMaps,
+                                                      ubOperands, steps);
+    body = affineParallel.getBody();
+    walkRoot = affineParallel;
+    b.setInsertionPointToStart(body);
   }
 
   /// The outer dimensions (z, y) run in parallel; x, the contiguous one, is a sequential loop inside, which the
@@ -409,6 +440,12 @@ private:
 
   void openInnerLoop() {
     if (!innerLoop) return;
+    if (useAffine) {
+      auto inner = affine::AffineForOp::create(b, loc, ValueRange{rangeValue(0)}, symbolBound(), ValueRange{rangeValue(1)}, symbolBound());
+      innerIv = inner.getInductionVar();
+      b.setInsertionPointToStart(inner.getBody());
+      return;
+    }
     auto inner = scf::ForOp::create(b, loc, rangeValue(0), rangeValue(1), one);
     innerIv = inner.getInductionVar();
     b.setInsertionPointToStart(inner.getBody());
@@ -444,9 +481,32 @@ private:
     return idx;
   }
 
+  /// The access at constant offsets as an affine map of (the coordinates; the shifts): per memory dimension
+  /// shift_d + i_d (unless the stencil stride along d is 0) + offset_d, the component last.
+  std::pair<AffineMap, SmallVector<Value>> affineAccess(const Accessor &a, ArrayRef<int64_t> offsets, int64_t comp) {
+    SmallVector<Value> operands;
+    for (unsigned d = 0; d < rank; ++d) operands.push_back(iv(d));
+    for (unsigned d = 0; d < rank; ++d) operands.push_back(entry->getArgument(shiftBase + a.slot * rank + d));
+    SmallVector<AffineExpr> exprs(rank + (a.ncomp > 1 ? 1 : 0));
+    for (unsigned d = 0; d < rank; ++d) {
+      AffineExpr e = getAffineSymbolExpr(d, ctx);
+      if (a.strides[d] != 0) e = e + getAffineDimExpr(d, ctx);
+      if (!offsets.empty() && offsets[d] != 0) e = e + offsets[d];
+      exprs[rank - 1 - d] = e;
+    }
+    if (a.ncomp > 1) exprs[rank] = getAffineConstantExpr(comp, ctx);
+    return {AffineMap::get(rank, rank, exprs, ctx), operands};
+  }
+
   LogicalResult lowerRead(OpBuilder &rb, ReadOp read) {
     const Accessor *a = accessorOf(read.getAcc());
     if (!a) return read.emitError("access through a value that is not an accessor of the loop");
+    if (useAffine) {
+      auto [map, operands] = affineAccess(*a, read.getOffsets(), read.getComp());
+      auto load = affine::AffineLoadOp::create(rb, read.getLoc(), a->memref, map, operands);
+      read.getResult().replaceAllUsesWith(load);
+      return success();
+    }
     auto load = memref::LoadOp::create(rb, read.getLoc(), a->memref, memrefIndices(rb, read.getLoc(), *a, read.getOffsets(), {}, read.getComp()));
     read.getResult().replaceAllUsesWith(load);
     return success();
@@ -463,6 +523,11 @@ private:
   LogicalResult lowerWrite(OpBuilder &rb, WriteOp write) {
     const Accessor *a = accessorOf(write.getAcc());
     if (!a) return write.emitError("access through a value that is not an accessor of the loop");
+    if (useAffine) {
+      auto [map, operands] = affineAccess(*a, write.getOffsets(), write.getComp());
+      affine::AffineStoreOp::create(rb, write.getLoc(), write.getValue(), a->memref, map, operands);
+      return success();
+    }
     memref::StoreOp::create(rb, write.getLoc(), write.getValue(), a->memref, memrefIndices(rb, write.getLoc(), *a, write.getOffsets(), {}, write.getComp()));
     return success();
   }
@@ -661,7 +726,9 @@ struct ConvertOpsToSCFPass : public impl::ConvertOpsToSCFBase<ConvertOpsToSCFPas
     if (called)
       return chain.emitError("the group is called from another chain of this module and its signature changes: split "
                              "the groups into modules of their own first");
-    GroupLowering::Config config{soa, target, block};
+    if (loopStyle != "scf" && loopStyle != "affine")
+      return chain.emitError("option 'loops' must be scf or affine, got '") << loopStyle << "'";
+    GroupLowering::Config config{soa, target, block, loopStyle == "affine"};
     return GroupLowering(chain, module, loops.front(), std::move(config), formatCounter).run();
   }
 };

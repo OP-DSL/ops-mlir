@@ -186,3 +186,51 @@ OPDSL_TEST(EndToEndCPU, PlanLowerCompileRunAndReloadFromTheDiskCache) {
   }
   llvm::sys::fs::remove_directories(dirPath);
 }
+
+namespace {
+
+/// Plans the program, lowers the group with `pipelineOptions`, compiles it and runs it on real arrays.
+void planLowerAndRun(const std::string &pipelineOptions) {
+  opdsl::PipelineRegistry registry;
+  registerOPSPipelines(registry);
+  mlir::DialectRegistry dialects;
+  registerJITDialects(dialects);
+  mlir::MLIRContext ctx(dialects);
+  ctx.loadAllAvailableDialects();
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(kProgram, &ctx);
+  OPDSL_EXPECT(static_cast<bool>(module));
+  if (!module) return;
+  mlir::PassManager planning(&ctx);
+  OPDSL_EXPECT(!registry.build("ops-jit-frontend", "", planning));
+  OPDSL_EXPECT(!registry.build("ops-jit-plan", "", planning));
+  OPDSL_EXPECT(mlir::succeeded(planning.run(*module)));
+  std::vector<GroupModule> groups = extractGroupModules(*module);
+  OPDSL_EXPECT_EQ(groups.size(), size_t(1));
+  if (groups.size() != 1) return;
+  auto session = opdsl::JITSession::create();
+  OPDSL_EXPECT(static_cast<bool>(session));
+  if (!session) return;
+  mlir::PassManager lowering(&ctx);
+  OPDSL_EXPECT(!registry.build("ops-jit-cpu", pipelineOptions, lowering));
+  OPDSL_EXPECT(mlir::succeeded(lowering.run(groups[0].module.get())));
+  auto object = (*session)->compile(groups[0].module.get(), groups[0].name);
+  OPDSL_EXPECT(static_cast<bool>(object));
+  if (!object) return;
+  auto fn = (*session)->load(std::move(*object), groups[0].name);
+  OPDSL_EXPECT(static_cast<bool>(fn));
+  if (!fn) return;
+  std::vector<double> a = input(), b(kN * kN, 0.0), c(kN * kN, 0.0);
+  run(*fn, a, b, c, 0.5);
+  expectResults(a, b, c, 0.5);
+}
+
+} // namespace
+
+// loops=affine: the group is affine.parallel / affine.for with affine accesses until lower-affine; the results are those of scf.
+OPDSL_TEST(EndToEndCPU, AffineLoopsGiveTheResultsOfTheScfForm) { planLowerAndRun("omp=false loops=affine"); }
+
+// An affine transformation in between (unroll the x loop by 4: the range has 6 points, so the epilogue of 2 is exercised).
+OPDSL_TEST(EndToEndCPU, AffineLoopsWithAnAffinePass) {
+  planLowerAndRun("omp=false loops=affine affine-passes=func.func(affine-loop-unroll{unroll-factor=4})");
+}
+

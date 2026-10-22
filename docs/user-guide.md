@@ -66,6 +66,8 @@ same from code, before the first loop):
 | `OPS_JIT_PTXAS_OPTS` | | e.g. `-v` to see register use |
 | `OPS_JIT_SYNC` | 0 | synchronise after every GPU launch (debugging) |
 | `OPS_JIT_FMA` | 0 | let the CPU code generator fuse multiply-adds (no measurable gain on the machines tried; the last bits of the results change, so `OPS_JIT_VERIFY` reports differences) |
+| `OPS_JIT_LOOPS` | scf | `affine`: the CPU lowering goes through the affine dialect (`affine.parallel`, `affine.for`, `affine.load/store`) until `lower-affine`; for transformations that work on affine loops. Loops with reductions and the GPU keep the scf form (see "The affine path") |
+| `OPS_JIT_AFFINE_PASSES` | none | a pass pipeline run on the affine form (implies `OPS_JIT_LOOPS=affine`), e.g. `func.func(affine-loop-unroll{unroll-factor=4})`; write `+` for a comma and `;` for a blank (the option syntax of the pipelines uses those), e.g. `func.func(affine-loop-tile{tile-sizes=32+32})` |
 | `OPS_JIT_VERIFY_HALF_TOL` | 1e-2 | relative tolerance of verify mode for half precision dats (the host code rounds a whole expression once, the JIT every operation) |
 | `OPS_JIT_VERIFY_FLOAT_TOL` | 1e-5 | relative tolerance of verify mode for single precision dats |
 | `CUDA_ROOT` | `$CUDA_INSTALL_PATH` | CUDA toolkit (ptxas, libdevice) used to compile kernels |
@@ -84,6 +86,18 @@ Diagnostics:
 | `OPS_JIT_BACKTRACE=1` | a stack trace on a crash inside compiled code |
 
 `ops-jit-replay <dump dir> <group>` recompiles a recorded group and runs it on the recorded inputs without OPS.
+
+### The affine path
+
+`OPS_JIT_LOOPS=affine` (or the option `loops=affine` of `ops-jit-cpu`) lowers a group through MLIR's affine dialect instead of straight to `scf`:
+
+* the outer dimensions are an `affine.parallel`, x an `affine.for`; the bounds are the range arguments of the group (symbols) or constants (`OPS_JIT_SPECIALIZE`);
+* an access at constant stencil offsets is an `affine.load` / `affine.store` of `shift + i + offset`, per dimension (the shifts are function arguments, so symbols);
+* `ops.read_dyn` (data-dependent offsets) stays a `memref.load`, and data-dependent control flow stays `scf.if`: affine passes treat those parts of the loop nest conservatively;
+* a loop with a reduction keeps the `scf` form (the function carries `ops.loops = "scf"` to say so); the GPU lowering is unchanged;
+* `OPS_JIT_AFFINE_PASSES` is run on the affine form, then `lower-affine` and the usual pipeline (OpenMP, LLVM). The passes of MLIR's affine dialect are registered; a pass from elsewhere has to be linked into `libopsjit` and registered with MLIR's pass registry. Both options are part of the cache key of a group.
+
+Fusion across loops stays where it is (`ops-jit-plan`): it knows which dats are temporaries, which affine loop fusion cannot. `affine-loop-fusion` on the result is possible but only useful for loops that the planner did not fuse. Many affine transformations want static shapes: combine with `OPS_JIT_SPECIALIZE=shapes`.
 
 ## 4. What the JIT runs, and what it declines
 

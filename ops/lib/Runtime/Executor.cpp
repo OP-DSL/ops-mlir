@@ -723,6 +723,9 @@ void Executor::compileGroups(Plan &plan, std::vector<GroupModule> &groups, std::
       pipeline = "ops-jit-cpu";
       pipelineOptions = std::string("omp=") + (opts.omp ? "true" : "false") + " specialize=" + opts.specialize + " soa=" + (soa ? "true" : "false");
       if (opts.fma) pipelineOptions += " fma=true";
+      // The pipeline options are part of the cache key of the group: another loop style or other affine passes compile again.
+      if (opts.loops == "affine" || !opts.affinePasses.empty()) pipelineOptions += " loops=affine";
+      if (!opts.affinePasses.empty()) pipelineOptions += " affine-passes=" + opts.affinePasses;
     }
     std::shared_ptr<GroupCode> code = compiler_->compile(canonical.get(), pipeline, pipelineOptions, cerror);
     Plan::Group pg;

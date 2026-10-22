@@ -28,6 +28,8 @@ add_mlir_library(OPSMLIRPipelines
   MLIRGPUPipelines
   MLIRGPUTransforms
   MLIRAffineToStandard
+  MLIRAffineTransforms
+  MLIRAffineDialect
   MLIRIndexToLLVM
   MLIRNVGPUToNVVM
   MLIRNVVMToLLVM

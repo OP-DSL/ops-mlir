@@ -29,6 +29,12 @@ def ConvertOpsToSCF : Pass<"convert-ops-to-scf", "::mlir::ModuleOp"> {
     The function is named like the chain, or as the chain attribute `ops.func_name` says; a private declaration of
     that name in the module (for a caller) is replaced by the definition.
 
+    With `loops=affine` (CPU only) the loops are `affine.parallel` (the outer dimensions) and `affine.for` (x), and the
+    accesses at constant stencil offsets are `affine.load` / `affine.store` of `shift + i + offset` (the shifts and the range are
+    function arguments, so symbols), which lets affine-level transformations (tiling, interchange, unroll-and-jam, ...) work on the
+    group before `lower-affine`. Data-dependent accesses (`ops.read_dyn`) stay `memref.load`. A loop with reductions keeps the
+    `scf` form (the function then has `ops.loops = "scf"`); the attribute `ops.loops` is set whenever `loops=affine` is asked for.
+
     The function is marked `llvm.emit_c_interface`, its memref arguments `llvm.noalias`, and carries the attribute
     `ops.abi` describing the argument groups. Chains that contain `ops.call`s, and chains without a loop, are left
     alone. A group called from another chain in the same module cannot be converted (its signature changes): split
@@ -38,9 +44,12 @@ def ConvertOpsToSCF : Pass<"convert-ops-to-scf", "::mlir::ModuleOp"> {
                  Option<"target", "target", "std::string", /*default=*/"\"cpu\"",
                         "cpu: scf.parallel over the outer dimensions with a sequential x loop; gpu: a gpu.launch with one thread per point">,
                  Option<"block", "block", "std::string", /*default=*/"\"32,4,1\"",
-                        "gpu: thread block size x,y,z (the dimensions the block does not have are folded into x)">];
+                        "gpu: thread block size x,y,z (the dimensions the block does not have are folded into x)">,
+                 Option<"loopStyle", "loops", "std::string", /*default=*/"\"scf\"",
+                        "cpu: scf (scf.parallel / scf.for, memref accesses) or affine (affine.parallel / affine.for, affine accesses; loops without reductions)">];
   let dependentDialects = ["::ops_mlir::ops::OPSDialect", "::mlir::arith::ArithDialect", "::mlir::func::FuncDialect",
-                           "::mlir::gpu::GPUDialect", "::mlir::LLVM::LLVMDialect", "::mlir::memref::MemRefDialect", "::mlir::scf::SCFDialect"];
+                           "::mlir::gpu::GPUDialect", "::mlir::LLVM::LLVMDialect", "::mlir::memref::MemRefDialect", "::mlir::scf::SCFDialect",
+                           "::mlir::affine::AffineDialect"];
 }
 
 

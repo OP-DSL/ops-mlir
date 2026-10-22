@@ -16,6 +16,7 @@ add_mlir_library(OPSMLIRConversion
   MLIRFuncDialect
   MLIRMemRefDialect
   MLIRSCFDialect
+  MLIRAffineDialect
   MLIRTransformUtils
   MLIRLLVMDialect
   MLIROpenMPDialect
