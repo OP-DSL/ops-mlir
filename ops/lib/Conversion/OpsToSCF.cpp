@@ -306,17 +306,22 @@ private:
   /// The bound of an affine loop that is a single value: a function argument or a constant, both symbols.
   AffineMap symbolBound() { return AffineMap::get(/*dimCount=*/0, /*symbolCount=*/1, getAffineSymbolExpr(0, ctx)); }
 
-  /// The shell of buildCpuShell with affine.parallel (z, y) and, in openInnerLoop, an affine.for (x).
+  /// The shell of buildCpuShell with affine.parallel (z, y) and, in openInnerLoop, an affine.for (x). The bounds are single values
+  /// (range arguments or constants: symbols). affine.parallel takes one bound map per dimension and ONE list of operands that every
+  /// map sees: map i is the symbol i of the list.
   void buildAffineCpuShell() {
-    SmallVector<AffineMap> lbMaps, ubMaps;
     SmallVector<Value> lbOperands, ubOperands;
     SmallVector<int64_t> steps;
     for (int d = rank - 1; d >= (innerLoop ? 1 : 0); --d) { // outermost (z) first
-      lbMaps.push_back(symbolBound());
       lbOperands.push_back(rangeValue(2 * d));
-      ubMaps.push_back(symbolBound());
       ubOperands.push_back(rangeValue(2 * d + 1));
       steps.push_back(1);
+    }
+    const unsigned n = steps.size();
+    SmallVector<AffineMap> lbMaps, ubMaps;
+    for (unsigned i = 0; i < n; ++i) {
+      lbMaps.push_back(AffineMap::get(/*dimCount=*/0, /*symbolCount=*/n, getAffineSymbolExpr(i, ctx)));
+      ubMaps.push_back(AffineMap::get(/*dimCount=*/0, /*symbolCount=*/n, getAffineSymbolExpr(i, ctx)));
     }
     affineParallel = affine::AffineParallelOp::create(b, loc, TypeRange{}, ArrayRef<arith::AtomicRMWKind>{}, lbMaps, lbOperands, ubMaps,
                                                       ubOperands, steps);

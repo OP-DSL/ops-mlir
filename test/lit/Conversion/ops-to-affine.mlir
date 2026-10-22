@@ -68,6 +68,27 @@ ops.chain @stencil(%lo0: index, %hi0: index, %lo1: index, %hi1: index, %u: !ops.
 
 // -----
 
+// 3D: two parallel dimensions (z, y) in one affine.parallel, x the affine.for. (Every bound map of an affine.parallel sees all
+// the bound operands: two parallel dimensions need two symbols per map.)
+// CHECK-LABEL: func.func @threed(
+// CHECK-SAME: %[[A:arg0]]: memref<?x?x?xf64, strided<[?, ?, 1], offset: ?>> {llvm.noalias}
+// CHECK-SAME: %[[LO0:arg4]]: index, %[[HI0:arg5]]: index, %[[LO1:arg6]]: index, %[[HI1:arg7]]: index, %[[LO2:arg8]]: index, %[[HI2:arg9]]: index
+// CHECK: affine.parallel (%[[K:.*]], %[[J:.*]]) = (symbol(%[[LO2]]), symbol(%[[LO1]])) to (symbol(%[[HI2]]), symbol(%[[HI1]]))
+// CHECK: affine.for %[[I:.*]] = %[[LO0]] to %[[HI0]]
+// CHECK: affine.load %[[A]][%[[K]] + symbol(%{{.*}}), %[[J]] + symbol(%{{.*}}), %[[I]] + symbol(%{{.*}}) + 1]
+// CHECK: affine.store %{{.*}}, %[[A]][%[[K]] + symbol(%{{.*}}), %[[J]] + symbol(%{{.*}}), %[[I]] + symbol(%{{.*}})]
+ops.chain @threed(%lo0: index, %hi0: index, %lo1: index, %hi1: index, %lo2: index, %hi2: index, %u: !ops.dat<f64, 3, 1>) {
+  ops.par_loop range(%lo0, %hi0, %lo1, %hi1, %lo2, %hi2)
+      dats(%u : !ops.dat<f64, 3, 1> rw #ops.stencil<[[0, 0, 0], [1, 0, 0]]>) scalars() {
+  ^bb0(%x: !ops.acc<f64, 3, 1>):
+    %v = ops.read %x[1, 0, 0] : !ops.acc<f64, 3, 1> -> f64
+    ops.write %x[0, 0, 0], %v : !ops.acc<f64, 3, 1>
+  }
+  ops.return
+}
+
+// -----
+
 // A data-dependent offset is not affine: it stays a memref.load next to the affine accesses.
 // CHECK-LABEL: func.func @dynamic(
 // CHECK: affine.parallel
