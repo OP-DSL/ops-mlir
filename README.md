@@ -17,8 +17,18 @@ design. The earlier prototype is in `legacy/` and is not built by default.
 | `test/` | lit tests (`test/lit`), end-to-end suites |
 | `cluster/v2/` | SLURM job scripts for the `cl` cluster |
 | `scripts/` | environment (`env.sh`), OPS build, CI entry point |
-| `third_party/lit/` | vendored `lit` (from llvm-project 23.1; the pinned LLVM install ships FileCheck but no lit) |
+| `third_party/OPS/` | git submodule: the OPS sources (branch `feature/jit-executor`), used for the OPS build, the importer tests and the apps |
 | `legacy/` | the previous prototype (xDSL based); removed at the end of the project |
+
+## Getting the sources
+
+```bash
+git clone --recurse-submodules https://github.com/OP-DSL/ops-mlir.git     # or: git submodule update --init third_party/OPS
+```
+
+`scripts/env.sh` takes `OPS_SRC` from the submodule when it is checked out; set `OPS_SRC` to use your own OPS clone
+(for work on the OPS side). The submodule is pinned to a commit: to move it, `git -C third_party/OPS checkout <commit>`
+and commit the new pin. Third-party code is never copied into this repository.
 
 ## Build and test
 
@@ -31,3 +41,7 @@ scripts/ci.sh          # configure, build, check-ops-mlir
 ```
 
 Targets: `check-ops-mlir` (everything), `check-ops-mlir-lit`, `check-ops-mlir-unit`.
+
+The lit tests need `lit`, which the pinned LLVM install does not ship: `pip install -r requirements-test.txt`, or
+point `OPSJIT_LIT` (environment or `-DOPSJIT_LIT=`) at the `llvm-lit` of an LLVM build. Without it
+`check-ops-mlir-lit` fails with a message saying so; the rest builds and runs.

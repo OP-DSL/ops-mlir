@@ -84,13 +84,19 @@ fi
 
 # Source trees. Locally they live directly under ~/ops-mlir-work; on the cluster the work trees are
 # updated by cluster/v2/sync.sh and live under ~/ops-jit-cl/work.
+# The OPS source tree defaults to the submodule third_party/OPS of this repository when it is checked out
+# (git submodule update --init third_party/OPS); OPS_SRC overrides it (a developer working on the OPS side points it at
+# their own clone).
+_opsjit_sub=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/third_party/OPS
 if [ "$OPSJIT_HOST" = cluster ]; then
-  export OPS_SRC=${OPS_SRC:-$OPSJIT_WORK/work/OPS}
+  _opsjit_ops=$OPSJIT_WORK/work/OPS
   export OPSMLIR_SRC=${OPSMLIR_SRC:-$OPSJIT_WORK/work/ops-mlir}
 else
-  export OPS_SRC=${OPS_SRC:-$OPSJIT_WORK/OPS}
+  _opsjit_ops=$OPSJIT_WORK/OPS
   export OPSMLIR_SRC=${OPSMLIR_SRC:-$OPSJIT_WORK/ops-mlir}
 fi
+[ -f "$_opsjit_sub/CMakeLists.txt" ] && _opsjit_ops=$_opsjit_sub
+export OPS_SRC=${OPS_SRC:-$_opsjit_ops}
 # TGV_mixed benchmark apps (github.com/reguly/tests, apps/TGV_mixed); see D9 in IMPLEMENTATION_PLAN.md.
 export TGV_ROOT=${TGV_ROOT:-$OPSJIT_WORK/reguly-tests/apps/TGV_mixed}
 # On the cluster the benchmark repository is already checked out in the project area (read only use).
@@ -107,8 +113,8 @@ export LD_LIBRARY_PATH=$LLVM_INSTALL_PATH/lib:$OPSJIT_OMP_LIB_DIR:$CUDA_INSTALL_
 export OMP_PROC_BIND=${OMP_PROC_BIND:-close}
 export OMP_PLACES=${OMP_PLACES:-cores}
 
-# lit: the pinned LLVM install ships FileCheck/not/count but no llvm-lit; use the python lit package
-# (pip install lit) or the one from an llvm-project checkout via OPSJIT_LIT.
+# lit (not vendored): the pinned LLVM install ships FileCheck/not/count but no llvm-lit; use the python lit package
+# (pip install -r requirements-test.txt) or the one of an llvm-project build via OPSJIT_LIT.
 export OPSJIT_LIT=${OPSJIT_LIT:-$(command -v lit || command -v llvm-lit || true)}
 
 echo "ops-mlir env: host=$OPSJIT_HOST llvm=$("$LLVM_INSTALL_PATH/bin/llvm-config" --version) clang=$(basename "$CXX") work=$OPSJIT_WORK" >&2
