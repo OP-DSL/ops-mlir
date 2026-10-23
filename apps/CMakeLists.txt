@@ -1,4 +1,4 @@
-# OPS applications built through the JIT toolchain (the `*_jit*` executables of IMPLEMENTATION_PLAN.md P2.5).
+# OPS applications built through the JIT toolchain (the `*_jit*` executables).
 # A separate project, configured by scripts/build_apps.sh against
 #   * an installed OPS (OPS_INSTALL: headers, libraries, translator with its Python venv), and
 #   * a build of ops-mlir (OPSJIT_BUILD: bin/ops-kernel-import, lib/libopsjit.so),

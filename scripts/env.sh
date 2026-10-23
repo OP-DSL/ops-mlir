@@ -97,7 +97,7 @@ else
 fi
 [ -f "$_opsjit_sub/CMakeLists.txt" ] && _opsjit_ops=$_opsjit_sub
 export OPS_SRC=${OPS_SRC:-$_opsjit_ops}
-# TGV_mixed benchmark apps (github.com/reguly/tests, apps/TGV_mixed); see D9 in IMPLEMENTATION_PLAN.md.
+# TGV_mixed benchmark apps (github.com/reguly/tests, apps/TGV_mixed).
 export TGV_ROOT=${TGV_ROOT:-$OPSJIT_WORK/reguly-tests/apps/TGV_mixed}
 # On the cluster the benchmark repository is already checked out in the project area (read only use).
 [ -d "$TGV_ROOT" ] || { [ -d "$HOME/projects/tests/apps/TGV_mixed" ] && export TGV_ROOT=$HOME/projects/tests/apps/TGV_mixed; }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import coverage of frontend A over the OPS applications (IMPLEMENTATION_PLAN.md P2.6).
+"""Import coverage of frontend A over the OPS applications.
 
 For every application directory under OPS/apps/c that has loops (a .cpp file calling ops_par_loop) the script
 
@@ -8,8 +8,8 @@ For every application directory under OPS/apps/c that has loops (a .cpp file cal
   2. runs ops-kernel-import on every kernel in the translation unit of the application, with the flags the apps build uses,
   3. collects status and reason from the manifests,
 
-and writes docs/coverage.md: totals, the reasons ranked, and the failures per application. It is the first input to the
-decision between frontend A (clang AST walker) and B (ClangIR).
+and writes a report (default docs/coverage.md, not kept in the repository): totals, the reasons ranked, and the failures per
+application.
 
     scripts/import_coverage.py [--jobs 4] [--out docs/coverage.md] [--apps name,name]
 """

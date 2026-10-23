@@ -1,8 +1,6 @@
 # Design
 
-An MLIR JIT for OPS that plugs into OPS's lazy execution. This document describes the architecture as built; the decisions and
-their rationale are in `ARCHITECTURE_REVIEW.md` and `IMPLEMENTATION_PLAN.md` (sections referred to as "plan §n"), the progress and
-the facts learned on the way in `PROGRESS.md`.
+An MLIR JIT for OPS that plugs into OPS's lazy execution. This document describes the architecture as built ("plan §n" refers to the implementation plan this was built from, which is not part of the repository).
 
 ## 1. Idea
 
@@ -89,7 +87,7 @@ accessors `ACC<T>`/legacy `OPS_ACCn` macros, global and reduction parameters, re
 threaded through `scf.if`/`scf.for`; loops over components are unrolled. Helper functions defined in the file are inlined. Anything
 outside the subset is a failure with a reason in the manifest (`status: failed`) and the loop runs AOT. The manifest (plan §4.2) records
 parameter kinds and types, constants (with offsets in structs, `role: bound`), the constant offsets read and written per accessor,
-reductions' style. `docs/coverage.md` lists what imports over all OPS example apps. Providers B (ClangIR) and C (LLVM IR) are planned.
+reductions' style. Over the OPS example applications 588 of 626 kernels import (`scripts/import_coverage.py` regenerates the report). Provider B (ClangIR) was evaluated on a corpus of 62 translation units, of which 38 emit CIR, and is not adopted; provider C (LLVM IR) is a possible fallback.
 
 ## 6. Runtime
 

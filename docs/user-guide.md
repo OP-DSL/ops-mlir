@@ -101,7 +101,7 @@ Fusion across loops stays where it is (`ops-jit-plan`): it knows which dats are 
 
 ## 4. What the JIT runs, and what it declines
 
-A loop is run by the JIT when its kernel was imported (`ops-kernel-import`, provider A: a clang AST walker; see `coverage.md`) and
+A loop is run by the JIT when its kernel was imported (`ops-kernel-import`, provider A: a clang AST walker; `scripts/import_coverage.py` reports what imports) and
 the arguments are in the supported set: dats of type double, float or int; regular (non multigrid) stencils; read-only globals;
 reductions (INC/MIN/MAX); the loop index; constants registered with `ops_decl_const`. Optional dat arguments that are switched off
 are fine. Edge dats (size 1 in a dimension, read through stride-0 stencils) are plain dats on one process; with MPI they are
