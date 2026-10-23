@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CPU performance: OPS AOT (OpenMP) against the JIT, on one node. Run through cluster/v2/perf.sbatch cpu.
+# CPU performance: OPS AOT (OpenMP) against the JIT, on one node. Run through a SLURM job (source scripts/env.sh first).
 #
 # For every (application, deck): the AOT executable of the OPS build (OPS_AOT_BUILD), then the JIT executable with
 #   jit        the default (fusion on)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# GPU performance: OPS AOT CUDA against the JIT on one GPU. Run through cluster/v2/perf.sbatch gpu on a GPU partition:
-#   sbatch -p gpu --gres=gpu:a100:1 -D $PWD -o $HOME/ops-jit-cl/logs/%x-%j.log cluster/v2/perf.sbatch gpu
+# GPU performance: OPS AOT CUDA against the JIT on one GPU. Run through a SLURM job (source scripts/env.sh first) on a GPU partition:
+#   sbatch -p gpu --gres=gpu:a100:1 -D $PWD -o $HOME/ops-jit-cl/logs/%x-%j.log --wrap 'source scripts/env.sh && scripts/perf/gpu.sh'
 #
 # CloverLeaf 2D/3D: the AOT executable of the OPS build (OPS_AOT_BUILD) against the JIT (default, and no fusion). TGV
 # (double, single, mixed): the AOT baseline built by apps/ (`tgv_<p>_aot_cuda`) against `tgv_<p>_jit_cuda`, in TGV_BUILD.

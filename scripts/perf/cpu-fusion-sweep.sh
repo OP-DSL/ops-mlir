@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CPU: the effect of the largest fused group (OPS_JIT_FUSION_MAX) on the TGV and CloverLeaf runs. Run through
-# cluster/v2/perf.sbatch cpu-fusion-sweep. Output: one JSON object per line in results/cpu-fusion-sweep-<job>.json.
+# a SLURM job (source scripts/env.sh first). Output: one JSON object per line in results/cpu-fusion-sweep-<job>.json.
 #
 # Environment: as cpu.sh, plus SIZES (default "1 2 4 8 16 32"; 1 = no fusion), CASES (regex of tgv-DP, tgv-SP, clover3d, default all of them).
 set -uo pipefail

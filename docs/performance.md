@@ -5,7 +5,7 @@ OPS builds of the same applications (`OPS-apps-new`: OpenMP, CUDA); the JIT exec
 (`apps/`, `scripts/build_apps.sh`). Both are built by the same clang 23. Times are the wall time of the whole run (start-up, the JIT's
 compilation from the disk cache, output included), the best of 3 unless said otherwise. The JIT runs once before the timed runs to fill its
 disk cache (`OPS_JIT_CACHE_DIR`); a cold start costs more, see "Compilation cost". Scripts: `scripts/perf/{cpu,gpu,cpu-kernels,cpu-groups,
-cpu-fusion-sweep,gpu-blocks,sample}.sh` (through `cluster/v2/perf.sbatch`), raw results in `~/ops-jit-cl/results/`.
+cpu-fusion-sweep,gpu-blocks,sample}.sh` (each in a SLURM job after `source scripts/env.sh`), raw results in `~/ops-jit-cl/results/`.
 
 Machines: CPU nodes of the `cpu` partition (euclid: 48 cores; hajos, kemeny: 64 cores; one run per node, `--exclusive`, `OMP_PROC_BIND=close`,
 `OMP_PLACES=cores`, as many threads as cores), GPU: NVIDIA A100 (40 GB, `renyi`), CUDA 12.3.
@@ -45,7 +45,7 @@ choice needs the register-aware cost model of plan item P7.4.
 
 ### What the first cluster run found
 
-The first run (before the fixes listed in `PROGRESS.md`, "Performance investigation") had CloverLeaf 2D at 46.5 s against 18.1 s for AOT (euclid, 48
+The first run (before the fixes described below) had CloverLeaf 2D at 46.5 s against 18.1 s for AOT (euclid, 48
 threads) and 3D at 124.8 s against 39.2 s. Causes, in the order of their weight:
 
 1. OPS ran every loop that reads a 1-D (edge) dat after a write to it eagerly with the stock code and flushed the queue first; the rule is meant for
@@ -95,9 +95,10 @@ CloverLeaf 3D, 94 groups, cold: lowering 4.6 s, LLVM 3.6 s; warm: cache io 0.19 
 
 ```bash
 cluster/v2/sync.sh                                   # local branches -> the cluster work trees
-sbatch cluster/v2/build.sbatch all                   # OPS, ops-mlir, the applications
-sbatch cluster/v2/perf.sbatch cpu                    # CPU table (CASES=regex, SKIP_AOT=1, THREADS, NRUNS)
-sbatch -p gpu --gres=gpu:a100:1 cluster/v2/perf.sbatch gpu
-sbatch cluster/v2/perf.sbatch cpu-kernels            # per-kernel AOT against JIT (DIM=2|3)
-sbatch cluster/v2/perf.sbatch cpu-groups             # time per JIT group (OPS_JIT_TRACE) and executor statistics
+# then, in SLURM jobs after `source scripts/env.sh`:
+scripts/build_ops.sh; scripts/build_mlir.sh; scripts/build_apps.sh   # OPS, ops-mlir, the applications
+scripts/perf/cpu.sh                                  # CPU table (CASES=regex, SKIP_AOT=1, THREADS, NRUNS)
+scripts/perf/gpu.sh                                  # on a GPU node (-p gpu --gres=gpu:a100:1)
+scripts/perf/cpu-kernels.sh                          # per-kernel AOT against JIT (DIM=2|3)
+scripts/perf/cpu-groups.sh                           # time per JIT group (OPS_JIT_TRACE) and executor statistics
 ```

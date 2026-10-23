@@ -8,7 +8,7 @@
 #
 # The pin is the release series (major.minor). A different patch release only warns; a different
 # series is a configure error, because MLIR's C++ API is not stable across series.
-# The ClangIR spike (docs/cir-spike.md) uses its own LLVM build and is exempt: pass
+# A ClangIR experiment (scripts/cir) uses its own LLVM build and is exempt: pass
 # -DOPSJIT_ALLOW_LLVM_MISMATCH=ON there.
 
 set(OPSJIT_LLVM_PIN_MAJOR 23)

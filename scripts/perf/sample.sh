@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Poor man's profiler: runs CloverLeaf 2D (JIT) and samples the stack of the main thread with gdb once a second.
-# Run through cluster/v2/perf.sbatch sample. Output: results/sample-<job>.txt (the 12 innermost frames of each sample).
+# Run through a SLURM job (source scripts/env.sh first). Output: results/sample-<job>.txt (the 12 innermost frames of each sample).
 #
 # Environment: as cpu.sh, plus STEPS (default 87), DECK (default clover_bm16_short.in).
 set -uo pipefail

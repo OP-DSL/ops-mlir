@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Per-kernel times of CloverLeaf (2D or 3D) on a GPU, OPS AOT CUDA against the JIT without fusion (OPS_JIT_SYNC=1, so every group
 # is timed to the end of its kernels), from OPS's timing table (deck keyword profiler_on, -OPS_DIAGS=2). Run through
-# cluster/v2/perf.sbatch gpu-kernels on a GPU partition. Output: results/gpu-kernels-<job>/{aot,jit-nofuse}.txt and kernels.txt (joined, sorted by AOT
+# a SLURM job (source scripts/env.sh first) on a GPU partition. Output: results/gpu-kernels-<job>/{aot,jit-nofuse}.txt and kernels.txt (joined, sorted by AOT
 # time: name, AOT [s], JIT [s]).
 #
 # Environment: as gpu.sh, plus DIM (2 or 3, default 3), STEPS (default 20).

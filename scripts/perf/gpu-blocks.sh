@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # GPU thread block sweep of the JIT (OPS_JIT_GPU_BLOCK) on CloverLeaf 2D/3D and TGV single precision. Run through
-# cluster/v2/perf.sbatch gpu-blocks on a GPU partition. Output: one JSON object per line in results/gpu-blocks-<job>.json.
+# a SLURM job (source scripts/env.sh first) on a GPU partition. Output: one JSON object per line in results/gpu-blocks-<job>.json.
 #
 # Environment: as gpu.sh, plus BLOCKS (space separated x,y,z, default a list of 1-D, 2-D and 3-D shapes of 128 to 512 threads),
 # NRUNS (default 2).

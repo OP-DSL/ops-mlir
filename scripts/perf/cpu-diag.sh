@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Per-kernel times of CloverLeaf 2D, AOT against the JIT, on one CPU node (OPS_DIAGS=2 prints OPS's timing table).
-# Run through cluster/v2/perf.sbatch cpu-diag. Output: results/cpu-diag-<job>/{aot,jit,jit-nofuse}.out
+# Run through a SLURM job (source scripts/env.sh first). Output: results/cpu-diag-<job>/{aot,jit,jit-nofuse}.out
 #
 # Environment: as cpu.sh, plus STEPS (default 10), DECK (default clover_bm16_short.in).
 set -uo pipefail

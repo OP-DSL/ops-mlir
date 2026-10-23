@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Time per group of the JIT (OPS_JIT_TRACE=1), summed over the run: which kernels (or fused groups) take the time. Run through
-# cluster/v2/perf.sbatch cpu-groups. Output: results/cpu-groups-<job>/{nofuse,fuse}.txt = total seconds, calls, members.
+# a SLURM job (source scripts/env.sh first). Output: results/cpu-groups-<job>/{nofuse,fuse}.txt = total seconds, calls, members.
 #
 # Environment: as cpu.sh, plus DIM (2 or 3, default 3), STEPS (default 20).
 set -uo pipefail

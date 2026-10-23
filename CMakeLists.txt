@@ -13,7 +13,6 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(LLVMVersion)
 
-option(OPSJIT_BUILD_LEGACY "Also build the old prototype under legacy/ (it needs its own environment: see legacy/README.md)" OFF)
 option(OPSJIT_BUILD_RUNTIME "Build libopsjit, the OPS-facing runtime (needs an OPS install in OPS_INSTALL)" ON)
 set(OPS_INSTALL "$ENV{OPS_INSTALL}" CACHE PATH "Install prefix of OPS (include/ and lib/); see scripts/build_ops.sh")
 
@@ -56,7 +55,3 @@ add_subdirectory(core)
 add_subdirectory(ops)
 add_subdirectory(tools)
 add_subdirectory(test)
-
-if(OPSJIT_BUILD_LEGACY)
-  add_subdirectory(legacy)
-endif()

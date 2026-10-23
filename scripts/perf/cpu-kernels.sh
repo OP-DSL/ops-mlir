@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Per-kernel times of CloverLeaf (2D or 3D), AOT against the JIT without fusion (every loop is its own group, so the times are
-# exact) and with fusion, from OPS's own timing table (deck keyword profiler_on, OPS_DIAGS=2). Run through cluster/v2/perf.sbatch cpu-kernels.
+# exact) and with fusion, from OPS's own timing table (deck keyword profiler_on, OPS_DIAGS=2). Run through a SLURM job (source scripts/env.sh first).
 # Output: results/cpu-kernels-<job>/{aot,jit-nofuse,jit}.txt (the tables) and kernels.txt (joined, sorted by AOT time).
 #
 # Environment: as cpu.sh, plus DIM (2 or 3, default 3), STEPS (default 20).

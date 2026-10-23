@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Configure, build and run the CPU test suites. Runs locally (WSL) and on a cluster node; the cluster
-# counterpart that adds the MPI and GPU suites is cluster/v2/ctest.sbatch.
+# counterpart that adds the MPI and GPU suites is `ctest -L mpi` / `ctest -L gpu` in a SLURM job.
 #
 #   scripts/ci.sh            configure (if needed), build, check-ops-mlir, ctest -L cpu
 #   BUILD=/path scripts/ci.sh
