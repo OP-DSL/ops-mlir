@@ -182,17 +182,6 @@ void writeDat(ops_dat d, const std::vector<char> &bytes, bool device) {
   else std::memcpy(d->data, bytes.data(), bytes.size());
 }
 
-/// The thread block for a block of `rank` dimensions: the option (x,y,z), with the dimensions the block does not have folded into x.
-std::array<int64_t, 3> gpuBlockFor(const std::string &option, int rank) {
-  std::array<int64_t, 3> b{32, 4, 1};
-  std::sscanf(option.c_str(), "%ld,%ld,%ld", &b[0], &b[1], &b[2]);
-  for (int d = rank; d < 3; ++d) {
-    b[0] *= b[d];
-    b[d] = 1;
-  }
-  return b;
-}
-
 /// Number of elements of a reduction buffer: one per warp (or per thread when the block is not whole warps) of the grid that the
 /// lowering launches for the ranges `lo/hi` (see convert-ops-to-scf, target gpu).
 int64_t gpuReductionUnits(const std::array<int64_t, 3> &block, const int64_t *extent, int rank) {
@@ -340,6 +329,30 @@ void storePlanModule(opdsl::PersistentCache &cache, const std::string &diskKey, 
   }
 }
 
+
+/// The settings of the pipelines for a run whose first loop is `first`: the options of the runtime, the layout of the OPS instance and,
+/// for a device, the chip and the PTX version the toolkit accepts.
+PipelineSettings pipelineSettingsFor(const Options &o, ops_kernel_descriptor *first) {
+  PipelineSettings s;
+  s.fusion = o.fusion;
+  s.fusionMax = o.fusionMax;
+  s.fusionReorder = o.fusionReorder;
+  s.fusionPlacement = o.fusionPlacement;
+  s.fusionGuarded = o.fusionGuarded;
+  s.specialize = o.specialize;
+  s.soa = ops_lazy_soa(first->block->instance) != 0;
+  s.fma = o.fma;
+  s.omp = o.omp;
+  s.loops = o.loops;
+  s.affinePasses = o.affinePasses;
+  s.gpuBlock = o.gpuBlock;
+  s.ptxasOptions = o.ptxasOpts;
+  if (first->isdevice) {
+    s.gpuArch = o.gpuArch.empty() ? opdsl::gpu::cudaDeviceArch() : o.gpuArch;
+    s.gpuFeatures = ptxFeature();
+  }
+  return s;
+}
 
 } // namespace
 
@@ -671,10 +684,7 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
     {
       ScopedTime timer(stats_.tPlanPasses);
       PassManager pm(ctx_.get());
-      std::string planOptions = opts.fusion ? "max-loops=" + std::to_string(opts.fusionMax) +
-                                                  " reorder=" + (opts.fusionReorder ? "true" : "false") +
-                                                  " placement=" + opts.fusionPlacement + " guarded=" + (opts.fusionGuarded ? "true" : "false")
-                                            : "max-loops=1";
+      const std::string planOptions = planPipelineOptions(pipelineSettingsFor(opts, run[0]));
       if (llvm::Error e = registry_.build("ops-jit-plan", planOptions, pm)) return fail(errorText(std::move(e)));
       if (failed(pm.run(*lifted.module))) return fail("ops-jit-plan failed: " + diagnostics.text);
     }
@@ -703,31 +713,12 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
 /// Compiles each group of the planned module (memory cache, disk cache, or the pipeline); a group that cannot be compiled runs with OPS.
 void Executor::compileGroups(Plan &plan, std::vector<GroupModule> &groups, std::vector<GroupRecipe> &recipes, ops_kernel_descriptor **run) {
   const Options &opts = options();
-  const bool soa = ops_lazy_soa(run[0]->block->instance) != 0;
+  const bool device = run[0]->isdevice != 0;
+  const GroupPipeline pipeline = groupPipeline(device, run[0]->block->dims, pipelineSettingsFor(opts, run[0]));
   for (size_t g = 0; g < groups.size(); ++g) {
     OwningOpRef<ModuleOp> canonical = canonicalGroup(groups[g].module.get(), opts.specialize != "none");
     std::string cerror;
-    const bool device = run[0]->isdevice != 0;
-    std::string pipeline, pipelineOptions;
-    if (device) {
-      // block sizes with `x` between them, ptxas options with `:` between them (the option syntax uses blanks and commas)
-      std::array<int64_t, 3> bs = gpuBlockFor(opts.gpuBlock, run[0]->block->dims);
-      std::string block = std::to_string(bs[0]) + "x" + std::to_string(bs[1]) + "x" + std::to_string(bs[2]), ptxas = opts.ptxasOpts;
-      std::replace(ptxas.begin(), ptxas.end(), ' ', ':');
-      std::string arch = opts.gpuArch.empty() ? opdsl::gpu::cudaDeviceArch() : opts.gpuArch;
-      pipeline = "ops-jit-cuda";
-      pipelineOptions = "chip=" + arch + " features=" + ptxFeature() + " block=" + block + " specialize=" + opts.specialize + " soa=" + (soa ? "true" : "false");
-      if (!ptxas.empty()) pipelineOptions += " ptxas=" + ptxas;
-      if (opts.fma) pipelineOptions += " fma=true";
-    } else {
-      pipeline = "ops-jit-cpu";
-      pipelineOptions = std::string("omp=") + (opts.omp ? "true" : "false") + " specialize=" + opts.specialize + " soa=" + (soa ? "true" : "false");
-      if (opts.fma) pipelineOptions += " fma=true";
-      // The pipeline options are part of the cache key of the group: another loop style or other affine passes compile again.
-      if (opts.loops == "affine" || !opts.affinePasses.empty()) pipelineOptions += " loops=affine";
-      if (!opts.affinePasses.empty()) pipelineOptions += " affine-passes=" + opts.affinePasses;
-    }
-    std::shared_ptr<GroupCode> code = compiler_->compile(canonical.get(), pipeline, pipelineOptions, cerror);
+    std::shared_ptr<GroupCode> code = compiler_->compile(canonical.get(), pipeline.name, pipeline.options, cerror);
     Plan::Group pg;
     pg.recipe = std::move(recipes[g]);
     pg.device = device;

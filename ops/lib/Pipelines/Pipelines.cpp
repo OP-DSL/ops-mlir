@@ -33,6 +33,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <mutex>
 
 namespace ops_mlir::ops {
@@ -268,6 +269,44 @@ void registerOPSPipelinesWithMLIR() {
         },
         [](llvm::function_ref<void(const mlir::detail::PassOptions &)>) {});
   }
+}
+
+std::string planPipelineOptions(const PipelineSettings &s) {
+  if (!s.fusion) return "max-loops=1";
+  return "max-loops=" + std::to_string(s.fusionMax) + " reorder=" + (s.fusionReorder ? "true" : "false") + " placement=" + s.fusionPlacement +
+         " guarded=" + (s.fusionGuarded ? "true" : "false");
+}
+
+std::array<int64_t, 3> gpuBlockFor(const std::string &option, int rank) {
+  std::array<int64_t, 3> b{32, 4, 1};
+  std::sscanf(option.c_str(), "%ld,%ld,%ld", &b[0], &b[1], &b[2]);
+  for (int d = rank; d < 3; ++d) {
+    b[0] *= b[d];
+    b[d] = 1;
+  }
+  return b;
+}
+
+GroupPipeline groupPipeline(bool device, int rank, const PipelineSettings &s) {
+  GroupPipeline p;
+  const std::string soa = s.soa ? "true" : "false";
+  if (device) {
+    // block sizes with `x` between them, ptxas options with `:` between them (the option syntax uses blanks and commas)
+    std::array<int64_t, 3> bs = gpuBlockFor(s.gpuBlock, rank);
+    std::string block = std::to_string(bs[0]) + "x" + std::to_string(bs[1]) + "x" + std::to_string(bs[2]), ptxas = s.ptxasOptions;
+    std::replace(ptxas.begin(), ptxas.end(), ' ', ':');
+    p.name = "ops-jit-cuda";
+    p.options = "chip=" + s.gpuArch + " features=" + s.gpuFeatures + " block=" + block + " specialize=" + s.specialize + " soa=" + soa;
+    if (!ptxas.empty()) p.options += " ptxas=" + ptxas;
+    if (s.fma) p.options += " fma=true";
+    return p;
+  }
+  p.name = "ops-jit-cpu";
+  p.options = std::string("omp=") + (s.omp ? "true" : "false") + " specialize=" + s.specialize + " soa=" + soa;
+  if (s.fma) p.options += " fma=true";
+  if (s.loops == "affine" || !s.affinePasses.empty()) p.options += " loops=affine";
+  if (!s.affinePasses.empty()) p.options += " affine-passes=" + s.affinePasses;
+  return p;
 }
 
 } // namespace ops_mlir::ops
