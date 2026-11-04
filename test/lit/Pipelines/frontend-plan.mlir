@@ -1,7 +1,7 @@
 // The planning half of the JIT, as the executor runs it on a queue: kernels are materialised, bound constants folded,
 // loops fused and every group outlined.
-// RUN: ops-opt %s -ops-jit-frontend -ops-jit-plan | FileCheck %s
-// RUN: ops-opt %s -pass-pipeline="builtin.module(ops-jit-frontend,ops-jit-plan{max-loops=1})" | FileCheck %s --check-prefix=NOFUSE
+// RUN: ops-opt %s -ops-frontend -ops-plan | FileCheck %s
+// RUN: ops-opt %s -pass-pipeline="builtin.module(ops-frontend,ops-plan{max-loops=1})" | FileCheck %s --check-prefix=NOFUSE
 
 ops.kernel @scale(%x: !ops.acc<f64, 1, 1>, %y: !ops.acc<f64, 1, 1>) {
   %k = ops.const_ref @factor : f64

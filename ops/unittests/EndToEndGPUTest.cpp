@@ -4,7 +4,8 @@
 
 #include "ops-mlir/Dialect/OPS/IR/OPSOps.h"
 #include "ops-mlir/Pipelines/GroupModules.h"
-#include "ops-mlir/Pipelines/Pipelines.h"
+#include "ops-mlir/Pipelines/BackendPipeline.h"
+#include "ops-mlir/Transforms/Passes.h"
 #include "ops-mlir/Runtime/GroupCompiler.h"
 #include "ops-mlir/Runtime/PackedArgs.h"
 
@@ -77,8 +78,8 @@ OPDSL_TEST(EndToEndGPU, ThreadPerPointKernelWithAtomicReduction) {
   if (!module) return;
 
   mlir::PassManager planning(&ctx);
-  OPDSL_EXPECT(!registry.build("ops-jit-frontend", "", planning));
-  OPDSL_EXPECT(!registry.build("ops-jit-plan", "", planning));
+  planning.addPass(createOpsFrontend());
+  planning.addPass(createOpsPlan());
   OPDSL_EXPECT(mlir::succeeded(planning.run(*module)));
   std::vector<GroupModule> groups = extractGroupModules(*module);
   OPDSL_EXPECT_EQ(groups.size(), size_t(1));

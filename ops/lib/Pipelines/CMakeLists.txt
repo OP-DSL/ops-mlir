@@ -1,5 +1,5 @@
 add_mlir_library(OPSMLIRPipelines
-  Pipelines.cpp
+  BackendPipeline.cpp
   GroupModules.cpp
 
   LINK_LIBS PUBLIC

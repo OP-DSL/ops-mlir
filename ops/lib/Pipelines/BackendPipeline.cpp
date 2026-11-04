@@ -1,4 +1,4 @@
-#include "ops-mlir/Pipelines/Pipelines.h"
+#include "ops-mlir/Pipelines/BackendPipeline.h"
 
 #include "ops-mlir/Conversion/Passes.h"
 #include "ops-mlir/Transforms/Passes.h"
@@ -45,30 +45,6 @@ namespace {
 
 llvm::Error pipelineError(const llvm::Twine &message) {
   return llvm::createStringError(llvm::errc::invalid_argument, message);
-}
-
-llvm::Error buildFrontend(mlir::OpPassManager &pm, const OptionMap &) {
-  pm.addPass(createMaterializeKernels());
-  pm.addPass(createSpecializeConsts());
-  pm.addPass(mlir::createCanonicalizerPass());
-  pm.addPass(mlir::createCSEPass());
-  return llvm::Error::success();
-}
-
-llvm::Error buildPlan(mlir::OpPassManager &pm, const OptionMap &o) {
-  FusePointLocalOptions fuse;
-  fuse.maxLoops = o.getInt("max-loops", 8);
-  fuse.reorder = o.getBool("reorder", true);
-  fuse.placement = o.getString("placement", "earliest");
-  if (fuse.placement != "earliest" && fuse.placement != "latest")
-    return pipelineError("option 'placement' must be earliest or latest, got '" + fuse.placement + "'");
-  fuse.guarded = o.getBool("guarded", false);
-  pm.addPass(createFusePointLocal(fuse));
-  pm.addPass(createForwardStores());
-  pm.addPass(mlir::createCanonicalizerPass());
-  pm.addPass(mlir::createCSEPass());
-  pm.addPass(createOutlineGroups());
-  return llvm::Error::success();
 }
 
 /// The affine stage of the CPU pipeline: the passes the user asked for (a textual pass pipeline, written with `+` for `,` and `;`
@@ -223,17 +199,6 @@ llvm::Error buildCUDA(mlir::OpPassManager &pm, const OptionMap &o) {
 } // namespace
 
 void registerOPSPipelines(PipelineRegistry &registry) {
-  registry.add({"ops-jit-frontend",
-                "materialise kernels into loops, fold bound constants",
-                {},
-                buildFrontend});
-  registry.add({"ops-jit-plan",
-                "fuse loops, forward stores, outline the groups",
-                {{"max-loops", "int", "most loops in a group"},
-                 {"reorder", "bool", "let independent loops move past each other"},
-                 {"placement", "string", "earliest or latest"},
-                 {"guarded", "bool", "fuse loops of different ranges (not implemented)"}},
-                buildPlan});
   registry.add({"ops-jit-cpu",
                 "lower a group to the LLVM dialect for the host CPU",
                 {{"omp", "bool", "parallelise with OpenMP"},
@@ -269,12 +234,6 @@ void registerOPSPipelinesWithMLIR() {
         },
         [](llvm::function_ref<void(const mlir::detail::PassOptions &)>) {});
   }
-}
-
-std::string planPipelineOptions(const PipelineSettings &s) {
-  if (!s.fusion) return "max-loops=1";
-  return "max-loops=" + std::to_string(s.fusionMax) + " reorder=" + (s.fusionReorder ? "true" : "false") + " placement=" + s.fusionPlacement +
-         " guarded=" + (s.fusionGuarded ? "true" : "false");
 }
 
 std::array<int64_t, 3> gpuBlockFor(const std::string &option, int rank) {

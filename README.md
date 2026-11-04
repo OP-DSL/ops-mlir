@@ -12,7 +12,7 @@ OPS's generated code.
 2. **Run time.** `ops_par_loop` queues a descriptor instead of running the loop. When the program needs the data, OPS flushes the
    queue through the registered chain executor (`ops_register_chain_executor`).
 3. **The executor** (`libopsjit`) claims the loops it supports and lifts them into an `ops.chain` of SSA values. It plans fusion
-   groups (`ops-jit-plan`), lowers each group (`ops-jit-cpu`: scf and OpenMP, optionally through the affine dialect;
+   groups (`ops-plan`), lowers each group (`ops-jit-cpu`: scf and OpenMP, optionally through the affine dialect;
    `ops-jit-cuda`: NVVM), compiles it with ORC LLJIT and caches the code in memory and on disk, keyed by the bytecode of the group
    and the options.
 4. **OPS keeps** the memory, MPI halos, dirty bits, reductions and timing; the JIT only runs loops. In verify mode
