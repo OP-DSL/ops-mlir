@@ -31,8 +31,7 @@ environment variables), [docs/passes.md](docs/passes.md) (passes and pipelines, 
 | `tools/` | `ops-opt`, `ops-kernel-import`, `ops-jit-replay` |
 | `test/` | lit tests (`test/lit`), end-to-end suites |
 | `apps/`, `cmake/` | the OPS applications built with the JIT, and the CMake helpers for them |
-| `scripts/` | environment (`env.sh`), OPS build, CI entry point, performance scripts |
-| `cluster/v2/` | `sync.sh`: publishes the local branches to the `cl` cluster |
+| `scripts/` | environment (`env.sh`), the build scripts, CI entry point, performance scripts |
 | `third_party/OPS/` | git submodule: the OPS sources (branch `feature/jit-executor`), used for the OPS build, the importer tests and the apps |
 
 ## Getting the sources
@@ -45,21 +44,29 @@ git clone --recurse-submodules https://github.com/OP-DSL/ops-mlir.git     # or: 
 (for work on the OPS side). The submodule is pinned to a commit: to move it, `git -C third_party/OPS checkout <commit>`
 and commit the new pin. Third-party code is never copied into this repository.
 
-## Build and test
+## Build and run
 
-The toolchain is pinned (LLVM/MLIR/clang 23.1.0, `cmake/LLVMVersion.cmake`); `scripts/env.sh` selects it on the
-cluster and in WSL.
+Needs LLVM/MLIR/clang 23.1 with `libomp` (pinned in `cmake/LLVMVersion.cmake`), CMake, Ninja and Python 3. From the
+repository root:
 
 ```bash
-source scripts/env.sh
-scripts/ci.sh          # configure, build, check-ops-mlir
+source scripts/env.sh                                          # toolchain and paths; in every new shell
+scripts/build_ops.sh                                           # 1. OPS and its translator   (once)
+scripts/build_mlir.sh                                          # 2. libopsjit, ops-kernel-import (once)
+APPS_CMAKE_ARGS="-DOPSJIT_APPS=laplace2d" scripts/build_apps.sh   # 3. an application (all of them without -DOPSJIT_APPS)
+
+cd $(mktemp -d)
+OPS_JIT_STATS=1 $OPSJIT_BUILD_ROOT/OPS-jit-apps/laplace2d_jit  # run with the JIT
+OPS_JIT_VERIFY=1 $OPSJIT_BUILD_ROOT/OPS-jit-apps/laplace2d_jit # check every group against OPS's own code
 ```
 
-Targets: `check-ops-mlir` (everything), `check-ops-mlir-lit`, `check-ops-mlir-unit`.
+The applications are listed in `apps/CMakeLists.txt`. After changing ops-mlir, rerun step 2; after changing an application,
+step 3; after changing OPS, all three. For CUDA, add `OPS_CUDA=on` to step 1 and `OPSJIT_APPS_CUDA=ON` to step 3, with
+`GPU_ARCH` set to the device's compute capability (e.g. `80`); the executable is `laplace2d_jit_cuda`. Runtime options and how to
+build your own application: [docs/user-guide.md](docs/user-guide.md).
 
-The lit tests need `lit`, which the pinned LLVM install does not ship: `pip install -r requirements-test.txt`, or
-point `OPSJIT_LIT` (environment or `-DOPSJIT_LIT=`) at the `llvm-lit` of an LLVM build. Without it
-`check-ops-mlir-lit` fails with a message saying so; the rest builds and runs.
+The lit tests need `lit` (`pip install -r requirements-test.txt`, or `OPSJIT_LIT` pointing at an `llvm-lit`); without it the
+rest still builds and runs.
 
 ## Citation
 
