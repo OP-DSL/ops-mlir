@@ -73,7 +73,7 @@ std::vector<ops_dat> datSlots(ops_kernel_descriptor *const *run, int n);
 bool liftRun(mlir::MLIRContext &ctx, ops_kernel_descriptor *const *run, int n, const std::vector<std::vector<int>> &ranges,
              const std::vector<const KernelArtifact *> &artifacts, bool keepPrints, Lifted &out, std::string &error);
 
-/// After ops-jit-frontend: add the constants it appended to the chain's arguments to `lifted.args`.
+/// After ops-frontend: add the constants it appended to the chain's arguments to `lifted.args`.
 bool recordBindingConsts(Lifted &lifted, std::string &error);
 
 } // namespace ops_mlir::runtime
