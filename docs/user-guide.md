@@ -119,7 +119,7 @@ Diagnostics:
 * a loop with a reduction keeps the `scf` form (the function carries `ops.loops = "scf"` to say so); the GPU lowering is unchanged;
 * `OPS_JIT_AFFINE_PASSES` is run on the affine form, then `lower-affine` and the usual pipeline (OpenMP, LLVM). The passes of MLIR's affine dialect are registered; a pass from elsewhere has to be linked into `libopsjit` and registered with MLIR's pass registry. Both options are part of the cache key of a group.
 
-Fusion across loops stays where it is (`ops-jit-plan`): it knows which dats are temporaries, which affine loop fusion cannot. `affine-loop-fusion` on the result is possible but only useful for loops that the planner did not fuse. Many affine transformations want static shapes: combine with `OPS_JIT_SPECIALIZE=shapes`.
+Fusion across loops stays where it is (`ops-plan`): it knows which dats are temporaries, which affine loop fusion cannot. `affine-loop-fusion` on the result is possible but only useful for loops that the planner did not fuse. Many affine transformations want static shapes: combine with `OPS_JIT_SPECIALIZE=shapes`.
 
 ## 4. What the JIT runs, and what it declines
 

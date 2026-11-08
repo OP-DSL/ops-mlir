@@ -2,10 +2,11 @@
 
 #include "ops-mlir/Dialect/OPS/IR/OPSOps.h"
 #include "ops-mlir/Pipelines/GroupModules.h"
-#include "ops-mlir/Pipelines/Pipelines.h"
+#include "ops-mlir/Pipelines/BackendPipeline.h"
 #include "ops-mlir/Runtime/CallDump.h"
 #include "ops-mlir/Runtime/Claim.h"
 #include "ops-mlir/Runtime/Lifter.h"
+#include "ops-mlir/Transforms/Passes.h"
 
 #include "opdsl/GPU/GpuShim.h"
 
@@ -330,15 +331,21 @@ void storePlanModule(opdsl::PersistentCache &cache, const std::string &diskKey, 
 }
 
 
+/// The options of ops-plan. Fusion switched off is groups of one loop: the other steps of the plan still run. They are part of the
+/// plan key through Options::codegenDigest.
+OpsPlanOptions planOptionsFor(const Options &o) {
+  OpsPlanOptions p;
+  p.maxLoops = o.fusion ? o.fusionMax : 1;
+  p.reorder = o.fusionReorder;
+  p.placement = o.fusionPlacement;
+  p.guarded = o.fusionGuarded;
+  return p;
+}
+
 /// The settings of the pipelines for a run whose first loop is `first`: the options of the runtime, the layout of the OPS instance and,
 /// for a device, the chip and the PTX version the toolkit accepts.
 PipelineSettings pipelineSettingsFor(const Options &o, ops_kernel_descriptor *first) {
   PipelineSettings s;
-  s.fusion = o.fusion;
-  s.fusionMax = o.fusionMax;
-  s.fusionReorder = o.fusionReorder;
-  s.fusionPlacement = o.fusionPlacement;
-  s.fusionGuarded = o.fusionGuarded;
   s.specialize = o.specialize;
   s.soa = ops_lazy_soa(first->block->instance) != 0;
   s.fma = o.fma;
@@ -677,16 +684,15 @@ std::shared_ptr<Plan> Executor::buildPlan(ops_kernel_descriptor **run, int n, co
     {
       ScopedTime timer(stats_.tFrontend);
       PassManager pm(ctx_.get());
-      if (llvm::Error e = registry_.build("ops-jit-frontend", "", pm)) return fail(errorText(std::move(e)));
-      if (failed(pm.run(*lifted.module))) return fail("ops-jit-frontend failed: " + diagnostics.text);
+      pm.addPass(createOpsFrontend());
+      if (failed(pm.run(*lifted.module))) return fail("ops-frontend failed: " + diagnostics.text);
       if (!recordBindingConsts(lifted, error)) return fail(error);
     }
     {
       ScopedTime timer(stats_.tPlanPasses);
       PassManager pm(ctx_.get());
-      const std::string planOptions = planPipelineOptions(pipelineSettingsFor(opts, run[0]));
-      if (llvm::Error e = registry_.build("ops-jit-plan", planOptions, pm)) return fail(errorText(std::move(e)));
-      if (failed(pm.run(*lifted.module))) return fail("ops-jit-plan failed: " + diagnostics.text);
+      pm.addPass(createOpsPlan(planOptionsFor(opts)));
+      if (failed(pm.run(*lifted.module))) return fail("ops-plan failed: " + diagnostics.text);
     }
     if (planCache_) storePlanModule(*planCache_, diskKey, planKey, *lifted.module, opts.explain);
   }

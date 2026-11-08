@@ -14,7 +14,7 @@
 #include "ops-mlir/Dialect/OPS/IR/OPSDialect.h"
 #include "ops-mlir/Conversion/Passes.h"
 #include "ops-mlir/Pipelines/GroupModules.h"
-#include "ops-mlir/Pipelines/Pipelines.h"
+#include "ops-mlir/Pipelines/BackendPipeline.h"
 #include "ops-mlir/Transforms/Passes.h"
 
 int main(int argc, char **argv) {

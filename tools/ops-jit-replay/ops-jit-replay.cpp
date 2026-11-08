@@ -9,7 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ops-mlir/Pipelines/GroupModules.h"
-#include "ops-mlir/Pipelines/Pipelines.h"
+#include "ops-mlir/Pipelines/BackendPipeline.h"
 #include "ops-mlir/Runtime/CallDump.h"
 #include "ops-mlir/Runtime/GroupCompiler.h"
 

@@ -51,6 +51,16 @@ def SpecializeConsts : Pass<"ops-specialize-consts", "::mlir::ModuleOp"> {
   let dependentDialects = ["::ops_mlir::ops::OPSDialect", "::mlir::arith::ArithDialect", "::mlir::scf::SCFDialect"];
 }
 
+def OpsFrontend : Pass<"ops-frontend", "::mlir::ModuleOp"> {
+  let summary = "materialise the kernels into the loops and fold the bound constants";
+  let description = [{
+    The frontend stage of the JIT as one pass: `ops-materialize-kernels`, `ops-specialize-consts` (its defaults:
+    the constants with role bound), `canonicalize`, `cse`, run as a nested pipeline on the module. Takes the chain
+    the lifter produces (loops with a `kernel` symbol and an empty body) and leaves loops with bodies, ready for
+    `ops-plan`. The constants that became scalar arguments of the chain are recorded in `ops.binding_consts`.
+  }];
+  let dependentDialects = ["::ops_mlir::ops::OPSDialect", "::mlir::arith::ArithDialect", "::mlir::scf::SCFDialect"];
+}
 
 def FusePointLocal : Pass<"ops-fuse-point-local", "::mlir::ModuleOp"> {
   let summary = "merge the loops of a chain that can run point by point in one kernel";
@@ -95,6 +105,28 @@ def OutlineGroups : Pass<"ops-outline-groups", "::mlir::ModuleOp"> {
     the chain are copied into the group. The planner and the executor compile and launch the groups.
   }];
   let dependentDialects = ["::ops_mlir::ops::OPSDialect"];
+}
+
+def OpsPlan : Pass<"ops-plan", "::mlir::ModuleOp"> {
+  let summary = "plan the groups of every chain: fuse loops, forward stores, outline the groups";
+  let description = [{
+    The planning stage of the JIT as one pass: `ops-fuse-point-local` (with this pass's options),
+    `ops-forward-stores`, `canonicalize`, `cse`, `ops-outline-groups`, run as a nested pipeline on the module.
+    The kernels must be materialised (`ops-materialize-kernels`). The result is the planned module: one
+    `ops.chain @group_<n>` per group and the original chain as a list of `ops.call`s; the fused loops carry
+    `ops.fused_loops`. `max-loops=1` keeps every loop in its own group (no fusion).
+  }];
+  let options = [
+    Option<"maxLoops", "max-loops", "int64_t", /*default=*/"8", "upper bound on the loops of a group">,
+    Option<"reorder", "reorder", "bool", /*default=*/"true", "let independent loops move past each other">,
+    Option<"placement", "placement", "std::string", /*default=*/"\"earliest\"",
+           "which legal group a loop joins: earliest or latest">,
+    Option<"guarded", "guarded", "bool", /*default=*/"false",
+           "fuse loops of different ranges over their bounding box (not implemented yet)">,
+    Option<"boxRatio", "box-ratio", "double", /*default=*/"1.0",
+           "largest bounding box volume relative to the members' volumes (guarded fusion)">
+  ];
+  let dependentDialects = ["::ops_mlir::ops::OPSDialect", "::mlir::arith::ArithDialect"];
 }
 
 

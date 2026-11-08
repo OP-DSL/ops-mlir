@@ -1,7 +1,7 @@
 //===- GroupCompiler.h - planned group -> compiled function (memory and disk caches) -*- C++ -*-===//
 //
 // Plan section 4.5 (buildPlan step 3) and 4.7 (GroupKey). Takes the canonical module of one group (an `ops.chain`
-// after ops-jit-plan), looks its key up in the memory and disk caches, and on a miss lowers it with a named pipeline,
+// after ops-plan), looks its key up in the memory and disk caches, and on a miss lowers it with a named pipeline,
 // compiles it with opdsl::JITSession and stores the object. No dependency on OPS: libopsjit, the replay tool and the
 // unit tests share it.
 //

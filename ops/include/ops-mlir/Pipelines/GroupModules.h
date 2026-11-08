@@ -1,6 +1,6 @@
 //===- GroupModules.h - split a planned module into compilable groups -*- C++ -*-===//
 //
-// After ops-jit-plan a module holds the caller chain (a list of `ops.call`s) and one `ops.chain @group_<n>` per
+// After ops-plan a module holds the caller chain (a list of `ops.call`s) and one `ops.chain @group_<n>` per
 // group. The executor compiles each group on its own, so each is cloned into a module of its own, in call order,
 // where the lowering pipeline can rename and change it freely.
 //
