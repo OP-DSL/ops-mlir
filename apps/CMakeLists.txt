@@ -19,7 +19,11 @@ set(OPSJIT_APPS "" CACHE STRING "build only these applications (semicolon separa
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-set(CMAKE_BUILD_TYPE Release CACHE STRING "")
+# project() has already created an empty CMAKE_BUILD_TYPE cache entry, which a plain `set(... CACHE)` does not override: without FORCE the
+# applications (and the stock AOT code of the baselines) were compiled without optimisation.
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
 set(CMAKE_C_FLAGS_RELEASE "-O3 -g")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -g")
 
