@@ -18,6 +18,8 @@
 #   <name>_jit_mpi        MPI                   OPS::ops_mpi
 #   <name>_jit_cuda       CUDA                  OPS::ops_cuda
 #   <name>_jit_mpi_cuda   MPI + CUDA            OPS::ops_mpi_cuda
+#   <name>_jit_hip        HIP (AMD GPUs)        OPS::ops_hip         (OPSJIT_APPS_HIP, see apps/CMakeLists.txt)
+#   <name>_jit_mpi_hip    MPI + HIP             OPS::ops_mpi_hip
 #
 # all with -DOPS_LAZY, linked with libopsjit. With TEST_SCRIPT (OPS's apps/c/<app>/cmake_test.sh) and OPS_TEST=ON the
 # same tests as the AOT builds run.
@@ -49,7 +51,7 @@ function(_ops_jit_add_test_command exe_target command mode tmp)
   endif()
   # The same run in three configurations of the JIT: default, loops not fused, every group checked against OPS.
   set(labels "jit-app")
-  if(mode MATCHES "cuda")
+  if(mode MATCHES "cuda|hip")
     list(APPEND labels gpu)
   else()
     list(APPEND labels cpu)
@@ -88,11 +90,11 @@ function(_ops_jit_add_verify_test exe_target mode tmp)
   set(command "${CMAKE_CURRENT_BINARY_DIR}/${exe_target}")
   if(mode STREQUAL "mpi")
     set(command "mpirun -np 4 --oversubscribe ${command}")
-  elseif(mode STREQUAL "mpi_cuda")
+  elseif(mode STREQUAL "mpi_cuda" OR mode STREQUAL "mpi_hip")
     set(command "mpirun -np 1 --oversubscribe ${command}")
   endif()
   set(labels "jit-app")
-  if(mode MATCHES "cuda")
+  if(mode MATCHES "cuda|hip")
     list(APPEND labels gpu)
   else()
     list(APPEND labels cpu)
@@ -232,8 +234,17 @@ function(ops_jit_add_app name)
     endif()
   endif()
 
+  if(OPSJIT_APPS_HIP AND TARGET OPS::ops_hip)
+    _variant("_hip" hip/hip_kernels.cpp "" "${hdf5_seq};OPS::ops_hip;${OPSJIT_HIP_LIBS}" hip)
+    set_source_files_properties("${tmp}/hip/hip_kernels.cpp" PROPERTIES COMPILE_OPTIONS "${OPSJIT_HIP_COMPILE_FLAGS}")
+    if(TARGET OPS::ops_mpi_hip)
+      _variant("_mpi_hip" hip/hip_kernels.cpp "OPS_MPI;MPICH_IGNORE_CXX_SEEK"
+               "${hdf5_mpi};OPS::ops_mpi_hip;MPI::MPI_CXX;${OPSJIT_HIP_LIBS}" "mpi_hip 1")
+    endif()
+  endif()
+
   # The ahead-of-time code of the same application (no --jit, eager execution, no libopsjit), for comparisons: the standard
-  # OPS builds `<name>_aot` (sequential/OpenMP), `_aot_mpi`, `_aot_cuda`, `_aot_mpi_cuda`.
+  # OPS builds `<name>_aot` (sequential/OpenMP), `_aot_mpi`, `_aot_cuda`, `_aot_mpi_cuda`, `_aot_hip`, `_aot_mpi_hip`.
   if(ARG_AOT_BASELINE)
     set(aot_tmp "${CMAKE_CURRENT_BINARY_DIR}/${name}_aot_tmp")
     _ops_jit_prepare(aot "${aot_tmp}" FALSE)
@@ -256,6 +267,13 @@ function(ops_jit_add_app name)
         _aot("_mpi_cuda" cuda/cuda_kernels.cu "OPS_MPI;MPICH_IGNORE_CXX_SEEK"
              "${hdf5_mpi};OPS::ops_mpi_cuda;MPI::MPI_CXX;CUDA::cudart_static;-lcurand;-lnvidia-ml")
         target_compile_options(${name}_aot_mpi_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--fmad=false>)
+      endif()
+    endif()
+    if(OPSJIT_APPS_HIP AND TARGET OPS::ops_hip)
+      _aot("_hip" hip/hip_kernels.cpp "" "${hdf5_seq};OPS::ops_hip;${OPSJIT_HIP_LIBS}")
+      set_source_files_properties("${aot_tmp}/hip/hip_kernels.cpp" PROPERTIES COMPILE_OPTIONS "${OPSJIT_HIP_COMPILE_FLAGS}")
+      if(TARGET OPS::ops_mpi_hip)
+        _aot("_mpi_hip" hip/hip_kernels.cpp "OPS_MPI;MPICH_IGNORE_CXX_SEEK" "${hdf5_mpi};OPS::ops_mpi_hip;MPI::MPI_CXX;${OPSJIT_HIP_LIBS}")
       endif()
     endif()
   endif()

@@ -9,6 +9,8 @@
 #   OPS_SRC            OPS source tree (branch feature/jit-executor)
 #   OPS_INSTALL        install prefix (also where the translator venv is created)
 #   OPS_CUDA           auto|on|off   (auto: on for the cluster, off locally)
+#   OPS_HIP            on|off        the HIP backend for AMD GPUs (default off); with ROCM_PATH (default /opt/rocm) and
+#                                    HIP_ARCH (default gfx90a, MI250X); the HIP sources are compiled by $CXX (-x hip)
 #   GPU_ARCH           CUDA architectures, default "70;80" on the cluster (V100, A100), 89 locally
 #   OPS_BUILD_SUFFIX   build-tree suffix, to keep several configurations side by side
 #   JOBS               parallel build jobs
@@ -31,6 +33,11 @@ args=(
   -DBUILD_OPS_APPS="$APPS" -DOPS_TEST="$APPS"
   -DAPP_INSTALL_DIR="${OPS_APP_INSTALL:-$OPSJIT_WORK/install/apps}"
 )
+
+OPS_HIP=${OPS_HIP:-off}
+if [ "$OPS_HIP" = on ]; then
+  args+=( -DOPS_HIP=ON -DOPS_HIP_PLATFORM=amd -DROCM_PATH="${ROCM_PATH:-/opt/rocm}" -DHIP_ARCH="${HIP_ARCH:-gfx90a}" )
+fi
 
 if [ "$OPS_CUDA" = on ]; then
   GPU_ARCH=${GPU_ARCH:-$([ "$OPSJIT_HOST" = cluster ] && echo "70;80" || echo 89)}
@@ -68,7 +75,7 @@ fi
 [ -n "${CFLAG:-}" ] && args+=( -DCFLAG="$CFLAG" )
 [ -n "${CXXFLAG:-}" ] && args+=( -DCXXFLAG="$CXXFLAG" )
 
-echo "== configure OPS ($OPS_SRC @ $(git -C "$OPS_SRC" log -1 --format=%h)) -> $BUILD, install $OPS_INSTALL, cuda=$OPS_CUDA apps=$APPS"
+echo "== configure OPS ($OPS_SRC @ $(git -C "$OPS_SRC" log -1 --format=%h)) -> $BUILD, install $OPS_INSTALL, cuda=$OPS_CUDA hip=$OPS_HIP apps=$APPS"
 cmake "${args[@]}" "$@"
 if [ "${OPS_CONFIGURE_ONLY:-0}" = 1 ]; then echo "== configure only"; exit 0; fi
 echo "== build"

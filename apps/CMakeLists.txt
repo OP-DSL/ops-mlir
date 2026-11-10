@@ -12,6 +12,8 @@ set(OPSJIT_BUILD "$ENV{HOME}/ops-mlir-work/build/ops-mlir" CACHE PATH "ops-mlir 
 set(TGV_ROOT "$ENV{HOME}/ops-mlir-work/reguly-tests/apps/TGV_mixed" CACHE PATH "TGV_mixed (github.com/reguly/tests)")
 option(OPS_TEST "Register the apps' tests with ctest" ON)
 option(OPSJIT_APPS_CUDA "Build the CUDA variants" OFF)
+option(OPSJIT_APPS_HIP "Build the HIP variants (AMD GPUs; needs an OPS installed with OPS_HIP=ON, platform amd, and ROCm)" OFF)
+set(OPSJIT_HIP_ARCH "gfx90a" CACHE STRING "AMD GPU architecture(s) of the HIP variants (gfx90a: MI250X)")
 option(OPSJIT_APPS_FORTRAN "Build the Fortran applications (needs flang and OPS's f2c library)" OFF)
 set(OPSJIT_APPS "" CACHE STRING "build only these applications (semicolon separated names as in this file); empty: all")
 
@@ -32,6 +34,28 @@ endif()
 if(OPSJIT_APPS_CUDA)
   enable_language(CUDA)
   find_package(CUDAToolkit REQUIRED)
+endif()
+if(OPSJIT_APPS_HIP)
+  # The HIP sources of an application (the translator's hip/hip_kernels.cpp) are compiled by the C++ compiler itself (clang:
+  # -x hip --offload-arch) against the ROCm headers and linked with libamdhip64; everything else stays on the one compiler and
+  # the one OpenMP runtime of the CPU build. The compiler needs the AMDGPU target and ROCm's device libraries.
+  if(NOT ROCM_PATH)
+    if(DEFINED ENV{ROCM_PATH})
+      set(ROCM_PATH "$ENV{ROCM_PATH}")
+    else()
+      set(ROCM_PATH /opt/rocm)
+    endif()
+  endif()
+  set(ROCM_PATH "${ROCM_PATH}" CACHE PATH "ROCm installation (OPSJIT_APPS_HIP)")
+  if(NOT EXISTS "${ROCM_PATH}/include/hip/hip_runtime.h" OR NOT EXISTS "${ROCM_PATH}/lib/libamdhip64.so")
+    message(FATAL_ERROR "OPSJIT_APPS_HIP: no HIP in ROCM_PATH=${ROCM_PATH} (include/hip/hip_runtime.h, lib/libamdhip64.so): -DROCM_PATH=<ROCm>")
+  endif()
+  # Used as the COMPILE_OPTIONS of one source file (hip_kernels.cpp): plain options (the SHELL: prefix is not processed there).
+  set(OPSJIT_HIP_COMPILE_FLAGS -x hip "--rocm-path=${ROCM_PATH}" -D__HIP_PLATFORM_AMD__ "-I${ROCM_PATH}/include")
+  foreach(arch ${OPSJIT_HIP_ARCH})
+    list(APPEND OPSJIT_HIP_COMPILE_FLAGS "--offload-arch=${arch}")
+  endforeach()
+  set(OPSJIT_HIP_LIBS "${ROCM_PATH}/lib/libamdhip64.so" "-Wl,-rpath,${ROCM_PATH}/lib")
 endif()
 # After the packages above: OPSConfig only imports the backends whose dependencies were found.
 find_package(OPS REQUIRED HINTS "${OPS_INSTALL}/lib/cmake")
