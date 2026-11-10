@@ -36,9 +36,10 @@ if(OPSJIT_APPS_CUDA)
   find_package(CUDAToolkit REQUIRED)
 endif()
 if(OPSJIT_APPS_HIP)
-  # The HIP sources of an application (the translator's hip/hip_kernels.cpp) are compiled by the C++ compiler itself (clang:
-  # -x hip --offload-arch) against the ROCm headers and linked with libamdhip64; everything else stays on the one compiler and
-  # the one OpenMP runtime of the CPU build. The compiler needs the AMDGPU target and ROCm's device libraries.
+  # The HIP source of an application (the translator's hip/hip_kernels.cpp, through a generated .hip file) is compiled as the CMake
+  # HIP language by ROCm's own clang: the ROCm headers do not work with upstream clang (they use macros and declarations of AMD's
+  # fork). Everything else stays on the pinned compiler and its OpenMP runtime, and the executables are linked by it with
+  # libamdhip64.
   if(NOT ROCM_PATH)
     if(DEFINED ENV{ROCM_PATH})
       set(ROCM_PATH "$ENV{ROCM_PATH}")
@@ -50,11 +51,14 @@ if(OPSJIT_APPS_HIP)
   if(NOT EXISTS "${ROCM_PATH}/include/hip/hip_runtime.h" OR NOT EXISTS "${ROCM_PATH}/lib/libamdhip64.so")
     message(FATAL_ERROR "OPSJIT_APPS_HIP: no HIP in ROCM_PATH=${ROCM_PATH} (include/hip/hip_runtime.h, lib/libamdhip64.so): -DROCM_PATH=<ROCm>")
   endif()
-  # Used as the COMPILE_OPTIONS of one source file (hip_kernels.cpp): plain options (the SHELL: prefix is not processed there).
-  set(OPSJIT_HIP_COMPILE_FLAGS -x hip "--rocm-path=${ROCM_PATH}" -D__HIP_PLATFORM_AMD__ "-I${ROCM_PATH}/include")
-  foreach(arch ${OPSJIT_HIP_ARCH})
-    list(APPEND OPSJIT_HIP_COMPILE_FLAGS "--offload-arch=${arch}")
-  endforeach()
+  if(CMAKE_VERSION VERSION_LESS 3.21)
+    message(FATAL_ERROR "OPSJIT_APPS_HIP needs CMake 3.21 (the HIP language)")
+  endif()
+  if(NOT CMAKE_HIP_COMPILER)
+    set(CMAKE_HIP_COMPILER "${ROCM_PATH}/llvm/bin/clang++")
+  endif()
+  set(CMAKE_HIP_ARCHITECTURES "${OPSJIT_HIP_ARCH}")
+  enable_language(HIP)
   set(OPSJIT_HIP_LIBS "${ROCM_PATH}/lib/libamdhip64.so" "-Wl,-rpath,${ROCM_PATH}/lib")
 endif()
 # After the packages above: OPSConfig only imports the backends whose dependencies were found.
