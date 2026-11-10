@@ -59,6 +59,10 @@ if(OPSJIT_APPS_HIP)
   endif()
   set(CMAKE_HIP_ARCHITECTURES "${OPSJIT_HIP_ARCH}")
   enable_language(HIP)
+  # AMD's clang contracts a*b+c into fused multiply-adds by default (-ffp-contract=fast), the JIT's code is not: like --fmad=false
+  # for the CUDA variants, so that verify mode and the AOT baselines compare the same arithmetic (TeaLeaf's reductions of
+  # nearly cancelling terms differed by up to 1e-5 otherwise).
+  set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} -ffp-contract=off")
   set(OPSJIT_HIP_LIBS "${ROCM_PATH}/lib/libamdhip64.so" "-Wl,-rpath,${ROCM_PATH}/lib")
 endif()
 # After the packages above: OPSConfig only imports the backends whose dependencies were found.
