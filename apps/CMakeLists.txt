@@ -12,12 +12,18 @@ set(OPSJIT_BUILD "$ENV{HOME}/ops-mlir-work/build/ops-mlir" CACHE PATH "ops-mlir 
 set(TGV_ROOT "$ENV{HOME}/ops-mlir-work/reguly-tests/apps/TGV_mixed" CACHE PATH "TGV_mixed (github.com/reguly/tests)")
 option(OPS_TEST "Register the apps' tests with ctest" ON)
 option(OPSJIT_APPS_CUDA "Build the CUDA variants" OFF)
+option(OPSJIT_APPS_HIP "Build the HIP variants (AMD GPUs; needs an OPS installed with OPS_HIP=ON, platform amd, and ROCm)" OFF)
+set(OPSJIT_HIP_ARCH "gfx90a" CACHE STRING "AMD GPU architecture(s) of the HIP variants (gfx90a: MI250X)")
 option(OPSJIT_APPS_FORTRAN "Build the Fortran applications (needs flang and OPS's f2c library)" OFF)
 set(OPSJIT_APPS "" CACHE STRING "build only these applications (semicolon separated names as in this file); empty: all")
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-set(CMAKE_BUILD_TYPE Release CACHE STRING "")
+# project() has already created an empty CMAKE_BUILD_TYPE cache entry, which a plain `set(... CACHE)` does not override: without FORCE the
+# applications (and the stock AOT code of the baselines) were compiled without optimisation.
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
 set(CMAKE_C_FLAGS_RELEASE "-O3 -g")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -g")
 
@@ -32,6 +38,36 @@ endif()
 if(OPSJIT_APPS_CUDA)
   enable_language(CUDA)
   find_package(CUDAToolkit REQUIRED)
+endif()
+if(OPSJIT_APPS_HIP)
+  # The HIP source of an application (the translator's hip/hip_kernels.cpp, through a generated .hip file) is compiled as the CMake
+  # HIP language by ROCm's own clang: the ROCm headers do not work with upstream clang (they use macros and declarations of AMD's
+  # fork). Everything else stays on the pinned compiler and its OpenMP runtime, and the executables are linked by it with
+  # libamdhip64.
+  if(NOT ROCM_PATH)
+    if(DEFINED ENV{ROCM_PATH})
+      set(ROCM_PATH "$ENV{ROCM_PATH}")
+    else()
+      set(ROCM_PATH /opt/rocm)
+    endif()
+  endif()
+  set(ROCM_PATH "${ROCM_PATH}" CACHE PATH "ROCm installation (OPSJIT_APPS_HIP)")
+  if(NOT EXISTS "${ROCM_PATH}/include/hip/hip_runtime.h" OR NOT EXISTS "${ROCM_PATH}/lib/libamdhip64.so")
+    message(FATAL_ERROR "OPSJIT_APPS_HIP: no HIP in ROCM_PATH=${ROCM_PATH} (include/hip/hip_runtime.h, lib/libamdhip64.so): -DROCM_PATH=<ROCm>")
+  endif()
+  if(CMAKE_VERSION VERSION_LESS 3.21)
+    message(FATAL_ERROR "OPSJIT_APPS_HIP needs CMake 3.21 (the HIP language)")
+  endif()
+  if(NOT CMAKE_HIP_COMPILER)
+    set(CMAKE_HIP_COMPILER "${ROCM_PATH}/llvm/bin/clang++")
+  endif()
+  set(CMAKE_HIP_ARCHITECTURES "${OPSJIT_HIP_ARCH}")
+  enable_language(HIP)
+  # AMD's clang contracts a*b+c into fused multiply-adds by default (-ffp-contract=fast), the JIT's code is not: like --fmad=false
+  # for the CUDA variants, so that verify mode and the AOT baselines compare the same arithmetic (TeaLeaf's reductions of
+  # nearly cancelling terms differed by up to 1e-5 otherwise).
+  set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} -ffp-contract=off")
+  set(OPSJIT_HIP_LIBS "${ROCM_PATH}/lib/libamdhip64.so" "-Wl,-rpath,${ROCM_PATH}/lib")
 endif()
 # After the packages above: OPSConfig only imports the backends whose dependencies were found.
 find_package(OPS REQUIRED HINTS "${OPS_INSTALL}/lib/cmake")
